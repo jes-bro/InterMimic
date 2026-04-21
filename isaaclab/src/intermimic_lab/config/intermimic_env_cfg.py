@@ -38,7 +38,12 @@ class InterMimicEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
         env_spacing=2.0,
-        replicate_physics=True,
+        # Must be False: each env holds a different object asset (largetable,
+        # woodchair, ...) selected per motion in _spawn_objects_for_environments.
+        # With replicate_physics=True PhysX replicates env_0's layout to all
+        # envs and the per-env object collision shapes do not register, so
+        # objects fall through the ground.
+        replicate_physics=False,
     )
 
     # Environment parameters

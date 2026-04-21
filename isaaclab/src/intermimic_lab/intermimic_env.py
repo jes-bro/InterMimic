@@ -125,12 +125,11 @@ class InterMimicEnv(DirectRLEnv):
         from isaaclab.sim.schemas import schemas
         ground_collision_path = "/World/ground/GroundPlane/CollisionPlane"
 
-        # Set collision properties for better thin object detection
         schemas.define_collision_properties(
             prim_path=ground_collision_path,
             cfg=sim_utils.CollisionPropertiesCfg(
-                contact_offset=0.02,   # Increased for better collision detection with thin objects
-                rest_offset=0.0,       # Ground stays at 0
+                contact_offset=0.02,
+                rest_offset=0.0,
             ),
         )
 
@@ -230,10 +229,9 @@ class InterMimicEnv(DirectRLEnv):
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=1,
         )
-        collision_props_cfg = sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.02,
-            rest_offset=0.0,
-        )
+        # Match IsaacGym rest_offset (intermimic.py:348-356): thin-walled containers
+        # need a larger offset to avoid tunneling through the ground.
+        thick_wall_objects = {"plasticbox", "trashcan"}
         for env_id in range(self.num_envs):
             if num_motions > 0:
                 preferred_obj = self.object_names[env_id % len(self.object_names)]
@@ -286,9 +284,15 @@ class InterMimicEnv(DirectRLEnv):
                 self._env_rigid_objects.append(None)
                 continue
 
+            rest_offset = 0.015 if obj_name in thick_wall_objects else 0.002
+            collision_props_cfg = sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.02,
+                rest_offset=rest_offset,
+            )
+
             scale_for_cache = scale_tuple if scale_tuple is not None else (1.0, 1.0, 1.0)
             density_key = float(self.cfg.object_density) if self.cfg.object_density is not None else None
-            cache_key = (obj_name, scale_for_cache, density_key)
+            cache_key = (obj_name, scale_for_cache, density_key, rest_offset)
             usd_path = self._object_mesh_usd_cache.get(cache_key)
             if usd_path is None:
                 usd_path = self._convert_object_mesh_to_usd(
@@ -372,6 +376,7 @@ class InterMimicEnv(DirectRLEnv):
                 hull_vertex_limit=64,
                 max_convex_hulls=64,
                 voxel_resolution=300000,
+                min_thickness=0.001,
             ),
         )
         try:
@@ -1067,11 +1072,17 @@ class InterMimicEnv(DirectRLEnv):
         self._pd_action_scale[small_range_mask] = self._pd_action_scale[0].clone()
         self._pd_action_offset[small_range_mask] = 0
 
-        # Special handling for knee joints (indices 5 and 17 for SMPL-X)
-        # Scale them more aggressively
-        if self.cfg.num_actions > 17:
-            self._pd_action_scale[5] = 5.0  # L_Knee
-            self._pd_action_scale[17] = 5.0  # R_Knee
+        # IsaacGym boosts scale=5 on DOF indices 5 and 17 (L_Knee_z, R_Knee_z
+        # in MJCF declaration order). pd_action_scale here is in IsaacLab
+        # articulation order, so we must look up those joints by name rather
+        # than hardcoding indices.
+        robot = self.scene.articulations.get("robot", None)
+        joint_names_raw = getattr(robot.data, "joint_names", None) if robot is not None else None
+        if joint_names_raw:
+            joint_names = [name.split("/")[-1] for name in joint_names_raw]
+            for knee_name in ("L_Knee_z", "R_Knee_z"):
+                if knee_name in joint_names:
+                    self._pd_action_scale[joint_names.index(knee_name)] = 5.0
 
         # Ensure parameters reside on the simulation device for action computation
         self._pd_action_offset = self._pd_action_offset.to(self.device)

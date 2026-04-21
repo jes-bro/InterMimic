@@ -60,18 +60,31 @@ class SMPLXHumanoidCfg(ArticulationCfg):
         solver_velocity_iteration_count=1,  # Velocity solver iterations
     )
 
+    # PD gains mirror the per-joint stiffness/damping declared in the source
+    # MJCF (intermimic/data/assets/smplx/omomo.xml). Toes and Wrists are
+    # softer than the rest of the legs/arms in the MJCF, so they need their
+    # own groups — merging them into "legs"/"arms" silently overrides the
+    # MJCF values to the wrong stiffness.
     actuators = {
     "legs": ImplicitActuatorCfg(
-        joint_names_expr=["L_Hip_.*", "R_Hip_.*", "L_Knee_.*", "R_Knee_.*", "L_Ankle_.*", "R_Ankle_.*", "L_Toe_.*", "R_Toe_.*"],
+        joint_names_expr=["L_Hip_.*", "R_Hip_.*", "L_Knee_.*", "R_Knee_.*", "L_Ankle_.*", "R_Ankle_.*"],
         stiffness=800.0, damping=80.0, effort_limit_sim=3000.0, velocity_limit_sim=50.0,
+    ),
+    "toes": ImplicitActuatorCfg(
+        joint_names_expr=["L_Toe_.*", "R_Toe_.*"],
+        stiffness=500.0, damping=50.0, effort_limit_sim=3000.0, velocity_limit_sim=50.0,
     ),
     "torso": ImplicitActuatorCfg(
         joint_names_expr=["Torso_.*", "Spine_.*", "Chest_.*"],
         stiffness=1000.0, damping=100.0, effort_limit_sim=3000.0, velocity_limit_sim=50.0,
     ),
     "arms": ImplicitActuatorCfg(
-        joint_names_expr=["L_Thorax_.*","R_Thorax_.*","L_Shoulder_.*","R_Shoulder_.*","L_Elbow_.*","R_Elbow_.*","L_Wrist_.*","R_Wrist_.*"],
+        joint_names_expr=["L_Thorax_.*","R_Thorax_.*","L_Shoulder_.*","R_Shoulder_.*","L_Elbow_.*","R_Elbow_.*"],
         stiffness=500.0, damping=50.0, effort_limit_sim=3000.0, velocity_limit_sim=50.0,
+    ),
+    "wrists": ImplicitActuatorCfg(
+        joint_names_expr=["L_Wrist_.*", "R_Wrist_.*"],
+        stiffness=300.0, damping=30.0, effort_limit_sim=3000.0, velocity_limit_sim=50.0,
     ),
     "fingers": ImplicitActuatorCfg(
         joint_names_expr=[".*Index.*",".*Middle.*",".*Ring.*",".*Pinky.*",".*Thumb.*"],
