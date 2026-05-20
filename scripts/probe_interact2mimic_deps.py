@@ -84,13 +84,32 @@ def main() -> int:
 
     builtins.__import__ = _real_import
 
-    if not missing:
-        print("# Nothing missing — interact2mimic.py top-of-file imports all resolve.")
+    # Filter false positives:
+    #   - Windows-only stdlib (we're on Linux): _winapi, msvcrt, winreg, _winreg, nt
+    #   - Old-Python backports that 3.8+ has built in: pickle5
+    #   - Other Unix-only stdlib that conditional imports reach for: pwd, grp, etc.
+    #     (These all look "missing" because we're missing whatever guards them in
+    #     try/except ImportError fallbacks inside libraries we depend on.)
+    PLATFORM_NOISE = {
+        "_winapi", "msvcrt", "winreg", "_winreg", "nt",  # Windows
+        "pickle5",                                        # 3.8+ backport
+    }
+    real_missing = {m for m in missing if m not in PLATFORM_NOISE}
+    noise = missing & PLATFORM_NOISE
+
+    if noise:
+        print("# Ignoring (intentional ImportError fallbacks, not real deps):")
+        for m in sorted(noise):
+            print(f"#   {m}")
+        print()
+
+    if not real_missing:
+        print("# Nothing real missing — interact2mimic.py top-of-file imports all resolve.")
         return 0
 
-    pip_names = sorted({_pip_name(m) for m in missing})
+    pip_names = sorted({_pip_name(m) for m in real_missing})
     print("# Missing modules:")
-    for m in sorted(missing):
+    for m in sorted(real_missing):
         print(f"#   {m}")
     print()
     print("# Install with:")
