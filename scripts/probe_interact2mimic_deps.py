@@ -23,11 +23,11 @@ import sys
 import types
 from pathlib import Path
 
-missing: set[str] = set()
+missing = set()
 _real_import = builtins.__import__
 
 
-def _stub_module(name: str) -> types.ModuleType:
+def _stub_module(name):
     mod = types.ModuleType(name)
     mod.__path__ = []  # mark as a package so submodule imports keep stubbing
     return mod

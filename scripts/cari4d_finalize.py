@@ -88,12 +88,12 @@ def _safe_copy(src: Path, dst: Path) -> None:
     print(f"  copied {src} -> {dst}")
 
 
-def _extract_stl_uuids(mjcf_path: Path) -> list[str]:
+def _extract_stl_uuids(mjcf_path):
     """Read a PHC-generated MJCF and return the unique UUID directories its
     `<mesh file="<uuid>/geom/...">` entries reference."""
     tree = ET.parse(str(mjcf_path))
-    uuids: list[str] = []
-    seen: set[str] = set()
+    uuids = []
+    seen = set()
     for mesh in tree.getroot().findall(".//asset/mesh"):
         fname = mesh.attrib.get("file", "")
         if "/geom/" not in fname:
