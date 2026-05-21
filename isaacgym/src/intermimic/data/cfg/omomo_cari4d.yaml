@@ -2,9 +2,11 @@
 # Produced via scripts/cari4d_to_interact.py + InterAct's interact2mimic.py
 # + scripts/cari4d_finalize.py.
 #
-# The robotType below assumes interact2mimic.py was run with --dataset_name=behave_cari4d
-# and the sequence name starts with 'Date03' (giving sub='Date03'). For other CARI4D
-# sequences, regenerate the MJCF and update robotType/dataSub accordingly.
+# IMPORTANT: InterMimic's task code (intermimic.py:63) parses the .pt filename
+# prefix as `int(prefix[3:])` — it expects 'sub<N>_<object>_<idx>.pt' (e.g.
+# 'sub99_gas_000.pt'). CARI4D's native sequence naming ('Date03_Sub01_...')
+# doesn't fit, so the adapter renames at output time. If you process more
+# subjects later, use distinct sub<N> numbers (sub99, sub100, ...).
 env:
   numEnvs: 16
   envSpacing: 2
@@ -24,11 +26,11 @@ env:
   hybridInitProb: 0.5
   dataFPS: 30
   dataFramesScale: 1
-  dataSub: ['Date03']
+  dataSub: ['sub99']
   ballSize: 1.
   numObs: 3198
   motion_file: InterAct/behave_cari4d
-  robotType: "smplx/smplh_behave_Date03.xml"
+  robotType: "smplx/smplh_behave_sub99.xml"
   objectDensity: 200
   localRootObs: False
   keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]

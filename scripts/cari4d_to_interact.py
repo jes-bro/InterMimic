@@ -128,9 +128,18 @@ def main() -> int:
                         help="SMPL-H gender used during CARI4D reconstruction.")
     parser.add_argument("--object-name", default=None,
                         help="Object slug (URDF + folder name). Default: token at "
-                             "split('_')[-2] of the sequence name.")
+                             "split('_')[-2] of the bundle filename stem.")
+    parser.add_argument("--subject-id", type=int, default=99,
+                        help="Integer subject id to embed in the output filename. "
+                             "InterMimic's task code (intermimic.py:63) parses "
+                             "split('_')[0][3:] as int, so the seq prefix must be "
+                             "'sub<int>'. Default: 99.")
+    parser.add_argument("--clip-idx", type=int, default=0,
+                        help="Sequence index suffix for this clip (default: 0). "
+                             "Increment when converting more clips of the same subject.")
     parser.add_argument("--seq-name", default=None,
-                        help="Override the sequence directory name. Default: bundle filename stem.")
+                        help="Override the sequence directory name entirely. "
+                             "Default: 'sub<subject_id>_<object_name>_<clip_idx:03d>'.")
     parser.add_argument("--bundle-key", default="pr", choices=["pr", "gt", "in"],
                         help="Which sub-dict to read. 'pr' (default) = optimized prediction "
                              "(what you almost always want).")
@@ -157,16 +166,22 @@ def main() -> int:
               f"with 'behave'; interact2mimic.py will NOT use the SMPL-H/num_betas=10 branch.",
               file=sys.stderr)
 
-    seq_name = args.seq_name or bundle_path.stem
-    parts = seq_name.split("_")
+    # Derive object name from the bundle filename (Date03_Sub01_gas_wild002 → 'gas')
+    # before composing the InterMimic-style seq name.
+    bundle_stem_parts = bundle_path.stem.split("_")
     if args.object_name:
         object_name = args.object_name
-    elif len(parts) >= 2:
-        object_name = parts[-2]
+    elif len(bundle_stem_parts) >= 2:
+        object_name = bundle_stem_parts[-2]
     else:
-        print(f"[cari4d->interact] cannot infer object from seq name '{seq_name}'; "
+        print(f"[cari4d->interact] cannot infer object from bundle '{bundle_path.name}'; "
               f"pass --object-name", file=sys.stderr)
         return 2
+
+    # InterMimic expects 'sub<int>_<object>_<idx>.pt' (intermimic.py:63 does
+    # int(split('_')[0][3:])). CARI4D's native sequence names like
+    # 'Date03_Sub01_gas_wild002' don't fit. Compose a conforming name.
+    seq_name = args.seq_name or f"sub{args.subject_id}_{object_name}_{args.clip_idx:03d}"
 
     print(f"[cari4d->interact] loading {bundle_path.name} (key={args.bundle_key})")
     bundle = _load_bundle(bundle_path)
