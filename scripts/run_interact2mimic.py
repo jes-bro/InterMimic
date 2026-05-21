@@ -39,6 +39,10 @@ SOURCE_REPLACEMENT = '"mesh": True   # patched by run_interact2mimic.py'
 # still fail loudly, just one stack frame deeper.
 SAFE_LOADERS_PREFIX = '''\
 # === injected by scripts/run_interact2mimic.py ===
+# Isaac Gym MUST be imported before torch (its gymdeps.py asserts this).
+# smplx transitively imports torch, so load Isaac Gym first to satisfy the
+# ordering requirement that interact2mimic.py itself respects.
+from isaacgym import torch_utils as _ig_torch_utils_first  # noqa: F401
 import smplx as _smplx_for_patch
 _real_smplx_create = _smplx_for_patch.create
 def _safe_smplx_create(*args, **kwargs):
