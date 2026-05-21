@@ -246,7 +246,16 @@ def main() -> int:
              name=np.array(object_name))
 
     if mesh_dst.resolve() != mesh_path:
-        shutil.copy(str(mesh_path), str(mesh_dst))
+        # Strip mtllib/usemtl references from the .obj as we copy. Hunyuan3D
+        # meshes ship with a sibling .mtl that isn't present at Isaac Gym's
+        # asset-resolution path, and Isaac Gym refuses to load a .obj whose
+        # mtllib it can't find. We only need geometry, not materials.
+        with mesh_path.open("r") as src, mesh_dst.open("w") as dst:
+            for line in src:
+                stripped = line.lstrip()
+                if stripped.startswith(("mtllib ", "usemtl ")):
+                    continue
+                dst.write(line)
 
     print(f"[cari4d->interact] seq={seq_name} object={object_name} T={T}")
     print(f"  wrote {human_npz}")
