@@ -30,6 +30,19 @@ _real_import = builtins.__import__
 def _stub_module(name):
     mod = types.ModuleType(name)
     mod.__path__ = []  # mark as a package so submodule imports keep stubbing
+    mod.__all__ = []
+
+    # PEP 562: module-level __getattr__ is invoked for missing names.
+    # We return a fresh stub for ANY attribute access, so patterns like
+    #   `from _winapi import CREATE_NEW_CONSOLE`
+    # don't blow up with `ImportError: cannot import name 'X' from '<stub>'`
+    # — they'd otherwise halt the probe before it could enumerate the
+    # rest of the imports.
+    def _attr(item):
+        sub = types.ModuleType(f"{name}.{item}")
+        sub.__path__ = []
+        return sub
+    mod.__getattr__ = _attr
     return mod
 
 
