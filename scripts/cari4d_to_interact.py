@@ -145,6 +145,12 @@ def main() -> int:
                              "(what you almost always want).")
     parser.add_argument("--fps", type=float, default=30.0,
                         help="Source video FPS (default 30).")
+    parser.add_argument("--prerotate-x", type=float, default=180.0,
+                        help="Degrees to pre-rotate the SMPL pose + object pose "
+                             "around the X axis before writing to InterAct's "
+                             "schema. CARI4D outputs in a Y-down camera frame; "
+                             "interact2mimic.py assumes Y-up SMPL. Default 180 "
+                             "compensates for this. Set to 0 to disable.")
     args = parser.parse_args()
 
     bundle_path = args.bundle.expanduser().resolve()
@@ -224,6 +230,27 @@ def main() -> int:
 
     obj_trans = pose_abs[:, :3, 3].astype(np.float64)
     obj_angles = sRot.from_matrix(pose_abs[:, :3, :3]).as_rotvec().astype(np.float64)
+
+    # Pre-rotate around X to convert CARI4D's camera-frame convention to the
+    # Y-up SMPL frame that interact2mimic.py expects. Applied identically to
+    # human root + object so their relative geometry stays consistent.
+    if args.prerotate_x != 0.0:
+        R_pre = sRot.from_euler("x", args.prerotate_x, degrees=True)
+        print(f"[cari4d->interact] pre-rotating {args.prerotate_x}° around X")
+
+        # Human root orient (first 3 dims of poses) — rotate as rotvec
+        root_orient = sRot.from_rotvec(poses[:, :3])
+        poses[:, :3] = (R_pre * root_orient).as_rotvec()
+
+        # Human translation
+        smpl_t = R_pre.apply(smpl_t)
+
+        # Object axis-angle
+        obj_orient = sRot.from_rotvec(obj_angles)
+        obj_angles = (R_pre * obj_orient).as_rotvec()
+
+        # Object translation
+        obj_trans = R_pre.apply(obj_trans)
 
     seq_dir = interact_root / "data" / args.dataset_tag / "sequences_canonical" / seq_name
     obj_dir = interact_root / "data" / args.dataset_tag / "objects" / object_name
