@@ -46,6 +46,13 @@ def main() -> int:
                              "to the whole scene (root + body + object). Use this "
                              "when the CARI4D frame is offset by an arbitrary "
                              "rotation that you don't know the axis/degrees for.")
+    parser.add_argument("--around-root", action="store_true",
+                        help="Rotate around each frame's root_pos rather than the "
+                             "world origin. Keeps the figure at its original world "
+                             "location (no submerging below the floor) and preserves "
+                             "figure-object relative geometry. Recommended for "
+                             "fixing CARI4D's upside-down output without breaking "
+                             "the motion.")
     parser.add_argument("--out", type=Path, default=None,
                         help="Output path. Default: overwrite input with <input>.bak backup.")
     args = parser.parse_args()
@@ -67,8 +74,6 @@ def main() -> int:
         return 2
 
     if args.fix_frame_zero:
-        # Get frame 0's root_rot, invert it. That gives the rotation we need
-        # to apply to all data so frame 0 ends up at identity.
         frame0_root_rot = data[0, 3:7].numpy()
         R = sRot.from_quat(frame0_root_rot).inv()
         print(f"using fix-frame-zero: inverse of frame 0 root_rot = {R.as_quat()}")
@@ -79,17 +84,29 @@ def main() -> int:
 
     T = data.shape[0]
 
-    # Positions: matrix multiply
+    # Pull out root_pos before any modifications — used as per-frame rotation
+    # center if --around-root is set.
+    root_pos = data[:, 0:3].clone()                               # (T, 3)
+
     def rot_positions(slice_):
         flat = data[:, slice_].view(T, -1, 3)                     # (T, N, 3)
-        rotated = flat @ R_mat.T                                  # (T, N, 3)
+        if args.around_root:
+            # Per-frame rotation around root_pos[t]. Preserves figure-object
+            # relative geometry and keeps figure at its original world location.
+            centered = flat - root_pos.view(T, 1, 3)
+            rotated = centered @ R_mat.T + root_pos.view(T, 1, 3)
+        else:
+            rotated = flat @ R_mat.T
         data[:, slice_] = rotated.reshape(T, -1)
 
-    rot_positions(slice(0, 3))                                    # root_pos
-    rot_positions(slice(162, 318))                                # body_pos (52*3)
+    rot_positions(slice(162, 318))                                # body_pos
     rot_positions(slice(318, 321))                                # obj_pos
+    if not args.around_root:
+        # When rotating around world origin, also rotate root_pos. When rotating
+        # around root_pos itself, leave it (figure stays at same world location).
+        rot_positions(slice(0, 3))
 
-    # Rotations (quaternions xyzw): premultiply by R_quat
+    # Rotations (quaternions xyzw): premultiply by R_quat regardless of mode.
     def rot_quats(slice_):
         flat = data[:, slice_].view(T, -1, 4).numpy().reshape(-1, 4)
         new = (sRot.from_quat(R_quat) * sRot.from_quat(flat)).as_quat()
@@ -97,9 +114,7 @@ def main() -> int:
 
     rot_quats(slice(3, 7))                                        # root_rot
     rot_quats(slice(321, 325))                                    # obj_rot
-    rot_quats(slice(383, 591))                                    # body_rot (52*4)
-
-    # dof_pos, contact labels: invariant under world rotation, no change.
+    rot_quats(slice(383, 591))                                    # body_rot
 
     if dst == src:
         backup = src.with_suffix(src.suffix + ".bak")

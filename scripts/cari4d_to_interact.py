@@ -145,12 +145,12 @@ def main() -> int:
                              "(what you almost always want).")
     parser.add_argument("--fps", type=float, default=30.0,
                         help="Source video FPS (default 30).")
-    parser.add_argument("--prerotate-x", type=float, default=180.0,
+    parser.add_argument("--prerotate-x", type=float, default=0.0,
                         help="Degrees to pre-rotate the SMPL pose + object pose "
-                             "around the X axis before writing to InterAct's "
-                             "schema. CARI4D outputs in a Y-down camera frame; "
-                             "interact2mimic.py assumes Y-up SMPL. Default 180 "
-                             "compensates for this. Set to 0 to disable.")
+                             "around the X axis before writing. NOT RECOMMENDED — "
+                             "interferes with interact2mimic.py's upright_start "
+                             "correction and produces broken joint angles. Default "
+                             "0 (disabled). Post-process via rotate_pt.py instead.")
     args = parser.parse_args()
 
     bundle_path = args.bundle.expanduser().resolve()
