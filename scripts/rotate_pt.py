@@ -38,11 +38,20 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("pt_path", type=Path)
-    parser.add_argument("--axis", choices=["x", "y", "z"], required=True)
-    parser.add_argument("--degrees", type=float, required=True)
+    parser.add_argument("--axis", choices=["x", "y", "z"], default=None)
+    parser.add_argument("--degrees", type=float, default=None)
+    parser.add_argument("--fix-frame-zero", action="store_true",
+                        help="Compute the rotation that makes frame 0's root_rot "
+                             "into the identity quaternion, then apply that rotation "
+                             "to the whole scene (root + body + object). Use this "
+                             "when the CARI4D frame is offset by an arbitrary "
+                             "rotation that you don't know the axis/degrees for.")
     parser.add_argument("--out", type=Path, default=None,
                         help="Output path. Default: overwrite input with <input>.bak backup.")
     args = parser.parse_args()
+
+    if not args.fix_frame_zero and (args.axis is None or args.degrees is None):
+        parser.error("specify either --fix-frame-zero, or both --axis and --degrees")
 
     src = args.pt_path.expanduser().resolve()
     if not src.is_file():
@@ -57,7 +66,14 @@ def main() -> int:
         print(f"unexpected channel count {data.shape[-1]} (want 591)", file=sys.stderr)
         return 2
 
-    R = sRot.from_euler(args.axis, args.degrees, degrees=True)
+    if args.fix_frame_zero:
+        # Get frame 0's root_rot, invert it. That gives the rotation we need
+        # to apply to all data so frame 0 ends up at identity.
+        frame0_root_rot = data[0, 3:7].numpy()
+        R = sRot.from_quat(frame0_root_rot).inv()
+        print(f"using fix-frame-zero: inverse of frame 0 root_rot = {R.as_quat()}")
+    else:
+        R = sRot.from_euler(args.axis, args.degrees, degrees=True)
     R_mat = torch.tensor(R.as_matrix(), dtype=data.dtype)        # (3,3)
     R_quat = R.as_quat()                                          # (4,) xyzw
 
