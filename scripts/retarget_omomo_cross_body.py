@@ -352,8 +352,10 @@ def main() -> int:
                         help="Source subject ID (whose motion we're retargeting), e.g. sub2")
     parser.add_argument("--target-sub", required=True,
                         help="Target subject ID (whose body shape we're retargeting to), e.g. sub8")
+    # Default to absolute paths since we chdir into InterAct/simulation later
+    # for the smpl_local_robot imports — relative defaults break after chdir.
     parser.add_argument("--betas-npz",
-                        default=Path(__file__).parent / "omomo_betas.npz",
+                        default=(Path(__file__).resolve().parent / "omomo_betas.npz"),
                         type=Path,
                         help="Per-subject betas lookup (from extract_omomo_betas.py)")
     parser.add_argument("--source-dir", type=Path,
@@ -370,6 +372,13 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None,
                         help="If set, only retarget the first N clips (smoke test)")
     args = parser.parse_args()
+
+    # Force all path args to absolute before chdir-ing in setup_interact_paths,
+    # otherwise relative paths break once cwd changes.
+    args.betas_npz = args.betas_npz.resolve()
+    args.source_dir = args.source_dir.resolve()
+    args.output_dir = args.output_dir.resolve()
+    args.mjcf_dir = args.mjcf_dir.resolve()
 
     # Chdir + sys.path before any FK-using import. See setup_interact_paths.
     setup_interact_paths(args.interact_root)

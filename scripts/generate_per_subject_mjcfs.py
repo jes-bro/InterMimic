@@ -156,8 +156,11 @@ def generate_mjcf_for_subject(sub_id: str, betas: np.ndarray, gender: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # Resolve to ABSOLUTE up front: we chdir into InterAct/simulation later, so
+    # any relative default would break. __file__ may be relative depending on
+    # how Python is invoked; .resolve() handles both.
     parser.add_argument("--betas-npz",
-                        default=Path(__file__).parent / "omomo_betas.npz",
+                        default=(Path(__file__).resolve().parent / "omomo_betas.npz"),
                         type=Path,
                         help="Path to omomo_betas.npz produced by extract_omomo_betas.py")
     parser.add_argument("--subjects", nargs="+", required=True,
@@ -170,6 +173,12 @@ def main() -> int:
                         help="InterAct repo root (must contain simulation/ + models/). "
                              "Default: cluster path /simurgh2/projects/ret-hoi/InterAct.")
     args = parser.parse_args()
+
+    # Force all paths to absolute before we chdir, otherwise any relative
+    # path the user supplied (or our defaults inherited via Path(__file__))
+    # would break once cwd changes inside setup_interact_paths.
+    args.betas_npz = args.betas_npz.resolve()
+    args.output_dir = args.output_dir.resolve()
 
     # Chdir to InterAct/simulation BEFORE importing anything that pulls in
     # smpl_local_robot, so its module-level smplx.create() calls find the
