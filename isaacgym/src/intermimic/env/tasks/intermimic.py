@@ -11,6 +11,7 @@ from ...utils import torch_utils
 import torch.nn.functional as F
 from .humanoid import *
 import trimesh
+import imageio
 
 from ...utils.path_utils import resolve_data_path
 
@@ -83,6 +84,20 @@ class InterMimic(Humanoid_SMPLX):
         self._sum_reward = torch.zeros([self.num_envs], device=self.device, dtype=torch.float)
         self._curr_state = torch.zeros([self.num_envs, cfg['env']['rolloutLength'], 332], device=self.device, dtype=torch.float)
         self._build_target_tensors()
+        # --- video recording setup ---
+        if self.play_dataset:
+            cam_props = gymapi.CameraProperties()
+            cam_props.width, cam_props.height = 1280, 720
+            self._video_cam = self.gym.create_camera_sensor(self.envs[0], cam_props)
+            self.gym.set_camera_location(
+                self._video_cam, self.envs[0],
+                gymapi.Vec3(3.0, 3.0, 2.0),
+                gymapi.Vec3(0.0, 0.0, 1.0),
+            )
+            import imageio
+            os.makedirs('replay_frames', exist_ok=True); self._video_writer = None; self._video_frame_idx = 0
+            self._video_height, self._video_width = 720, 1280
+            # END OF modified part
 
         return
 
@@ -1184,6 +1199,14 @@ class InterMimic(Humanoid_SMPLX):
                                                     gymapi.Vec3(0., 0., 1.))
         self.render(t=t)
         self.gym.simulate(self.sim)
+        # --- capture frame ---
+        if hasattr(self, '_video_writer'):
+            self.gym.step_graphics(self.sim)
+            self.gym.render_all_camera_sensors(self.sim)
+            img = self.gym.get_camera_image(self.sim, self.envs[0], self._video_cam, gymapi.IMAGE_COLOR)
+            img = img.reshape(self._video_height, self._video_width, 4)[..., :3]
+            imageio.imwrite(f'replay_frames/frame_{self._video_frame_idx:06d}.png', img); self._video_frame_idx += 1
+        # end of mod part
 
         return
     
