@@ -16,6 +16,58 @@ import imageio
 from ...utils.path_utils import resolve_data_path
 
 
+# ----------------------------------------------------------------------------
+# Cross-body filename parsing helpers
+# ----------------------------------------------------------------------------
+# Motion files come in two naming conventions:
+#   * Identity (standard InterMimic): 'sub<N>_<obj>_<idx>.pt'
+#       Meaning: subject N's body performs the motion. Source body == target body.
+#   * Cross-body (new, this project):  'sub<src>to<tgt>_<obj>_<idx>.pt'
+#       Meaning: subject <src>'s motion has been retargeted onto subject <tgt>'s
+#       body shape by the cross-body retargeter. The sim controls subject <tgt>;
+#       the reference motion came from subject <src>.
+#
+# The env needs to know both numbers so it can (a) load the right MJCF for the
+# target body, and (b) feed (source_betas, target_betas) into the observation.
+
+def _parse_motion_subject(filename):
+    """Parse a motion filename and return (source_subject_num, target_subject_num).
+
+    Examples:
+        'sub2_largetable_007.pt'      -> (2, 2)    # identity pair
+        'sub2to8_largetable_007.pt'   -> (2, 8)    # cross-body
+        '/path/to/sub3to11_box_001.pt' -> (3, 11)  # works on full paths too
+
+    Returns ints. Raises ValueError on malformed input.
+    """
+    first_token = os.path.basename(filename).split('_')[0]
+    if not first_token.startswith('sub'):
+        raise ValueError(
+            "Motion filename must start with 'sub<N>_...' or 'sub<src>to<tgt>_...': "
+            "{}".format(filename))
+    body = first_token[3:]   # strip 'sub' prefix -> '2', '2to8', etc.
+    if 'to' in body:
+        src_str, tgt_str = body.split('to', 1)
+        return int(src_str), int(tgt_str)
+    return int(body), int(body)
+
+
+def _load_betas_npz(npz_path):
+    """Load the per-subject betas lookup produced by extract_omomo_betas.py.
+
+    Returns a dict keyed by subject NUMBER (int) -> (16,) np.ndarray of betas.
+    The on-disk format keys by 'sub<N>' strings; we convert to int keys here
+    because that's what the env code does index lookups against.
+    """
+    data = np.load(npz_path, allow_pickle=True)
+    out = {}
+    for key in data.files:
+        if key.startswith('sub') and key[3:].isdigit():
+            out[int(key[3:])] = np.asarray(data[key], dtype=np.float32)
+    if not out:
+        raise ValueError("No 'sub<N>' keys in betas npz {}".format(npz_path))
+    return out
+
 
 class InterMimic(Humanoid_SMPLX):
     class StateInit(Enum):
@@ -45,8 +97,41 @@ class InterMimic(Humanoid_SMPLX):
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
         if cfg['env'].get('enableEvaluation', False) and not state_init_is_start:
             print(f"Warning: Evaluation is disabled because stateInit is '{state_init}' (must be 'Start')")
-        motion_file = os.listdir(self.motion_file)
-        self.motion_file = sorted([os.path.join(self.motion_file, data_path) for data_path in motion_file if data_path.split('_')[0] in cfg['env']['dataSub']])
+        # --- Motion file discovery (cross-body aware) ---
+        # We enumerate every .pt in self.motion_file (which is actually the
+        # *directory* containing motion files at this point — the field is
+        # reassigned to a list of paths a few lines below). For each file we
+        # parse out the source and target subject numbers. The dataSub filter
+        # operates on the TARGET subject (since the target body is what the
+        # sim controls). Identity-pair files keep working unchanged: their
+        # source == target, so filtering on target matches the old semantics.
+        all_files = os.listdir(self.motion_file)
+        # `dataSub` in cfg is a list of strings like ['sub2', 'sub8'] — same
+        # convention as before. Convert to a set of ints once for matching.
+        data_sub_nums = {int(s[3:]) for s in cfg['env']['dataSub']}
+
+        parsed = []  # list of (full_path, source_num, target_num)
+        for fname in all_files:
+            try:
+                src_num, tgt_num = _parse_motion_subject(fname)
+            except ValueError:
+                # Not a recognized motion file (e.g. a README.md sitting in
+                # the dir). Skip silently rather than crash so test runs
+                # tolerate stray files.
+                continue
+            if tgt_num in data_sub_nums:
+                parsed.append((os.path.join(self.motion_file, fname), src_num, tgt_num))
+
+        # Sort by file path for determinism (mirrors the old behavior of
+        # sorted(...) on the list of filenames).
+        parsed.sort(key=lambda t: t[0])
+        self.motion_file = [p[0] for p in parsed]
+        source_subject_nums = [p[1] for p in parsed]
+        target_subject_nums = [p[2] for p in parsed]
+
+        # --- Object name parsing ---
+        # Unchanged: object name is always the 2nd-to-last underscore-separated
+        # token, regardless of whether the file is identity or cross-body.
         self.object_name = [motion_example.split('_')[-2] for motion_example in self.motion_file]
         object_name_set = sorted(list(set(self.object_name)))
         # Construct device string before super().__init__() since self.device is set there
@@ -61,7 +146,51 @@ class InterMimic(Humanoid_SMPLX):
         self.object_density = cfg['env']['objectDensity']
         self.ref_hoi_obs_size = 7 + 51 * 6 + 52 * 13 + 13 + 52 * 3 + 52 + 1
         self.num_motions = len(self.motion_file)
-        self.dataset_index = to_torch([int(data_path.split('/')[-1].split('_')[0][3:]) for data_path in self.motion_file], dtype=torch.long).to(self._init_device)
+
+        # --- Cross-body subject + betas tensors ---
+        # target_subject_index is the renamed/equivalent of the old
+        # `dataset_index`: per-motion subject number, used by env reset code
+        # to assign envs to a specific subject's body. We keep `dataset_index`
+        # pointing at the target subject for backwards compat with the rest of
+        # the file (line ~480 reads `self.dataset_index[self.data_id]`).
+        self.source_subject_index = to_torch(source_subject_nums, dtype=torch.long).to(self._init_device)
+        self.target_subject_index = to_torch(target_subject_nums, dtype=torch.long).to(self._init_device)
+        self.dataset_index = self.target_subject_index  # alias for back-compat
+
+        # Load per-subject betas lookup, then assemble per-motion betas tensors
+        # so each motion file has (source_betas, target_betas) ready to go for
+        # observation conditioning (task #7). The cfg field is OPTIONAL — if
+        # absent, we fall back to zero betas (which means standard InterMimic
+        # behavior with no shape conditioning, used by the existing single-
+        # subject teacher training).
+        betas_file = cfg['env'].get('betas_file', None)
+        # Flag for the obs builder. When True, the 32-dim
+        # (source_betas, target_betas) vector is appended to obs_buf. When
+        # False (existing single-subject configs), nothing is appended and
+        # numObs keeps its old value. The user is responsible for setting
+        # numObs to base+32 in cfg when they enable betas_file.
+        self._use_betas_obs = betas_file is not None
+        if betas_file is not None:
+            from ...utils.path_utils import resolve_repo_path
+            betas_path = resolve_repo_path(betas_file)
+            betas_lookup = _load_betas_npz(betas_path)
+            self.source_betas = to_torch(
+                np.stack([betas_lookup[n] for n in source_subject_nums], axis=0),
+                dtype=torch.float,
+            ).to(self._init_device)
+            self.target_betas = to_torch(
+                np.stack([betas_lookup[n] for n in target_subject_nums], axis=0),
+                dtype=torch.float,
+            ).to(self._init_device)
+        else:
+            # No betas file: fill with zeros. Existing standard InterMimic
+            # configs (omomo_train.yaml etc.) don't set betas_file and don't
+            # rely on this tensor in their reward/obs, so this preserves
+            # backwards compatibility.
+            self.source_betas = torch.zeros((self.num_motions, 16),
+                                            dtype=torch.float, device=self._init_device)
+            self.target_betas = torch.zeros((self.num_motions, 16),
+                                            dtype=torch.float, device=self._init_device)
 
         super().__init__(cfg=cfg,
                          sim_params=sim_params,
@@ -744,12 +873,35 @@ class InterMimic(Humanoid_SMPLX):
         if (env_ids is None):
             self._curr_ref_obs[:] = self.hoi_data[self.data_id[env_ids], self.progress_buf[env_ids]].clone()
             # Teacher policy always uses MLP (2 time steps: 1, 16)
-            self.obs_buf[:] = torch.cat((self._compute_observations_iter(self.hoi_data, None, 1), self._compute_observations_iter(self.hoi_data, None, 16)), dim=-1)
+            obs_terms = [
+                self._compute_observations_iter(self.hoi_data, None, 1),
+                self._compute_observations_iter(self.hoi_data, None, 16),
+            ]
+            if self._use_betas_obs:
+                # Append per-env (source_betas, target_betas) — 32 dims total.
+                # Constant across timesteps within a clip; gives the policy
+                # explicit knowledge of which source body the motion came from
+                # and which target body it's controlling.
+                obs_terms.append(torch.cat(
+                    [self.source_betas[self.data_id], self.target_betas[self.data_id]],
+                    dim=-1,
+                ))
+            self.obs_buf[:] = torch.cat(obs_terms, dim=-1)
 
         else:
             self._curr_ref_obs[env_ids] = self.hoi_data[self.data_id[env_ids], self.progress_buf[env_ids]].clone()
             # Teacher policy always uses MLP (2 time steps: 1, 16)
-            self.obs_buf[env_ids] = torch.cat((self._compute_observations_iter(self.hoi_data, env_ids, 1), self._compute_observations_iter(self.hoi_data, env_ids, 16)), dim=-1)
+            obs_terms = [
+                self._compute_observations_iter(self.hoi_data, env_ids, 1),
+                self._compute_observations_iter(self.hoi_data, env_ids, 16),
+            ]
+            if self._use_betas_obs:
+                obs_terms.append(torch.cat(
+                    [self.source_betas[self.data_id[env_ids]],
+                     self.target_betas[self.data_id[env_ids]]],
+                    dim=-1,
+                ))
+            self.obs_buf[env_ids] = torch.cat(obs_terms, dim=-1)
 
         return
     
