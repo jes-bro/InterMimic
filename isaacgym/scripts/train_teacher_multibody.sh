@@ -14,7 +14,6 @@ export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env isaacgym/src/intermimic/data/cfg/omomo_train_multibody.yaml \
-    --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml \
+    --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml \
     --headless \
-    --checkpoint checkpoints/smplx_teachers/sub2_betas.pth \
     --output checkpoints
