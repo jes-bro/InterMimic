@@ -21,12 +21,13 @@ env:
   hybridInitProb: 0.5
   dataFPS: 30
   dataFramesScale: 1
-  dataSub: ['sub2']
+  dataSub: ['sub2']                        # patched per-subject by eval_per_subject.py
+  subjectBodies: ['sub2']                  # patched per-subject by eval_per_subject.py
+  betas_file: scripts/omomo_betas.npz      # match training obs structure
   ballSize: 1.
-  numObs: 3198
-  motion_file: InterAct/OMOMO
-  robotType: "smplx/omomo.xml"   # fallback; ignored when subjectBodies is set
-  subjectBodies: ['sub10']   # single-subject view: sub10 = shortest body (1.437m vs sub2's 1.601m); should look visibly shorter
+  numObs: 3230                             # 3198 base + 32 betas (must match training checkpoint)
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
   objectDensity: 200
   localRootObs: False
   keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
