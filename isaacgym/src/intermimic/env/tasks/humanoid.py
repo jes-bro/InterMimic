@@ -216,31 +216,58 @@ class Humanoid_SMPLX(BaseTask):
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
         asset_root_cfg = self.cfg["env"]["asset"]["assetRoot"]
-        asset_file = self.robot_type
 
-        asset_path = resolve_repo_path(os.path.join(asset_root_cfg, asset_file))
-        asset_root = str(asset_path.parent)
-        asset_file = asset_path.name
+        # `subjectBodies`, if set, is a list of subject IDs (e.g. ['sub2', 'sub10'])
+        # mapped to per-subject MJCFs (smplx_omomo_<sub>.xml). When absent, fall
+        # back to the single canonical humanoid asset (self.robot_type).
+        subject_bodies = self.cfg["env"].get("subjectBodies", None)
+        if subject_bodies:
+            asset_files = [f"smplx_omomo_{sub}.xml" for sub in subject_bodies]
+            self.subject_bodies = list(subject_bodies)
+        else:
+            asset_files = [self.robot_type]
+            self.subject_bodies = None
 
         asset_options = gymapi.AssetOptions()
         asset_options.angular_damping = 0.01
         asset_options.max_angular_velocity = 100.0
         asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        humanoid_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+
+        humanoid_assets = []
+        for asset_file_rel in asset_files:
+            asset_path = resolve_repo_path(os.path.join(asset_root_cfg, asset_file_rel))
+            asset_root = str(asset_path.parent)
+            asset_file = asset_path.name
+            humanoid_assets.append(
+                self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+            )
+
+        humanoid_asset = humanoid_assets[0]
 
         self.num_humanoid_bodies = self.gym.get_asset_rigid_body_count(humanoid_asset)
         self.num_humanoid_shapes = self.gym.get_asset_rigid_shape_count(humanoid_asset)
 
+        # All assets must share topology (DOF count + body count) so the policy's
+        # action vector and obs slicing remain valid across bodies.
+        for idx, ha in enumerate(humanoid_assets[1:], start=1):
+            n_b = self.gym.get_asset_rigid_body_count(ha)
+            n_d = self.gym.get_asset_dof_count(ha)
+            assert n_b == self.num_humanoid_bodies and n_d == self.gym.get_asset_dof_count(humanoid_asset), (
+                f"asset {asset_files[idx]} has body/dof count "
+                f"({n_b}, {n_d}) != reference ({self.num_humanoid_bodies}, "
+                f"{self.gym.get_asset_dof_count(humanoid_asset)})"
+            )
+
         actuator_props = self.gym.get_asset_actuator_properties(humanoid_asset)
         motor_efforts = [prop.motor_effort for prop in actuator_props]
-        
-        # create force sensors at the feet
-        right_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "right_foot")
-        left_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "left_foot")
-        sensor_pose = gymapi.Transform()
 
-        self.gym.create_asset_force_sensor(humanoid_asset, right_foot_idx, sensor_pose)
-        self.gym.create_asset_force_sensor(humanoid_asset, left_foot_idx, sensor_pose)
+        # create force sensors at the feet on every asset variant
+        sensor_pose = gymapi.Transform()
+        for ha in humanoid_assets:
+            right_foot_idx = self.gym.find_asset_rigid_body_index(ha, "right_foot")
+            left_foot_idx = self.gym.find_asset_rigid_body_index(ha, "left_foot")
+            self.gym.create_asset_force_sensor(ha, right_foot_idx, sensor_pose)
+            self.gym.create_asset_force_sensor(ha, left_foot_idx, sensor_pose)
 
         self.max_motor_effort = max(motor_efforts)
         self.motor_efforts = to_torch(motor_efforts, device=self.device)
@@ -256,14 +283,22 @@ class Humanoid_SMPLX(BaseTask):
         self.dof_limits_upper = []
 
         max_agg_bodies = self.num_humanoid_bodies + 2
-        max_agg_shapes = self.num_humanoid_shapes + 65        
-        
+        max_agg_shapes = self.num_humanoid_shapes + 65
+
+        # Per-env subject-body assignment (round-robin across the configured list).
+        # Downstream code in subclasses can read self._env_subject_idx[i] to find
+        # out which body env i was assigned, then look up betas accordingly.
+        self._env_subject_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        num_assets = len(humanoid_assets)
+
         for i in range(self.num_envs):
             # create env instance
             env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row)
             self.gym.begin_aggregate(env_ptr, max_agg_bodies, max_agg_shapes, True)
 
-            self._build_env(i, env_ptr, humanoid_asset)
+            asset_idx = i % num_assets
+            self._env_subject_idx[i] = asset_idx
+            self._build_env(i, env_ptr, humanoid_assets[asset_idx])
 
             self.gym.end_aggregate(env_ptr)
             self.envs.append(env_ptr)
