@@ -16,8 +16,10 @@ Example:
 import argparse
 import csv
 import re
+import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -74,8 +76,14 @@ def parse_metrics(stdout):
     return out
 
 
-def run_eval(subject_id, base_yaml, train_yaml, checkpoint, num_envs, repo_root):
-    """Invoke intermimic.run --test for one subject, return parsed metrics."""
+def run_eval(subject_id, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec):
+    """Invoke intermimic.run --test for one subject, return parsed metrics.
+
+    If the subprocess doesn't terminate within timeout_sec, it gets killed
+    and we try to parse whatever EVALUATION METRICS the player managed to
+    print before the kill. Cleanup waits a few seconds for GPU memory to
+    drain before the next subject starts.
+    """
     tmp_yaml = make_temp_yaml(base_yaml, subject_id)
     cmd = [
         "python", "-u", "-m", "intermimic.run",
@@ -87,24 +95,52 @@ def run_eval(subject_id, base_yaml, train_yaml, checkpoint, num_envs, repo_root)
         "--checkpoint", str(checkpoint),
         "--num_envs", str(num_envs),
     ]
-    print(f"\n[{subject_id}] running: {' '.join(cmd)}")
-    env = {"PYTHONPATH": f"{repo_root}/isaacgym/src:{repo_root}"}
+    print(f"\n[{subject_id}] running (timeout={timeout_sec}s): {' '.join(cmd)}")
     import os
+    env = {"PYTHONPATH": f"{repo_root}/isaacgym/src:{repo_root}"}
     env = {**os.environ, **env}
-    res = subprocess.run(cmd, cwd=repo_root, env=env, capture_output=True, text=True)
-    print(f"[{subject_id}] return code: {res.returncode}")
 
-    metrics = parse_metrics(res.stdout)
+    # Use Popen with start_new_session so we can kill the whole process group
+    # if the eval hangs. Helpful because Isaac Gym may spawn GPU worker threads
+    # that don't terminate cleanly from a plain Popen.kill().
+    p = subprocess.Popen(
+        cmd, cwd=repo_root, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    timed_out = False
+    try:
+        stdout, stderr = p.communicate(timeout=timeout_sec)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        print(f"[{subject_id}] TIMEOUT after {timeout_sec}s; killing process group")
+        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        try:
+            stdout, stderr = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            stdout, stderr = p.communicate()
+        rc = -1
+        # GPU sometimes needs a moment to release memory after a hard kill
+        time.sleep(5)
+
+    if timed_out:
+        print(f"[{subject_id}] return code: {rc} (killed)")
+    else:
+        print(f"[{subject_id}] return code: {rc}")
+
+    metrics = parse_metrics(stdout)
     if metrics is None:
         print(f"[{subject_id}] WARNING: could not parse EVALUATION METRICS block")
-        print(f"[{subject_id}] stdout tail:\n{res.stdout[-2000:]}")
-        if res.stderr:
-            print(f"[{subject_id}] stderr tail:\n{res.stderr[-2000:]}")
+        print(f"[{subject_id}] stdout tail:\n{stdout[-2000:]}")
+        if stderr:
+            print(f"[{subject_id}] stderr tail:\n{stderr[-2000:]}")
     else:
         print(f"[{subject_id}] metrics: {metrics}")
 
     Path(tmp_yaml).unlink(missing_ok=True)
-    return metrics, res.returncode
+    return metrics, rc, timed_out
 
 
 def main():
@@ -127,6 +163,10 @@ def main():
     )
     p.add_argument("--num-envs", type=int, default=1024)
     p.add_argument(
+        "--timeout-per-subject", type=int, default=900,
+        help="Kill each subject's eval after this many seconds (default 900=15min)",
+    )
+    p.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parents[1]),
         help="InterMimic repo root (sets cwd + PYTHONPATH)",
@@ -135,17 +175,18 @@ def main():
 
     fields = ["subject", "avg_steps", "human_pose_error",
               "object_pose_error", "success_rate",
-              "success_count", "success_total", "exit_code"]
+              "success_count", "success_total", "exit_code", "timed_out"]
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.output_csv.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for sub in args.subjects:
-            metrics, rc = run_eval(
+            metrics, rc, timed_out = run_eval(
                 sub, args.base_yaml, args.train_yaml,
                 args.checkpoint, args.num_envs, args.repo_root,
+                args.timeout_per_subject,
             )
-            row = {"subject": sub, "exit_code": rc}
+            row = {"subject": sub, "exit_code": rc, "timed_out": timed_out}
             if metrics is not None:
                 row.update(metrics)
             writer.writerow(row)
