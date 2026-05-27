@@ -53,8 +53,8 @@ params:
     lr_schedule: constant
     score_to_win: 20000
     max_epochs: 100000
-    save_best_after: 500
-    save_frequency: 500
+    save_best_after: 100
+    save_frequency: 100
     print_stats: True
     grad_norm: 1.0
     entropy_coef: 0.0
@@ -70,4 +70,4 @@ params:
     bounds_loss_coef: 10
     enable_eps_greedy: False
     resume_from: checkpoints/smplx_teachers/sub2_betas.pth
-    save_intermediate: False
+    save_intermediate: True
