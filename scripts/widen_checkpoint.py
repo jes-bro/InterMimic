@@ -114,6 +114,17 @@ def widen_checkpoint(ckpt, n_extra, verbose=True):
                 print(f"  {name}.{stat_key}: {old_shape} -> {new_shape}")
         # 'count' stays scalar; no shape change needed
 
+    # Drop optimizer state — its exp_avg / exp_avg_sq shapes match the
+    # original (pre-widen) parameters, so reloading them into the widened
+    # network would crash. Fine-tuning with a fresh Adam state is standard
+    # practice when the obs structure changes; we just lose the momentum
+    # estimates from the canonical-training run, which is fine.
+    if isinstance(ckpt, dict) and 'optimizer' in ckpt:
+        print("\n[DROPPING OPTIMIZER STATE]")
+        print("  (Adam exp_avg/exp_avg_sq for first-layer weights would mismatch;")
+        print("   fresh Adam start is the standard for obs-changing fine-tune.)")
+        ckpt['optimizer'] = None
+
     return ckpt
 
 
