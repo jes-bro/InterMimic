@@ -26,7 +26,15 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import torch, time 
+import os
+import torch, time
+
+try:
+    import imageio
+    from isaacgym import gymapi
+    _IMAGEIO_AVAILABLE = True
+except ImportError:
+    _IMAGEIO_AVAILABLE = False
 
 from rl_games.algos_torch import torch_ext
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
@@ -52,6 +60,24 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         games_played = 0
         has_masks = False
         has_masks_func = getattr(self.env, "has_action_mask", None) is not None
+
+        _record_path = os.environ.get("RECORD_VIDEO")
+        _writer = None
+        _cam_handle = None
+        _cam_props = None
+        if _record_path and _IMAGEIO_AVAILABLE:
+            task = self.env.task
+            _cam_props = gymapi.CameraProperties()
+            _cam_props.width = 1280
+            _cam_props.height = 720
+            _cam_handle = task.gym.create_camera_sensor(task.envs[0], _cam_props)
+            task.gym.set_camera_location(
+                _cam_handle, task.envs[0],
+                gymapi.Vec3(3.0, 3.0, 2.5),
+                gymapi.Vec3(0.0, 0.0, 1.0),
+            )
+            _writer = imageio.get_writer(_record_path, fps=30, codec="libx264", quality=8)
+            print(f"[player] recording video to {_record_path}")
 
         op_agent = getattr(self.env, "create_agent", None)
         if op_agent:
@@ -101,6 +127,16 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
 
                     self._post_step(info)
 
+                    if _writer is not None:
+                        task = self.env.task
+                        task.gym.step_graphics(task.sim)
+                        task.gym.render_all_camera_sensors(task.sim)
+                        img = task.gym.get_camera_image(
+                            task.sim, task.envs[0], _cam_handle, gymapi.IMAGE_COLOR
+                        )
+                        img = img.reshape(_cam_props.height, _cam_props.width, 4)[..., :3]
+                        _writer.append_data(img)
+
                     if render:
                         self.env.render(mode = 'human')
                         time.sleep(self.render_sleep)
@@ -146,8 +182,12 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         if hasattr(self.env.task, 'print_final_eval_summary'):
             self.env.task.print_final_eval_summary()
 
+        if _writer is not None:
+            _writer.close()
+            print(f"[player] wrote video to {_record_path}")
+
         return
-    
+
     def restore(self, fn):
         if (fn != 'Base'):
             super().restore(fn)
