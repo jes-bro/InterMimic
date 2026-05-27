@@ -69,17 +69,42 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         _cam_props = None
         if _record_path and _IMAGEIO_AVAILABLE:
             task = self.env.task
+
+            # Camera placement is configurable so you can switch between
+            # "single env close-up" and "wide grid view".
+            # RECORD_VIDEO_CAM_POS / RECORD_VIDEO_CAM_TARGET: comma-separated "x,y,z"
+            # RECORD_VIDEO_WIDE=1: use a preset wide overhead view of all envs
+            def _parse_vec3(s, default):
+                if not s:
+                    return default
+                try:
+                    x, y, z = [float(v) for v in s.split(",")]
+                    return (x, y, z)
+                except Exception:
+                    return default
+
+            if os.environ.get("RECORD_VIDEO_WIDE", "0") == "1":
+                _default_pos = (15.0, 15.0, 12.0)
+                _default_target = (0.0, 0.0, 1.0)
+            else:
+                _default_pos = (3.0, 3.0, 2.5)
+                _default_target = (0.0, 0.0, 1.0)
+            _cam_pos = _parse_vec3(os.environ.get("RECORD_VIDEO_CAM_POS"), _default_pos)
+            _cam_target = _parse_vec3(os.environ.get("RECORD_VIDEO_CAM_TARGET"), _default_target)
+            _record_env_idx = int(os.environ.get("RECORD_VIDEO_ENV_IDX", "0"))
+
             _cam_props = gymapi.CameraProperties()
             _cam_props.width = 1280
             _cam_props.height = 720
-            _cam_handle = task.gym.create_camera_sensor(task.envs[0], _cam_props)
+            _cam_handle = task.gym.create_camera_sensor(task.envs[_record_env_idx], _cam_props)
             task.gym.set_camera_location(
-                _cam_handle, task.envs[0],
-                gymapi.Vec3(3.0, 3.0, 2.5),
-                gymapi.Vec3(0.0, 0.0, 1.0),
+                _cam_handle, task.envs[_record_env_idx],
+                gymapi.Vec3(*_cam_pos),
+                gymapi.Vec3(*_cam_target),
             )
             _writer = imageio.get_writer(_record_path, fps=30, codec="libx264", quality=8)
-            print(f"[player] recording video to {_record_path} (cap {_max_video_frames} frames)")
+            print(f"[player] recording video to {_record_path} (cap {_max_video_frames} frames, "
+                  f"env[{_record_env_idx}] cam pos {_cam_pos} -> {_cam_target})")
 
         op_agent = getattr(self.env, "create_agent", None)
         if op_agent:
