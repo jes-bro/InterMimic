@@ -26,7 +26,7 @@ env:
   numObs: 3198
   motion_file: InterAct/OMOMO
   robotType: "smplx/omomo.xml"   # fallback; ignored when subjectBodies is set
-  subjectBodies: ['sub2', 'sub10']
+  subjectBodies: ['sub10']   # single-subject view: sub10 = shortest body (1.437m vs sub2's 1.601m); should look visibly shorter
   objectDensity: 200
   localRootObs: False
   keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
