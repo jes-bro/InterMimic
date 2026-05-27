@@ -174,22 +174,21 @@ class InterMimic(Humanoid_SMPLX):
             from ...utils.path_utils import resolve_repo_path
             betas_path = resolve_repo_path(betas_file)
             betas_lookup = _load_betas_npz(betas_path)
+            # Stash for later: env_target_betas (built after super().__init__()
+            # when self._env_subject_idx exists from chunk 1) needs to look up
+            # betas by env body assignment, not by motion file metadata.
+            self._betas_lookup = betas_lookup
             self.source_betas = to_torch(
                 np.stack([betas_lookup[n] for n in source_subject_nums], axis=0),
                 dtype=torch.float,
             ).to(self._init_device)
-            self.target_betas = to_torch(
-                np.stack([betas_lookup[n] for n in target_subject_nums], axis=0),
-                dtype=torch.float,
-            ).to(self._init_device)
+            # NOTE: target_betas no longer derived from motion file metadata;
+            # built per-env from _env_subject_idx after super().__init__()
+            # — see self._env_target_betas below.
         else:
-            # No betas file: fill with zeros. Existing standard InterMimic
-            # configs (omomo_train.yaml etc.) don't set betas_file and don't
-            # rely on this tensor in their reward/obs, so this preserves
-            # backwards compatibility.
+            # No betas file: fill source_betas with zeros for backward compat.
+            self._betas_lookup = None
             self.source_betas = torch.zeros((self.num_motions, 16),
-                                            dtype=torch.float, device=self._init_device)
-            self.target_betas = torch.zeros((self.num_motions, 16),
                                             dtype=torch.float, device=self._init_device)
 
         super().__init__(cfg=cfg,
@@ -200,6 +199,23 @@ class InterMimic(Humanoid_SMPLX):
                          headless=headless)
         
         self.hoi_data = self._load_motion(self.motion_file, topk=self.psi)
+
+        # Per-env target_betas always reflects the body in sim (chunk 1's
+        # _env_subject_idx). When subjectBodies is set, look up each body's
+        # betas from the npz; when absent, all envs run canonical (β=0).
+        self._env_target_betas = None
+        if self._use_betas_obs:
+            if getattr(self, 'subject_bodies', None) is not None:
+                body_subject_nums = [int(s[3:]) for s in self.subject_bodies]
+                body_betas = to_torch(
+                    np.stack([self._betas_lookup[n] for n in body_subject_nums], axis=0),
+                    dtype=torch.float,
+                ).to(self.device)
+                self._env_target_betas = body_betas[self._env_subject_idx]
+                print(f"[intermimic] built _env_target_betas {tuple(self._env_target_betas.shape)} from subject_bodies={self.subject_bodies}", flush=True)
+            else:
+                self._env_target_betas = torch.zeros((self.num_envs, 16), dtype=torch.float, device=self.device)
+                print(f"[intermimic] built _env_target_betas (canonical β=0) for {self.num_envs} envs", flush=True)
 
         self._curr_ref_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
         self._hist_ref_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
@@ -878,12 +894,11 @@ class InterMimic(Humanoid_SMPLX):
                 self._compute_observations_iter(self.hoi_data, None, 16),
             ]
             if self._use_betas_obs:
-                # Append per-env (source_betas, target_betas) — 32 dims total.
-                # Constant across timesteps within a clip; gives the policy
-                # explicit knowledge of which source body the motion came from
-                # and which target body it's controlling.
+                # Append (source_betas, target_betas) — 32 dims total.
+                # source_betas[data_id]: from motion file (whose mocap we're tracking)
+                # _env_target_betas:     env's actual body in sim (chunk 1 assignment)
                 obs_terms.append(torch.cat(
-                    [self.source_betas[self.data_id], self.target_betas[self.data_id]],
+                    [self.source_betas[self.data_id], self._env_target_betas],
                     dim=-1,
                 ))
             self.obs_buf[:] = torch.cat(obs_terms, dim=-1)
@@ -898,7 +913,7 @@ class InterMimic(Humanoid_SMPLX):
             if self._use_betas_obs:
                 obs_terms.append(torch.cat(
                     [self.source_betas[self.data_id[env_ids]],
-                     self.target_betas[self.data_id[env_ids]]],
+                     self._env_target_betas[env_ids]],
                     dim=-1,
                 ))
             self.obs_buf[env_ids] = torch.cat(obs_terms, dim=-1)
