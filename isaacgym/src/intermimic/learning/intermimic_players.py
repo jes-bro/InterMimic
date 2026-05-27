@@ -62,6 +62,8 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         has_masks_func = getattr(self.env, "has_action_mask", None) is not None
 
         _record_path = os.environ.get("RECORD_VIDEO")
+        _max_video_frames = int(os.environ.get("MAX_VIDEO_FRAMES", "1000"))
+        _frames_written = 0
         _writer = None
         _cam_handle = None
         _cam_props = None
@@ -77,7 +79,7 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                 gymapi.Vec3(0.0, 0.0, 1.0),
             )
             _writer = imageio.get_writer(_record_path, fps=30, codec="libx264", quality=8)
-            print(f"[player] recording video to {_record_path}")
+            print(f"[player] recording video to {_record_path} (cap {_max_video_frames} frames)")
 
         op_agent = getattr(self.env, "create_agent", None)
         if op_agent:
@@ -136,6 +138,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                         )
                         img = img.reshape(_cam_props.height, _cam_props.width, 4)[..., :3]
                         _writer.append_data(img)
+                        _frames_written += 1
+                        if _frames_written >= _max_video_frames:
+                            _writer.close()
+                            print(f"[player] wrote {_frames_written} frames to {_record_path}, video done")
+                            _writer = None
 
                     if render:
                         self.env.render(mode = 'human')
