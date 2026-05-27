@@ -37,7 +37,10 @@ params:
 
   config:
     name: mimic
-    full_experiment_name: smplx_multibody_warmstart
+    # COLD START variant: resume from the canonical sub2 teacher (widened).
+    # No multi-body prior — policy has to learn everything from scratch on
+    # the full 5-subject 5-body distribution.
+    full_experiment_name: smplx_multibody_coldstart
     env_name: rlgpu
     multi_gpu: False
     ppo: True
@@ -69,5 +72,5 @@ params:
     seq_len: 4
     bounds_loss_coef: 10
     enable_eps_greedy: False
-    resume_from: checkpoints/smplx_multibody_sub2only/nn/mimic_00003000.pth
+    resume_from: checkpoints/smplx_teachers/sub2_betas.pth
     save_intermediate: True
