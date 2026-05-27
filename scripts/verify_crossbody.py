@@ -111,6 +111,26 @@ def main():
         marker = "  (identity)" if b == s else ""
         print(f"  body=sub{b:<2} motion_source=sub{s:<3}  count={c}{marker}")
 
+    # === Clip diversity ===
+    # Each motion_id (data_id) is one .pt file. Multiple files exist per
+    # (subject, object) — e.g., sub11_floorlamp_000.pt through ..._078.pt.
+    # If env reset is uniformly sampling, we should see many distinct motion
+    # IDs across envs, not the same one repeatedly.
+    print(f"\n=== Clip diversity ===")
+    print(f"Total motion clips in training pool: {task.num_motions}")
+    data_ids = task.data_id.tolist()
+    print(f"Distinct motion clips assigned across {n} envs at reset: {len(set(data_ids))}")
+    print("(If this is much less than min(n, num_motions), sampling is over-concentrated.)")
+
+    # Per (source, object) clip-count: how many distinct clips per (source, obj)?
+    print("\n=== Distinct clips assigned per (motion_source, object) ===")
+    pair_to_clips = defaultdict(set)
+    for env_i in range(n):
+        key = (source_per_env[env_i], object_per_env[env_i])
+        pair_to_clips[key].add(data_ids[env_i])
+    for (src, obj), clips in sorted(pair_to_clips.items()):
+        print(f"  source=sub{src:<2} object={obj:<14} distinct clips assigned: {len(clips)}")
+
 
 if __name__ == "__main__":
     main()
