@@ -18,7 +18,7 @@ Run on the cluster:
 """
 
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 # Match what intermimic.run does
@@ -61,17 +61,18 @@ def main():
     ]
 
     # data_id[i] indexes into the motion pool
-    # source_subject_index[data_id[i]] = source subject of motion at env i
-    # target_subject_index[data_id[i]] = target subject of motion at env i
     source_per_env = task.source_subject_index[task.data_id].tolist()
     target_per_env = task.target_subject_index[task.data_id].tolist()
+    # object_id[motion_id] tells us which object slot a motion uses
+    object_per_env = [task.object_name[task.object_id[mid.item()].item()]
+                      for mid in task.data_id]
 
     print("\n=== First 30 envs ===")
-    print(f"{'env':>4} {'body':>6} {'motion_source':>14} {'motion_target':>14}  {'cross?'}")
+    print(f"{'env':>4} {'body':>6} {'src':>8} {'tgt':>8} {'object':>15}  {'cross?'}")
     print("-" * 60)
     for i in range(min(30, task.num_envs)):
         cross = "yes" if body_subj_per_env[i] != source_per_env[i] else "no"
-        print(f"{i:>4} sub{body_subj_per_env[i]:<3} sub{source_per_env[i]:<10} sub{target_per_env[i]:<10}  {cross}")
+        print(f"{i:>4} sub{body_subj_per_env[i]:<3} sub{source_per_env[i]:<5} sub{target_per_env[i]:<5} {object_per_env[i]:>15}  {cross}")
 
     # Aggregate
     n = task.num_envs
@@ -79,6 +80,29 @@ def main():
     print(f"\n=== Aggregate over {n} envs ===")
     print(f"cross-body (body != motion_source): {n_cross}/{n} = {n_cross/n*100:.1f}%")
     print(f"identity:                            {n-n_cross}/{n} = {(n-n_cross)/n*100:.1f}%")
+
+    # Per-object breakdown — distinguishes multi-subject objects (where both
+    # body and source vary) from single-subject objects (where only body varies).
+    print("\n=== Per-object breakdown ===")
+    print(f"{'object':>15} {'envs':>6} {'#bodies':>9} {'#sources':>10} {'%cross':>8}")
+    print("-" * 60)
+    per_obj_bodies = defaultdict(set)
+    per_obj_sources = defaultdict(set)
+    per_obj_count = Counter()
+    per_obj_cross = Counter()
+    for i in range(n):
+        obj = object_per_env[i]
+        per_obj_bodies[obj].add(body_subj_per_env[i])
+        per_obj_sources[obj].add(source_per_env[i])
+        per_obj_count[obj] += 1
+        if body_subj_per_env[i] != source_per_env[i]:
+            per_obj_cross[obj] += 1
+    for obj in sorted(per_obj_count.keys()):
+        nb = len(per_obj_bodies[obj])
+        ns = len(per_obj_sources[obj])
+        c = per_obj_count[obj]
+        x = per_obj_cross[obj]
+        print(f"{obj:>15} {c:>6} {nb:>9} {ns:>10} {x/c*100:>7.1f}%")
 
     # Detailed pair counts
     pair_counts = Counter(zip(body_subj_per_env, source_per_env))
