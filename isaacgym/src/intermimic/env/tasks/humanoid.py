@@ -222,7 +222,7 @@ class Humanoid_SMPLX(BaseTask):
         # back to the single canonical humanoid asset (self.robot_type).
         subject_bodies = self.cfg["env"].get("subjectBodies", None)
         if subject_bodies:
-            asset_files = [f"smplx_omomo_{sub}.xml" for sub in subject_bodies]
+            asset_files = [f"smplx/smplx_omomo_{sub}.xml" for sub in subject_bodies]
             self.subject_bodies = list(subject_bodies)
         else:
             asset_files = [self.robot_type]
