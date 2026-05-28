@@ -29,7 +29,7 @@ env:
   # betas_file intentionally omitted — ablation control.
   ballSize: 1.
   numObs: 3198   # base obs only, no betas conditioning
-  motion_file: InterAct/OMOMO
+  motion_file: InterAct/OMOMO_new
   robotType: "smplx/omomo.xml"   # fallback only; ignored when subjectBodies is set
   objectDensity: 200
   localRootObs: False
