@@ -39,7 +39,7 @@ params:
     name: mimic
     # Identity-pair teacher: sub16's body doing sub16's motion.
     # Narrow task — should converge fast.
-    full_experiment_name: smplx_teacher_sub16_warmstart
+    full_experiment_name: smplx_teacher_sub16_v2
     env_name: rlgpu
     multi_gpu: False
     ppo: True
