@@ -69,6 +69,18 @@ def _load_betas_npz(npz_path):
     return out
 
 
+# Per-subject body heights (m) from measure_subject_bodies.py on the
+# generated per-subject MJCFs. Used by the bodyNormalizedReward feature
+# to remove the body-size bias in InterMimic's default world-frame pose-
+# error reward (smaller bodies look like they have proportionally more error).
+SUBJECT_HEIGHTS = {
+    1: 1.451, 2: 1.601, 3: 1.692, 4: 1.546, 5: 1.576,
+    6: 1.528, 7: 1.572, 8: 1.594, 9: 1.538, 10: 1.437,
+    11: 1.528, 12: 1.554, 13: 1.562, 14: 1.581, 15: 1.469,
+    16: 1.489, 17: 1.496,
+}
+
+
 class InterMimic(Humanoid_SMPLX):
     class StateInit(Enum):
         Default = 0
@@ -216,6 +228,21 @@ class InterMimic(Humanoid_SMPLX):
             else:
                 self._env_target_betas = torch.zeros((self.num_envs, 16), dtype=torch.float, device=self.device)
                 print(f"[intermimic] built _env_target_betas (canonical β=0) for {self.num_envs} envs", flush=True)
+
+        # Body-size-normalized reward (feature flag). When enabled, pose-error
+        # terms in compute_humanoid_reward get divided by per-env body height
+        # to remove the size bias (default reward penalizes smaller bodies more
+        # for the same physical tracking deviation).
+        self._body_normalized_reward = cfg['env'].get('bodyNormalizedReward', False)
+        self._env_body_height = None
+        if self._body_normalized_reward:
+            if getattr(self, 'subject_bodies', None) is not None:
+                heights = [SUBJECT_HEIGHTS[int(s[3:])] for s in self.subject_bodies]
+            else:
+                heights = [1.585]   # canonical SMPL-X height
+            body_heights_per_subj = to_torch(heights, dtype=torch.float).to(self.device)
+            self._env_body_height = body_heights_per_subj[self._env_subject_idx]
+            print(f"[intermimic] body-normalized reward enabled; per-env body heights {tuple(self._env_body_height.shape)} (min {self._env_body_height.min().item():.3f}, max {self._env_body_height.max().item():.3f})", flush=True)
 
         self._curr_ref_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
         self._hist_ref_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
@@ -1116,7 +1143,13 @@ class InterMimic(Humanoid_SMPLX):
         ancle_toe_ids = [i for i in range(len_keypos) if 'Ankle' in self.key_bodies[i] or 'Toe' in self.key_bodies[i]]
         weight_hp[:, ancle_toe_ids] = 1
 
-        ep = torch.mean(((ref_key_pos - key_pos)**2).sum(dim=-1) * weight_hp[:, self._key_body_ids],dim=-1)
+        pos_diff = ref_key_pos - key_pos
+        if self._body_normalized_reward and self._env_body_height is not None:
+            # Divide per-env by body height so a 10cm error on a 1.4m body
+            # contributes the same as 10cm on a 1.7m body. Broadcast height
+            # (num_envs,) -> (num_envs, num_key_bodies, 3) via view+unsqueeze.
+            pos_diff = pos_diff / self._env_body_height.view(-1, 1, 1)
+        ep = torch.mean((pos_diff**2).sum(dim=-1) * weight_hp[:, self._key_body_ids],dim=-1)
         rp = torch.exp(-ep*w['p'])
 
         body_rot = self.extract_data_component('body_rot', obs=self._curr_obs).view(self._curr_obs.shape[0], -1, 4)
