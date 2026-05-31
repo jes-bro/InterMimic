@@ -520,9 +520,12 @@ class Humanoid_SMPLX(BaseTask):
         invalid_obs = ~torch.isfinite(obs_buf)  # True where obs is NaN or infinite
         invalid_batches = torch.any(invalid_obs, dim=1)  # Check if any invalid number in each batch (B, N)
         if torch.any(invalid_obs):
-            print("invalid observation")
-            raise Exception("invalid observation")
-            
+            # Don't raise — terminating invalid envs (line below) lets training
+            # recover from transient physics blow-ups. The raise was a dev-time
+            # alarm; in a 48h training run it kills the whole job for what's
+            # usually one rogue env that the reset logic already handles.
+            print(f"[humanoid] invalid observation in {int(invalid_batches.sum())} env(s); terminating those envs and continuing")
+
         terminated = torch.where(torch.logical_or(invalid_batches, has_failed), torch.ones_like(reset_buf), terminated)
         reset = torch.where(torch.logical_or(progress_buf >= max_episode_length-1, progress_buf - start_times >= rollout_length-1), torch.ones_like(reset_buf), terminated)
         if not enable_early_termination:
