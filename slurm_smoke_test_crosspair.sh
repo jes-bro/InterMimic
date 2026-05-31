@@ -22,8 +22,8 @@ conda deactivate
 conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-export PYTHONPATH="$SCRIPT_DIR/isaacgym/src:$SCRIPT_DIR:$PYTHONPATH"
+cd "$SLURM_SUBMIT_DIR"
+export PYTHONPATH="$PWD/isaacgym/src:$PWD:$PYTHONPATH"
 
 python -u -m intermimic.run --task InterMimic \
     --cfg_env isaacgym/src/intermimic/data/cfg/omomo_train_crosspair_b10_s2_largetable.yaml \
