@@ -199,9 +199,10 @@ params:
     bounds_loss_coef: 10
     enable_eps_greedy: False
     save_intermediate: True
-    # No resume_from: train from random init so sub2-source and sub6-source
-    # teachers are treated symmetrically. Warm-starting from sub2-only stage-1
-    # would give sub2 teachers an unfair head start.
+    # 'None' string skips checkpoint restore (agent checks `if resume_from
+    # != 'None'`). Train from random init so sub2-source and sub6-source
+    # teachers are treated symmetrically.
+    resume_from: 'None'
 """
 
 SHELL_TMPL = """\
