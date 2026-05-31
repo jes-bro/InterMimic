@@ -22,6 +22,14 @@ BODIES  = [10, 17, 9, 3]
 SOURCES = [2, 6]
 OBJECTS = ["largetable", "woodchair"]
 
+# Cap clips per (source, object) bucket so all teachers train on the same
+# motion count regardless of source/object. Set to the MIN across the 4
+# (sub2, sub6) x (largetable, woodchair) buckets on the cluster:
+#   sub2 x largetable = 18, sub2 x woodchair = 15
+#   sub6 x largetable = 55, sub6 x woodchair = 59
+# MIN = 15 (sub2 x woodchair limits).
+MAX_CLIPS_PER_OBJECT = 15
+
 # (body, source, object) triples that ALSO get a bodyNormalizedReward=true
 # variant. The default-reward teacher at the same triple is still trained,
 # so we get a clean A/B per object.
@@ -59,6 +67,7 @@ env:
   dataSub: ['sub{src}']
   subjectBodies: ['sub{body}']
   dataObjects: ['{obj}']
+  maxClipsPerObject: {max_clips}
   betas_file: scripts/omomo_betas.npz{reward_flag}
   ballSize: 1.
   numObs: 3230
@@ -261,6 +270,7 @@ def write_one(body, src, obj, norm_reward):
     env_yaml = ENV_YAML_TMPL.format(
         body=body, src=src, obj=obj,
         reward_blurb=reward_blurb, reward_flag=reward_flag,
+        max_clips=MAX_CLIPS_PER_OBJECT,
     )
     train_yaml = TRAIN_YAML_TMPL.format(
         body=body, src=src, obj=obj, reward_tag=reward_tag, exp_name=exp_name,

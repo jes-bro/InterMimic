@@ -25,6 +25,7 @@ env:
   dataSub: ['sub6']
   subjectBodies: ['sub9']
   dataObjects: ['woodchair']
+  maxClipsPerObject: 15
   betas_file: scripts/omomo_betas.npz
   ballSize: 1.
   numObs: 3230
