@@ -109,20 +109,36 @@ class InterMimic(Humanoid_SMPLX):
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
         if cfg['env'].get('enableEvaluation', False) and not state_init_is_start:
             print(f"Warning: Evaluation is disabled because stateInit is '{state_init}' (must be 'Start')")
-        # --- Motion file discovery (cross-body aware) ---
+        # --- Motion file discovery ---
         # We enumerate every .pt in self.motion_file (which is actually the
         # *directory* containing motion files at this point — the field is
-        # reassigned to a list of paths a few lines below). For each file we
-        # parse out the source and target subject numbers. The dataSub filter
-        # operates on the TARGET subject (since the target body is what the
-        # sim controls). Identity-pair files keep working unchanged: their
-        # source == target, so filtering on target matches the old semantics.
+        # reassigned to a list of paths a few lines below). The dataSub filter
+        # selects which motion files load by the subject number embedded in
+        # the filename. For identity-pair files (sub<N>_<obj>_<idx>.pt, the
+        # only ones currently on disk) src == tgt == N, so this is effectively
+        # a source-subject filter. The runtime *target body* the env controls
+        # is decoupled from this — it's set per-env by `subjectBodies` in
+        # humanoid.py, which selects which MJCF each env loads.
+        # _parse_motion_subject also handles a hypothetical sub<src>to<tgt>_*
+        # cross-body file format (no such files on disk today), but the body
+        # actually simulated still comes from subjectBodies regardless.
         all_files = os.listdir(self.motion_file)
         # `dataSub` in cfg is a list of strings like ['sub2', 'sub8'] — same
         # convention as before. Convert to a set of ints once for matching.
         data_sub_nums = {int(s[3:]) for s in cfg['env']['dataSub']}
+        # `dataObjects`: optional cfg list like ['largetable']. If absent or
+        # empty, all objects pass through. Used by single-object teachers so
+        # one cfg specializes to one HOI task.
+        data_objects_cfg = cfg['env'].get('dataObjects', None)
+        data_objects = set(data_objects_cfg) if data_objects_cfg else None
+        # `maxClipsPerObject`: optional int cap on the number of clips kept
+        # per (source, object) bucket after filtering. None = no cap.
+        # Used to control for sample count across objects (e.g. sub2 has
+        # 17 largetable clips but only 10 woodchair clips — capping both
+        # at 10 makes the per-object teachers comparable).
+        max_clips_per_object = cfg['env'].get('maxClipsPerObject', None)
 
-        parsed = []  # list of (full_path, source_num, target_num)
+        parsed = []  # list of (full_path, source_num, target_num, object_name)
         for fname in all_files:
             try:
                 src_num, tgt_num = _parse_motion_subject(fname)
@@ -131,12 +147,29 @@ class InterMimic(Humanoid_SMPLX):
                 # the dir). Skip silently rather than crash so test runs
                 # tolerate stray files.
                 continue
-            if tgt_num in data_sub_nums:
-                parsed.append((os.path.join(self.motion_file, fname), src_num, tgt_num))
+            if tgt_num not in data_sub_nums:
+                continue
+            obj_name = fname.rsplit('.', 1)[0].split('_')[-2]
+            if data_objects is not None and obj_name not in data_objects:
+                continue
+            parsed.append((os.path.join(self.motion_file, fname), src_num, tgt_num, obj_name))
 
         # Sort by file path for determinism (mirrors the old behavior of
         # sorted(...) on the list of filenames).
         parsed.sort(key=lambda t: t[0])
+
+        if max_clips_per_object is not None:
+            # Group by (source, object) and take first N per group after sort.
+            from collections import defaultdict
+            counts = defaultdict(int)
+            capped = []
+            for entry in parsed:
+                key = (entry[1], entry[3])  # (source_num, object_name)
+                if counts[key] < max_clips_per_object:
+                    capped.append(entry)
+                    counts[key] += 1
+            parsed = capped
+
         self.motion_file = [p[0] for p in parsed]
         source_subject_nums = [p[1] for p in parsed]
         target_subject_nums = [p[2] for p in parsed]

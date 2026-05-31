@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd)"
+export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
+
+# Cross-pair teacher: body=sub3 x source=sub6 x object=woodchair.
+# Trains from random init (no warm-start) so sub2 and sub6 sources are symmetric.
+# Saves to checkpoints/smplx_crosspair_b3_s6_woodchair/nn/.
+python -u -m intermimic.run \
+    --task InterMimic \
+    --cfg_env isaacgym/src/intermimic/data/cfg/omomo_train_crosspair_b3_s6_woodchair.yaml \
+    --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo_crosspair_b3_s6_woodchair.yaml \
+    --headless \
+    --output checkpoints
