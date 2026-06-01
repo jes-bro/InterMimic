@@ -525,6 +525,12 @@ class Humanoid_SMPLX(BaseTask):
             # alarm; in a 48h training run it kills the whole job for what's
             # usually one rogue env that the reset logic already handles.
             print(f"[humanoid] invalid observation in {int(invalid_batches.sum())} env(s); terminating those envs and continuing")
+            # Sanitize obs_buf: zero out NaN/Inf entries. The terminated envs
+            # will be reset next step anyway, but until then the policy's
+            # next forward pass would crash on these inputs (Normal(loc=NaN)
+            # raises ValueError). Zero is finite and the policy can produce
+            # a valid (garbage) action that gets discarded on reset.
+            obs_buf[invalid_obs] = 0.0
 
         terminated = torch.where(torch.logical_or(invalid_batches, has_failed), torch.ones_like(reset_buf), terminated)
         reset = torch.where(torch.logical_or(progress_buf >= max_episode_length-1, progress_buf - start_times >= rollout_length-1), torch.ones_like(reset_buf), terminated)
