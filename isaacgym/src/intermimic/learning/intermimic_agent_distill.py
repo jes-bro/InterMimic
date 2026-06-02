@@ -256,15 +256,21 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
 
             # Sanity assertion: verify gradient flowing back to mu is EXACTLY 0
             # for excluded envs. Catches BC/actor/bounds/entropy mask leakage.
-            # Only active for first 10 epochs (debug) to avoid hook overhead.
-            if self.epoch_num < 10 and (valid_mask < 1.0).any():
+            # Only active for first 5 epochs (debug) to avoid hook overhead.
+            # Prints on success too, so the user sees verification, not silence.
+            if self.epoch_num < 5 and (valid_mask < 1.0).any():
                 invalid_idx = (valid_mask < 1.0)
+                valid_idx = (valid_mask >= 1.0)
+                n_excl = int(invalid_idx.sum().item())
                 def _grad_zero_check(grad):
                     excluded_max = grad[invalid_idx].abs().max().item()
+                    included_max = grad[valid_idx].abs().max().item()
                     assert excluded_max < 1e-6, (
                         f"Gradient leak: excluded envs received grad {excluded_max:.3e} "
                         f"on mu. Masking is broken."
                     )
+                    print(f"[mask check epoch {self.epoch_num}] ✓ {n_excl} excluded envs "
+                          f"got grad={excluded_max:.2e} (vs {included_max:.2e} for valid envs)")
                     return grad
                 mu.register_hook(_grad_zero_check)
 
