@@ -110,6 +110,15 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
                 print(f"  has excluded_env_mask: {has_mask}")
                 if has_mask:
                     print(f"  mask sum (True=excluded): {int(task.excluded_env_mask.sum().item())}/{int(task.excluded_env_mask.numel())}")
+                # Print actual triples to see what's being assigned
+                if hasattr(task, '_compute_env_triples') and hasattr(task, 'num_envs'):
+                    from collections import Counter
+                    sample_triples = task._compute_env_triples(range(min(20, task.num_envs)))
+                    all_triples = task._compute_env_triples(range(task.num_envs))
+                    counter = Counter(all_triples)
+                    print(f"  first 20 triples: {sample_triples}")
+                    print(f"  unique triple counts: {dict(counter)}")
+                    print(f"  excludeCombos configured: {sorted(task.exclude_combos)}")
 
             if n == 0 and valid_now.sum() < valid_now.numel():
                 n_excl = int((valid_now == 0).sum().item())
