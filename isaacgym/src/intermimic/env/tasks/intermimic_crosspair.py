@@ -181,6 +181,12 @@ class InterMimic_CrossPair(InterMimic):
         self.excluded_env_mask = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device,
         )
+        # Populate model_indices + excluded_env_mask immediately so the
+        # distillation agent's first read of these (before any env.step())
+        # reflects the real current triples, not the all-False default.
+        # Base InterMimic.__init__ already assigned data_id/dataset_id, so
+        # _compute_env_triples will return real values here.
+        self._refresh_teacher_indices()
         return
 
     def _compute_env_triples(self, env_ids):
@@ -262,8 +268,11 @@ class InterMimic_CrossPair(InterMimic):
 
     def step(self, actions):
         super().step(actions)
-        if self.model_indices is None:
-            self._refresh_teacher_indices()
+        # Refresh on EVERY step. Envs that just reset may have new motions
+        # → new (body, source, object) triples → mask + routing must update.
+        # Old code only refreshed once at startup, leaving stale routing
+        # after any env reset.
+        self._refresh_teacher_indices()
         self._query_all_teachers()
         self._sync_student_obs()
         return
