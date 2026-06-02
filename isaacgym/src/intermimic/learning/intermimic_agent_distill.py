@@ -82,7 +82,15 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             # whose current triple has no teacher (in excludeCombos); those
             # envs run with a fallback teacher's actions but must NOT
             # contribute to any loss term.
+            #
+            # Force a refresh of the env's teacher routing so the mask
+            # reflects the CURRENT triples (post-reset). The env's step()
+            # also refreshes, but at n=0 of the very first iteration no
+            # step has happened yet, so without this the mask would be
+            # the all-False default from __init__.
             task = self.vec_env.env.task
+            if hasattr(task, '_refresh_teacher_indices'):
+                task._refresh_teacher_indices()
             has_mask = hasattr(task, 'excluded_env_mask')
             if has_mask:
                 valid_now = (~task.excluded_env_mask).float()

@@ -178,15 +178,13 @@ class InterMimic_CrossPair(InterMimic):
         # to BC, actor, critic, entropy, and bounds losses (so the student
         # never learns from triples we know are physically infeasible /
         # whose teacher training was unstable).
+        # NOTE: stays all-False until the first env.step() (or first
+        # agent-side refresh) populates it. Base InterMimic.__init__ leaves
+        # dataset_id at its default (0), which is not a real source — so we
+        # can't refresh here. The agent forces a refresh after env_reset.
         self.excluded_env_mask = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device,
         )
-        # Populate model_indices + excluded_env_mask immediately so the
-        # distillation agent's first read of these (before any env.step())
-        # reflects the real current triples, not the all-False default.
-        # Base InterMimic.__init__ already assigned data_id/dataset_id, so
-        # _compute_env_triples will return real values here.
-        self._refresh_teacher_indices()
         return
 
     def _compute_env_triples(self, env_ids):
