@@ -47,6 +47,14 @@ env:
   teacherPolicy: checkpoints/teachers/crosspair_largetable
   teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_crosspair_b10_s2_largetable.yaml
 
+  # Teachers (b10, s6, largetable) and (b17, s6, largetable) crashed with
+  # NaN policy weights during training. Excluded envs use a fallback
+  # teacher (same body, different source) for env stepping, and their
+  # data is masked out of all loss terms.
+  excludeCombos:
+    - [10, 6, 'largetable']
+    - [17, 6, 'largetable']
+
   asset:
     assetRoot: "intermimic/data/assets"
 

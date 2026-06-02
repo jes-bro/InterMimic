@@ -136,8 +136,51 @@ class InterMimic_CrossPair(InterMimic):
         for i, t in enumerate(self.teacher_triples):
             print(f"  [{i}] body=sub{t[0]} source=sub{t[1]} object={t[2]}")
 
+        # Optional excludeCombos: list of [body, source, obj] triples that
+        # have no teacher (e.g., training was unstable). When an env gets
+        # routed to one of these triples, we use a FALLBACK teacher that
+        # shares the same body and object but a different source. The
+        # student still gets body-appropriate BC supervision for that env,
+        # just from a teacher trained on a different source motion.
+        exclude_cfg = cfg["env"].get("excludeCombos", []) or []
+        self.exclude_combos = set()
+        self.fallback_lookup = {}
+        for entry in exclude_cfg:
+            triple = (int(entry[0]), int(entry[1]), str(entry[2]))
+            self.exclude_combos.add(triple)
+            # Find a fallback: same body and object, any other available source.
+            body, source, obj = triple
+            fallback = None
+            for t in self.teacher_triples:
+                if t[0] == body and t[2] == obj and t[1] != source:
+                    fallback = t
+                    break
+            if fallback is None:
+                # No same-body fallback. Try same body any object.
+                for t in self.teacher_triples:
+                    if t[0] == body:
+                        fallback = t
+                        break
+            if fallback is None:
+                raise ValueError(
+                    f"excludeCombo {triple} has no usable fallback teacher "
+                    f"(no teacher exists for body=sub{body})."
+                )
+            self.fallback_lookup[triple] = self.teacher_lookup[fallback]
+            print(f"[InterMimic_CrossPair] excludeCombo {triple} -> fallback "
+                  f"teacher body=sub{fallback[0]} source=sub{fallback[1]} "
+                  f"object={fallback[2]} (idx {self.teacher_lookup[fallback]})")
+
         self.model_indices = None
         self.sample_indices = None
+        # Per-env mask: True for envs whose current triple is in exclude_combos.
+        # Used by the distillation agent to mask out those envs' contributions
+        # to BC, actor, critic, entropy, and bounds losses (so the student
+        # never learns from triples we know are physically infeasible /
+        # whose teacher training was unstable).
+        self.excluded_env_mask = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device,
+        )
         return
 
     def _compute_env_triples(self, env_ids):
@@ -154,20 +197,36 @@ class InterMimic_CrossPair(InterMimic):
         return triples
 
     def _refresh_teacher_indices(self):
-        """Recompute model_indices for ALL envs based on their current triples."""
+        """Recompute model_indices for ALL envs based on their current triples.
+        Excluded triples (in self.exclude_combos) get routed to a fallback teacher
+        for env stepping, and self.excluded_env_mask is set True for those envs
+        so the distillation agent can mask them out of all loss terms.
+        """
         triples = self._compute_env_triples(range(self.num_envs))
-        missing = [t for t in triples if t not in self.teacher_lookup]
-        if missing:
-            unique_missing = sorted(set(missing))
-            raise KeyError(
-                f"Env triples have no matching teacher: {unique_missing}. "
-                f"Available teachers: {sorted(self.teacher_lookup.keys())}. "
-                f"Check subjectBodies, dataSub, and dataObjects in cfg align "
-                f"with the teacher checkpoint directory."
-            )
-        indices = [self.teacher_lookup[t] for t in triples]
+
+        indices = []
+        excluded_flags = []
+        for t in triples:
+            if t in self.teacher_lookup:
+                indices.append(self.teacher_lookup[t])
+                excluded_flags.append(False)
+            elif t in self.fallback_lookup:
+                # No teacher for this triple. Fallback (same body, diff source)
+                # keeps the env physically stable; agent masks loss to 0.
+                indices.append(self.fallback_lookup[t])
+                excluded_flags.append(True)
+            else:
+                raise KeyError(
+                    f"Env triple {t} has no teacher and no fallback. "
+                    f"Available teachers: {sorted(self.teacher_lookup.keys())}, "
+                    f"excludeCombos: {sorted(self.exclude_combos)}"
+                )
+
         self.model_indices = torch.tensor(indices, dtype=torch.long, device=self.device)
         self.sample_indices = torch.arange(self.num_envs, device=self.device)
+        self.excluded_env_mask = torch.tensor(
+            excluded_flags, dtype=torch.bool, device=self.device,
+        )
         return
 
     def _single_model_forward(self, params, obs, mean, var):

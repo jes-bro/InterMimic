@@ -47,6 +47,13 @@ env:
   teacherPolicy: checkpoints/teachers/crosspair_both
   teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_crosspair_b10_s2_largetable.yaml
 
+  # Two largetable teachers (b10_s6, b17_s6) crashed in training. Excluded
+  # envs use a fallback teacher (same body, different source) for stepping;
+  # the agent masks them out of all loss terms. woodchair combos unaffected.
+  excludeCombos:
+    - [10, 6, 'largetable']
+    - [17, 6, 'largetable']
+
   asset:
     assetRoot: "intermimic/data/assets"
 

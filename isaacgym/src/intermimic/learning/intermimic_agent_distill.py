@@ -55,7 +55,11 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         batch_shape = self.experience_buffer.obs_base_shape
         self.experience_buffer.tensor_dict['expert_mask'] = torch.zeros(batch_shape, dtype=torch.float32, device=self.ppo_device)
         self.experience_buffer.tensor_dict['expert'] = torch.zeros((*batch_shape, 153), dtype=torch.float32, device=self.ppo_device)
-        self.tensor_list += ['amp_obs', 'rand_action_mask', 'expert', 'expert_mask']
+        # Per-env validity mask. 1.0 = env's (body, source, object) triple has
+        # a real teacher; 0.0 = excluded combo, do not backprop from this env.
+        # Defaults to ones so non-cross-pair runs are unaffected.
+        self.experience_buffer.tensor_dict['valid_mask'] = torch.ones(batch_shape, dtype=torch.float32, device=self.ppo_device)
+        self.tensor_list += ['amp_obs', 'rand_action_mask', 'expert', 'expert_mask', 'valid_mask']
         return
 
 
@@ -73,6 +77,21 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             self.obs, self.expert = self.env_reset(self.done_indices)
 
             self.experience_buffer.update_data('obses', n, self.obs['obs'])
+
+            # Snapshot per-env validity. excluded_env_mask is True for envs
+            # whose current triple has no teacher (in excludeCombos); those
+            # envs run with a fallback teacher's actions but must NOT
+            # contribute to any loss term.
+            task = self.vec_env.env.task
+            if hasattr(task, 'excluded_env_mask'):
+                valid_now = (~task.excluded_env_mask).float()
+            else:
+                valid_now = torch.ones(self.num_actors, device=self.ppo_device)
+            self.experience_buffer.update_data('valid_mask', n, valid_now)
+
+            if n == 0 and valid_now.sum() < valid_now.numel():
+                n_excl = int((valid_now == 0).sum().item())
+                print(f"[distill] frame {self.frame}: {n_excl}/{int(valid_now.numel())} envs masked (excluded combos)")
 
             if self.use_action_masks:
                 masks = self.vec_env.get_action_masks()
@@ -151,8 +170,10 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         super().prepare_dataset(batch_dict)
         expert = batch_dict['expert']
         expert_mask = batch_dict['expert_mask']
+        valid_mask = batch_dict['valid_mask']
         self.dataset.values_dict['expert'] = expert
         self.dataset.values_dict['expert_mask'] = expert_mask
+        self.dataset.values_dict['valid_mask'] = valid_mask
         return
 
 
@@ -200,6 +221,12 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         expert_mask = (input_dict['expert_mask'] > -1).float()
         expert_sum = torch.sum(expert_mask)
 
+        # Per-env validity mask for this minibatch (1.0 = include, 0.0 = skip).
+        # Multiplying loss-per-env by this mask gives EXACT zero gradient
+        # contribution from excluded envs (forward: x*0=0; backward: d(x*0)/dx=0).
+        valid_mask = input_dict['valid_mask']
+        valid_count = valid_mask.sum().clamp(min=1.0)
+
         rand_action_mask = input_dict['rand_action_mask']
         rand_action_sum = torch.sum(rand_action_mask)
         lr = self.last_lr
@@ -227,6 +254,20 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             mu = res_dict['mus']
             sigma = res_dict['sigmas']
 
+            # Sanity assertion: verify gradient flowing back to mu is EXACTLY 0
+            # for excluded envs. Catches BC/actor/bounds/entropy mask leakage.
+            # Only active for first 10 epochs (debug) to avoid hook overhead.
+            if self.epoch_num < 10 and (valid_mask < 1.0).any():
+                invalid_idx = (valid_mask < 1.0)
+                def _grad_zero_check(grad):
+                    excluded_max = grad[invalid_idx].abs().max().item()
+                    assert excluded_max < 1e-6, (
+                        f"Gradient leak: excluded envs received grad {excluded_max:.3e} "
+                        f"on mu. Masking is broken."
+                    )
+                    return grad
+                mu.register_hook(_grad_zero_check)
+
             if rand_action_sum > 0:
                 a_info = self._actor_loss(old_action_log_probs_batch, action_log_probs, advantage, curr_e_clip)
                 a_loss_raw = a_info['actor_loss']
@@ -247,17 +288,23 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
                         self.critic_win_streak += 1
                     else:
                         self.critic_win_streak = 0
-                a_loss = self._loss_mean(a_loss_raw)
-                c_loss = self._loss_mean(c_loss_raw)
-                b_loss = self._loss_mean(b_loss_raw)
-                        
-                entropy = self._loss_mean(entropy)
-                a_clip_frac = self._loss_mean(a_clipped) 
+                # Masked means: (loss_per_env * valid_mask).sum() / valid_count.
+                # Excluded envs contribute exact 0 (forward AND backward).
+                # _per_env reduces any trailing dims to ensure shape is (B,)
+                # so broadcasting with valid_mask is safe.
+                def _per_env(x):
+                    return x.flatten(1).mean(-1) if x.dim() > 1 else x
+                a_loss = (_per_env(a_loss_raw) * valid_mask).sum() / valid_count
+                c_loss = (_per_env(c_loss_raw) * valid_mask).sum() / valid_count
+                b_loss = (_per_env(b_loss_raw) * valid_mask).sum() / valid_count
+
+                entropy = (_per_env(entropy) * valid_mask).sum() / valid_count
+                a_clip_frac = (_per_env(a_clipped) * valid_mask).sum() / valid_count
 
 
                 e_info = self._supervise_loss(mu, expert_mus)
                 e_loss_raw = e_info['expert_loss']
-                e_loss = self._loss_mean(e_loss_raw)
+                e_loss = (_per_env(e_loss_raw) * valid_mask).sum() / valid_count
                 if self.epoch_num > 6000 and self.critic_win_streak >= 3:
                     loss = a_loss * min((self.actor_update_num / 4000), 1) + self.critic_coef * c_loss + self.bounds_loss_coef * b_loss + self.expert_loss_coef * e_loss * max(1 - (self.actor_update_num / 4000), 0.1)
                     self.actor_update_num += 1
@@ -267,9 +314,11 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
                     loss = self.expert_loss_coef * e_loss
                 
             else:
+                def _per_env(x):
+                    return x.flatten(1).mean(-1) if x.dim() > 1 else x
                 e_info = self._supervise_loss(mu, expert_mus)
                 e_loss_raw = e_info['expert_loss']
-                e_loss = self._loss_mean(e_loss_raw)
+                e_loss = (_per_env(e_loss_raw) * valid_mask).sum() / valid_count
                 loss = self.expert_loss_coef * e_loss
             
             a_info['actor_loss'] = a_loss
