@@ -211,14 +211,16 @@ class InterMimic_CrossPair(InterMimic):
         indices = []
         excluded_flags = []
         for t in triples:
-            if t in self.teacher_lookup:
-                indices.append(self.teacher_lookup[t])
-                excluded_flags.append(False)
-            elif t in self.fallback_lookup:
-                # No teacher for this triple. Fallback (same body, diff source)
-                # keeps the env physically stable; agent masks loss to 0.
+            # Check excludeCombos FIRST. The broken teachers' .pth files
+            # may exist on disk and be loaded into teacher_lookup, but if
+            # the triple is in exclude_combos we must NOT use its own
+            # (likely-corrupted) teacher — route to fallback and mark mask.
+            if t in self.exclude_combos:
                 indices.append(self.fallback_lookup[t])
                 excluded_flags.append(True)
+            elif t in self.teacher_lookup:
+                indices.append(self.teacher_lookup[t])
+                excluded_flags.append(False)
             else:
                 raise KeyError(
                     f"Env triple {t} has no teacher and no fallback. "
