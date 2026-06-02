@@ -83,11 +83,25 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             # envs run with a fallback teacher's actions but must NOT
             # contribute to any loss term.
             task = self.vec_env.env.task
-            if hasattr(task, 'excluded_env_mask'):
+            has_mask = hasattr(task, 'excluded_env_mask')
+            if has_mask:
                 valid_now = (~task.excluded_env_mask).float()
             else:
                 valid_now = torch.ones(self.num_actors, device=self.ppo_device)
             self.experience_buffer.update_data('valid_mask', n, valid_now)
+
+            # One-time diagnostic so we can SEE whether the mask was found
+            if n == 0 and self.epoch_num < 2:
+                ve = self.vec_env
+                ve_env = getattr(ve, 'env', None)
+                ve_env_task = getattr(ve_env, 'task', None) if ve_env is not None else None
+                print(f"[distill DEBUG] task path resolution:")
+                print(f"  vec_env       = {type(ve).__name__}")
+                print(f"  vec_env.env   = {type(ve_env).__name__ if ve_env is not None else 'None'}")
+                print(f"  vec_env.env.task = {type(ve_env_task).__name__ if ve_env_task is not None else 'None'}")
+                print(f"  has excluded_env_mask: {has_mask}")
+                if has_mask:
+                    print(f"  mask sum (True=excluded): {int(task.excluded_env_mask.sum().item())}/{int(task.excluded_env_mask.numel())}")
 
             if n == 0 and valid_now.sum() < valid_now.numel():
                 n_excl = int((valid_now == 0).sum().item())
