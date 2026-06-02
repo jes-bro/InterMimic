@@ -72,6 +72,8 @@ printf '%s\n' "${results[@]}" | sort -t'|' -k1,1 -n -r | while IFS='|' read -r e
     if [ "$epoch" = "-1" ]; then
         printf '  %-50s %s\n' "$name" "$tag"
     else
+        # Force base-10 interpretation: "00004900" -> 4900 (avoids octal error)
+        epoch=$((10#$epoch))
         printf '  %-50s epoch %6d  %s\n' "$name" "$epoch" "$tag"
     fi
 done
