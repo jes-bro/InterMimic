@@ -174,7 +174,7 @@ python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_multibody_nobetas.yaml" \
-    --play --checkpoint checkpoints/vanilla_student.pth \
+    --play --checkpoint checkpoints/student.pth \
     --headless --num_envs 1
 
 echo ""
