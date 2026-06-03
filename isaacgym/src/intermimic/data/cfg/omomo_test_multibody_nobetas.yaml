@@ -23,6 +23,7 @@ env:
   dataFramesScale: 1
   dataSub: ['sub2']                # patched per-subject by eval_per_subject.py
   subjectBodies: ['sub2']          # patched per-subject by eval_per_subject.py
+  dataObjects: ['largetable', 'woodchair']  # restrict to objects the students were trained on
   # betas_file intentionally omitted — no-betas variant
   ballSize: 1.
   numObs: 3198                     # base obs only, no betas conditioning

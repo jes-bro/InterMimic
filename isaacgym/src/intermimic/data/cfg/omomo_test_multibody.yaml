@@ -23,6 +23,7 @@ env:
   dataFramesScale: 1
   dataSub: ['sub2']                        # patched per-subject by eval_per_subject.py
   subjectBodies: ['sub2']                  # patched per-subject by eval_per_subject.py
+  dataObjects: ['largetable', 'woodchair'] # restrict to objects the students were trained on
   betas_file: scripts/omomo_betas.npz      # match training obs structure
   ballSize: 1.
   numObs: 3230                             # 3198 base + 32 betas (must match training checkpoint)
