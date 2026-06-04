@@ -26,7 +26,7 @@ fi
 
 CFG_DIR=isaacgym/src/intermimic/data/cfg
 TRAIN_DIR=isaacgym/src/intermimic/data/cfg/train/rlg
-TARGET_BODY=sub10
+TARGET_BODY=sub5    # held-out body (not in training set) — stronger qualitative comparison
 SOURCE_SUB=sub2
 OBJECT=largetable
 MAX_FRAMES=300
