@@ -68,8 +68,18 @@ class Humanoid_SMPLX(BaseTask):
         self.cfg["device_type"] = device_type
         self.cfg["device_id"] = device_id
         self.cfg["headless"] = headless
-         
-        super().__init__(cfg=self.cfg)
+
+        # Enable graphics device for camera-sensor capture if we plan to record
+        # video. Without this, base_task sets graphics_device_id=-1 in headless
+        # mode and any subsequent create_camera_sensor call silently fails
+        # (returns -1), breaking play_dataset_step and RECORD_VIDEO recording.
+        import os as _os
+        _wants_cameras = (
+            bool(self.cfg["env"].get("saveImages", False))
+            or bool(self.cfg["env"].get("playdataset", False))
+            or _os.environ.get("RECORD_VIDEO") is not None
+        )
+        super().__init__(cfg=self.cfg, enable_camera_sensors=_wants_cameras)
         
         self.dt = self.control_freq_inv * sim_params.dt
         
