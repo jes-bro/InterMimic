@@ -132,11 +132,13 @@ ls -l "$CFG_DIR"/omomo_render_*.yaml
 # --- render commands ---
 
 # 1. Source replay (kinematic, sub2 body doing sub2 motion)
+# Use base InterMimic task (not CrossPair) to avoid teacher-dir loading.
+# Kinematic playback doesn't need a policy or teachers.
 echo ""
 echo "=== Render 1/5: Source motion (sub2 kinematic) ==="
 RECORD_VIDEO=/tmp/render_source_${SOURCE_SUB}.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
-python -u -m intermimic.run_distill \
-    --task InterMimic_CrossPair \
+python -u -m intermimic.run \
+    --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_source.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_normreward.yaml" \
     --play_dataset --headless --num_envs 1
@@ -149,12 +151,12 @@ CKPT_REWARD_ABL=/home/ubuntu/reward_ablation/output/smplx_distill_both/nn/mimic.
 CKPT_BETAS_ABL=/home/ubuntu/nobetas_ablation/output/smplx_distill_both_nobetas_normreward/nn/mimic.pth
 CKPT_VANILLA=/home/ubuntu/vanilla_intermimic/checkpoints/student.pth
 
-# 2. Full method on sub10
+# 2. Full method on sub10 — uses base InterMimic task (no teachers needed for inference)
 echo ""
 echo "=== Render 2/5: Full method (both_normreward) on $TARGET_BODY ==="
 RECORD_VIDEO=/tmp/render_full_method.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
-python -u -m intermimic.run_distill \
-    --task InterMimic_CrossPair \
+python -u -m intermimic.run \
+    --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_normreward.yaml" \
     --play --checkpoint "$CKPT_FULL" \
@@ -164,8 +166,8 @@ python -u -m intermimic.run_distill \
 echo ""
 echo "=== Render 3/5: Reward ablation (both) on $TARGET_BODY ==="
 RECORD_VIDEO=/tmp/render_reward_ablation.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
-python -u -m intermimic.run_distill \
-    --task InterMimic_CrossPair \
+python -u -m intermimic.run \
+    --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both.yaml" \
     --play --checkpoint "$CKPT_REWARD_ABL" \
@@ -175,8 +177,8 @@ python -u -m intermimic.run_distill \
 echo ""
 echo "=== Render 4/5: Betas ablation (both_nobetas_normreward) on $TARGET_BODY ==="
 RECORD_VIDEO=/tmp/render_betas_ablation.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
-python -u -m intermimic.run_distill \
-    --task InterMimic_CrossPair \
+python -u -m intermimic.run \
+    --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_nobetas_normreward.yaml" \
     --play --checkpoint "$CKPT_BETAS_ABL" \
