@@ -133,6 +133,14 @@ python -u -m intermimic.run_distill \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_normreward.yaml" \
     --play_dataset --headless --num_envs 1
 
+# Checkpoint paths — scattered across separate InterMimic copies per ablation.
+# These are absolute paths; the script is run from ~/InterMimic but checkpoints
+# live elsewhere.
+CKPT_FULL=/home/ubuntu/vanilla_intermimic/output/smplx_distill_both_normreward/nn/mimic.pth
+CKPT_REWARD_ABL=/home/ubuntu/reward_ablation/output/smplx_distill_both/nn/mimic.pth
+CKPT_BETAS_ABL=/home/ubuntu/nobetas_ablation/output/smplx_distill_both_nobetas_normreward/nn/mimic.pth
+CKPT_VANILLA=/home/ubuntu/vanilla_intermimic/checkpoints/student.pth
+
 # 2. Full method on sub10
 echo ""
 echo "=== Render 2/5: Full method (both_normreward) on $TARGET_BODY ==="
@@ -141,7 +149,7 @@ python -u -m intermimic.run_distill \
     --task InterMimic_CrossPair \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_normreward.yaml" \
-    --play --checkpoint output/smplx_distill_both_normreward/nn/mimic.pth \
+    --play --checkpoint "$CKPT_FULL" \
     --headless --num_envs 1
 
 # 3. Reward ablation (both) on sub10
@@ -152,7 +160,7 @@ python -u -m intermimic.run_distill \
     --task InterMimic_CrossPair \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both.yaml" \
-    --play --checkpoint output/smplx_distill_both/nn/mimic.pth \
+    --play --checkpoint "$CKPT_REWARD_ABL" \
     --headless --num_envs 1
 
 # 4. Betas ablation (both_nobetas_normreward) on sub10 — uses 3198 obs
@@ -163,7 +171,7 @@ python -u -m intermimic.run_distill \
     --task InterMimic_CrossPair \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_nobetas_normreward.yaml" \
-    --play --checkpoint output/smplx_distill_both_nobetas_normreward/nn/mimic.pth \
+    --play --checkpoint "$CKPT_BETAS_ABL" \
     --headless --num_envs 1
 
 # 5. Vanilla InterMimic baseline on sub10 — uses 3198 obs, task=InterMimic (not crosspair)
@@ -174,7 +182,7 @@ python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_multibody_nobetas.yaml" \
-    --play --checkpoint checkpoints/student.pth \
+    --play --checkpoint "$CKPT_VANILLA" \
     --headless --num_envs 1
 
 echo ""
