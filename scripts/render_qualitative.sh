@@ -26,7 +26,8 @@ fi
 
 CFG_DIR=isaacgym/src/intermimic/data/cfg
 TRAIN_DIR=isaacgym/src/intermimic/data/cfg/train/rlg
-TARGET_BODY=sub5    # held-out body (not in training set) — stronger qualitative comparison
+TARGET_BODY=sub1    # held-out body. sub1 has 11% success on sub2/largetable
+                    # (vs sub5's 0%) — more likely to yield a clean frame for headline figure.
 SOURCE_SUB=sub2
 OBJECT=largetable
 MAX_FRAMES=300
