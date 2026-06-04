@@ -141,7 +141,7 @@ python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_source.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_normreward.yaml" \
-    --play_dataset --headless --num_envs 1
+    --play_dataset --headless --num_envs 512
 
 # Checkpoint paths — scattered across separate InterMimic copies per ablation.
 # These are absolute paths; the script is run from ~/InterMimic but checkpoints
@@ -160,7 +160,7 @@ python -u -m intermimic.run \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_normreward.yaml" \
     --play --checkpoint "$CKPT_FULL" \
-    --headless --num_envs 1
+    --headless --num_envs 512
 
 # 3. Reward ablation (both) on sub10
 echo ""
@@ -171,7 +171,7 @@ python -u -m intermimic.run \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both.yaml" \
     --play --checkpoint "$CKPT_REWARD_ABL" \
-    --headless --num_envs 1
+    --headless --num_envs 512
 
 # 4. Betas ablation (both_nobetas_normreward) on sub10 — uses 3198 obs
 echo ""
@@ -182,7 +182,7 @@ python -u -m intermimic.run \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_distill_both_nobetas_normreward.yaml" \
     --play --checkpoint "$CKPT_BETAS_ABL" \
-    --headless --num_envs 1
+    --headless --num_envs 512
 
 # 5. Vanilla InterMimic baseline on sub10 — uses 3198 obs, task=InterMimic (not crosspair)
 echo ""
@@ -193,7 +193,7 @@ python -u -m intermimic.run \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
     --cfg_train "$TRAIN_DIR/omomo_multibody_nobetas.yaml" \
     --play --checkpoint "$CKPT_VANILLA" \
-    --headless --num_envs 1
+    --headless --num_envs 512
 
 echo ""
 echo "=== All renders done. Videos in /tmp/ ==="
