@@ -135,9 +135,30 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
 
             if self.env.task.play_dataset:
                 # play dataset
-                while True:
-                    for t in range(self.env.task.max_episode_length.max()): 
-                        self.env.task.play_dataset_step(t) 
+                _done_recording = False
+                while not _done_recording:
+                    for t in range(self.env.task.max_episode_length.max()):
+                        self.env.task.play_dataset_step(t)
+                        # Capture frame to RECORD_VIDEO if set (mirror of the
+                        # inference branch's recording loop below).
+                        if _writer is not None:
+                            task = self.env.task
+                            task.gym.step_graphics(task.sim)
+                            task.gym.render_all_camera_sensors(task.sim)
+                            img = task.gym.get_camera_image(
+                                task.sim, task.envs[0], _cam_handle, gymapi.IMAGE_COLOR
+                            )
+                            img = img.reshape(_cam_props.height, _cam_props.width, 4)[..., :3]
+                            _writer.append_data(img)
+                            _frames_written += 1
+                            if _frames_written >= _max_video_frames:
+                                _writer.close()
+                                print(f"[player] wrote {_frames_written} frames to {_record_path}, video done")
+                                _writer = None
+                                _done_recording = True
+                                break
+                    if _writer is None:
+                        break  # never set up recording → don't loop forever
             else:
                 # inference
                 for n in range(self.max_steps):

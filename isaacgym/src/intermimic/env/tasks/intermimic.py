@@ -290,7 +290,11 @@ class InterMimic(Humanoid_SMPLX):
         self._curr_state = torch.zeros([self.num_envs, cfg['env']['rolloutLength'], 332], device=self.device, dtype=torch.float)
         self._build_target_tensors()
         # --- video recording setup ---
-        if self.play_dataset:
+        # If RECORD_VIDEO env var is set, the rl_games player handles recording
+        # via its own camera sensor (intermimic_players.py). Don't ALSO create
+        # an env-side camera — two cameras in play_dataset_step caused segfaults.
+        _record_video_external = os.environ.get("RECORD_VIDEO") is not None
+        if self.play_dataset and not _record_video_external:
             cam_props = gymapi.CameraProperties()
             cam_props.width, cam_props.height = 1280, 720
             self._video_cam = self.gym.create_camera_sensor(self.envs[0], cam_props)
