@@ -29,7 +29,7 @@ TRAIN_DIR=isaacgym/src/intermimic/data/cfg/train/rlg
 TARGET_BODY=sub1    # held-out body. sub1 has 11% success on sub2/largetable
                     # (vs sub5's 0%) — more likely to yield a clean frame for headline figure.
 SOURCE_SUB=sub2
-OBJECT=largetable
+OBJECT=woodchair
 MAX_FRAMES=300
 
 # --- create 3 render yamls (3230 obs, 3198 obs, source) ---
