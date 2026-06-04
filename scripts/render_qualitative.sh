@@ -137,7 +137,7 @@ ls -l "$CFG_DIR"/omomo_render_*.yaml
 # Kinematic playback doesn't need a policy or teachers.
 echo ""
 echo "=== Render 1/5: Source motion (sub2 kinematic) ==="
-RECORD_VIDEO=/tmp/render_source_${SOURCE_SUB}.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
+RECORD_VIDEO=/tmp/render_${TARGET_BODY}_${OBJECT}_source_${SOURCE_SUB}.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_source.yaml" \
@@ -155,7 +155,7 @@ CKPT_VANILLA=/home/ubuntu/vanilla_intermimic/checkpoints/student.pth
 # 2. Full method on sub10 — uses base InterMimic task (no teachers needed for inference)
 echo ""
 echo "=== Render 2/5: Full method (both_normreward) on $TARGET_BODY ==="
-RECORD_VIDEO=/tmp/render_full_method.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
+RECORD_VIDEO=/tmp/render_${TARGET_BODY}_${OBJECT}_full_method.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
@@ -166,7 +166,7 @@ python -u -m intermimic.run \
 # 3. Reward ablation (both) on sub10
 echo ""
 echo "=== Render 3/5: Reward ablation (both) on $TARGET_BODY ==="
-RECORD_VIDEO=/tmp/render_reward_ablation.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
+RECORD_VIDEO=/tmp/render_${TARGET_BODY}_${OBJECT}_reward_ablation.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3230.yaml" \
@@ -177,7 +177,7 @@ python -u -m intermimic.run \
 # 4. Betas ablation (both_nobetas_normreward) on sub10 — uses 3198 obs
 echo ""
 echo "=== Render 4/5: Betas ablation (both_nobetas_normreward) on $TARGET_BODY ==="
-RECORD_VIDEO=/tmp/render_betas_ablation.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
+RECORD_VIDEO=/tmp/render_${TARGET_BODY}_${OBJECT}_betas_ablation.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
@@ -188,7 +188,7 @@ python -u -m intermimic.run \
 # 5. Vanilla InterMimic baseline on sub10 — uses 3198 obs, task=InterMimic (not crosspair)
 echo ""
 echo "=== Render 5/5: Vanilla InterMimic on $TARGET_BODY ==="
-RECORD_VIDEO=/tmp/render_vanilla.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
+RECORD_VIDEO=/tmp/render_${TARGET_BODY}_${OBJECT}_vanilla.mp4 MAX_VIDEO_FRAMES=$MAX_FRAMES \
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_DIR/omomo_render_target_3198.yaml" \
@@ -198,4 +198,4 @@ python -u -m intermimic.run \
 
 echo ""
 echo "=== All renders done. Videos in /tmp/ ==="
-ls -lh /tmp/render_*.mp4
+ls -lh /tmp/render_${TARGET_BODY}_${OBJECT}_*.mp4
