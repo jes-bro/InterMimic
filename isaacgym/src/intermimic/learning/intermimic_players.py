@@ -194,6 +194,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             _writer.close()
                             print(f"[player] wrote {_frames_written} frames to {_record_path}, video done")
                             _writer = None
+                            # When recording was the whole point (RECORD_VIDEO set),
+                            # exit now — don't keep running the policy and printing
+                            # reward stats that block the next render in the script.
+                            import sys
+                            sys.exit(0)
 
                     if render:
                         self.env.render(mode = 'human')
