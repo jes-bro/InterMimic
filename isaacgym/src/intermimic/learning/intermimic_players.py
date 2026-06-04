@@ -159,6 +159,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                                 break
                     if _writer is None:
                         break  # never set up recording → don't loop forever
+                # If we were recording, exit the n_games loop too — don't
+                # keep playing the dataset forever.
+                if _record_path is not None:
+                    import sys
+                    sys.exit(0)
             else:
                 # inference
                 for n in range(self.max_steps):
