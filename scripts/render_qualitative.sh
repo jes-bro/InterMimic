@@ -19,6 +19,11 @@ cd "$(dirname "$0")/.."
 # Ensure the intermimic module is importable regardless of caller env
 export PYTHONPATH="$PWD/isaacgym/src:$PWD:$PYTHONPATH"
 
+# IsaacGym needs conda env's libs on LD_LIBRARY_PATH
+if [ -n "$CONDA_PREFIX" ]; then
+    export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 CFG_DIR=isaacgym/src/intermimic/data/cfg
 TRAIN_DIR=isaacgym/src/intermimic/data/cfg/train/rlg
 TARGET_BODY=sub10
