@@ -119,7 +119,7 @@ sed "s/subjectBodies: \\['$TARGET_BODY'\\]/subjectBodies: ['$SOURCE_SUB']/" \
     "$CFG_DIR/omomo_render_target_3230.yaml" > "$CFG_DIR/omomo_render_source.yaml"
 
 echo "=== render yamls created ==="
-ls -l "$CFG_DIR/omomo_render_*.yaml"
+ls -l "$CFG_DIR"/omomo_render_*.yaml
 
 # --- render commands ---
 
