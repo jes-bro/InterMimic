@@ -91,9 +91,9 @@ run_eval "betas_ablation_woodchair"    "$CKPT_BETAS_ABL"   "$TEST_3198_WC" "$TRA
 run_eval "vanilla_largetable"          "$CKPT_VANILLA"     "$TEST_3198_LT" "$TRAIN_VANILLA"    "$SOURCES"
 run_eval "vanilla_woodchair"           "$CKPT_VANILLA"     "$TEST_3198_WC" "$TRAIN_VANILLA"    "$SOURCES"
 
-# --- curriculum eval (sub2 source only, both objects) ---
-
-run_eval "curriculum_stage2_sub2"      "$CKPT_CURRICULUM"  "$TEST_3230"    "$TRAIN_CURRICULUM" "$SOURCES_SUB2_ONLY"
+# Curriculum eval intentionally omitted — checkpoint not on this machine.
+# To add later: transfer checkpoint to checkpoints/curriculum_stage2.pth and add
+# run_eval "curriculum_stage2_sub2" "$CKPT_CURRICULUM" "$TEST_3230" "$TRAIN_CURRICULUM" "$SOURCES_SUB2_ONLY"
 
 # --- summary ---
 echo ""
