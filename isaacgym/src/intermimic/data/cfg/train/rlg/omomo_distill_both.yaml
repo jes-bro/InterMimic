@@ -33,7 +33,7 @@ params:
       regularizer:
         name: None
 
-  load_checkpoint: True
+  load_checkpoint: False
 
   config:
     name: mimic
