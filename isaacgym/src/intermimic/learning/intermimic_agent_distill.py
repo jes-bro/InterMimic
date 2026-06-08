@@ -70,7 +70,10 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         update_list = self.update_list
 
         # Initialize DAgger beta coefficient
-        beta_t = max(1 - max((self.epoch_num - 500) / 5000, 0), 0)
+        # Rescaled for warm-start at epoch 1500. Starts at 0.7 (continuing
+        # roughly from the previous run's β=0.8 endpoint, since student
+        # already matches teacher μ from prior BC). Decays to 0 by epoch 2200.
+        beta_t = max(0.7 - max((self.epoch_num - 1500) / 1000, 0), 0)
 
         for n in range(self.horizon_length):
 
@@ -316,7 +319,7 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
                 b_loss_raw = self.bound_loss(mu)
 
 
-                if self.epoch_num > 7000:
+                if self.epoch_num > 2900:
                     returns_var = return_batch.var(unbiased=False) + 1e-8  # avoid divide‑by‑0
                     errors_var = (return_batch - values).var(unbiased=False)
                     ev = 1.0 - errors_var / returns_var
@@ -342,11 +345,11 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
                 e_info = self._supervise_loss(mu, expert_mus)
                 e_loss_raw = e_info['expert_loss']
                 e_loss = (_per_env(e_loss_raw) * valid_mask).sum() / valid_count
-                if self.epoch_num > 6000 and self.critic_win_streak >= 3:
-                    loss = a_loss * min((self.actor_update_num / 4000), 1) + self.critic_coef * c_loss + self.bounds_loss_coef * b_loss + self.expert_loss_coef * e_loss * max(1 - (self.actor_update_num / 4000), 0.1)
+                if self.epoch_num > 2900 and self.critic_win_streak >= 3:
+                    loss = a_loss * min((self.actor_update_num / 800), 1) + self.critic_coef * c_loss + self.bounds_loss_coef * b_loss + self.expert_loss_coef * e_loss * max(1 - (self.actor_update_num / 800), 0.1)
                     self.actor_update_num += 1
-                elif self.epoch_num > 5000:
-                    loss = min(((self.epoch_num - 5000) / 1000), 1) * self.critic_coef * c_loss + self.expert_loss_coef * e_loss
+                elif self.epoch_num > 2300:
+                    loss = min(((self.epoch_num - 2300) / 600), 1) * self.critic_coef * c_loss + self.expert_loss_coef * e_loss
                 else:
                     loss = self.expert_loss_coef * e_loss
                 
