@@ -165,8 +165,12 @@ class InterMimicAgent(common_agent.CommonAgent):
         if self.resume_from != 'None':
             try:
                 self.restore(self.resume_from)
-            except:
-                print('Failed to restore from checkpoint')
+                print(f"[warm-start] Successfully restored from {self.resume_from}; "
+                      f"resuming at epoch {self.epoch_num}")
+            except Exception as e:
+                print(f"[warm-start] FAILED to restore from {self.resume_from}: "
+                      f"{type(e).__name__}: {e}")
+                print(f"[warm-start] Training will continue from scratch (epoch 0)")
 
         self.init_tensors()
         self.last_mean_rewards = -100500
