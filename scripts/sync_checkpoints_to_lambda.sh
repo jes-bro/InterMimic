@@ -40,11 +40,16 @@ LOCAL_STAGE=$HOME/Downloads/checkpoints/v2
 
 # (local_file, remote_parent_dir, remote_filename) triples. Tab-separated.
 # Remote_filename ALWAYS ends up as `mimic.pth` or `student.pth` on Lambda.
+#
+# Note: the v2 staging "files" are actually directories on the laptop
+# (same nested-dir rsync bug that hit Lambda) — the actual rolling-latest
+# checkpoint is at <staging-dir>/mimic.pth. Point sources there.
+# Student.pth on the laptop sits directly in Downloads.
 read -r -d '' MANIFEST <<EOF
-$LOCAL_STAGE/smplx_distill_both_normreward_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn	mimic.pth
-$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn	mimic.pth
-$LOCAL_STAGE/smplx_distill_both_nobetas_normreward_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn	mimic.pth
-$LOCAL_STAGE/student.pth	/home/ubuntu/InterMimic/checkpoints/smplx_student	student.pth
+$LOCAL_STAGE/smplx_distill_both_normreward_v2_mimic.pth/mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn	mimic.pth
+$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth/mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn	mimic.pth
+$LOCAL_STAGE/smplx_distill_both_nobetas_normreward_v2_mimic.pth/mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn	mimic.pth
+$HOME/Downloads/student.pth	/home/ubuntu/InterMimic/checkpoints/smplx_student	student.pth
 EOF
 
 # sync_one — push a single checkpoint file to Lambda the safe way.
