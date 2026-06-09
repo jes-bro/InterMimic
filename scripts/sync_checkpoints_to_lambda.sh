@@ -38,19 +38,23 @@ LAMBDA=${1:-ubuntu@137.131.47.244}
 # back to `mimic.pth` when pushing to Lambda.
 LOCAL_STAGE=$HOME/Downloads/checkpoints/v2
 
-# (local_file, remote_parent_dir, remote_filename) triples. Tab-separated.
+# Each MANIFEST entry: (local_file | remote_parent_dir | remote_filename)
 # Remote_filename ALWAYS ends up as `mimic.pth` or `student.pth` on Lambda.
 #
 # Note: the v2 staging "files" are actually directories on the laptop
 # (same nested-dir rsync bug that hit Lambda) — the actual rolling-latest
 # checkpoint is at <staging-dir>/mimic.pth. Point sources there.
 # Student.pth on the laptop sits directly in Downloads.
-read -r -d '' MANIFEST <<EOF
-$LOCAL_STAGE/smplx_distill_both_normreward_v2_mimic.pth/mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn	mimic.pth
-$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth/mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn	mimic.pth
-$LOCAL_STAGE/smplx_distill_both_nobetas_normreward_v2_mimic.pth/mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn	mimic.pth
-$HOME/Downloads/student.pth	/home/ubuntu/InterMimic/checkpoints/smplx_student	student.pth
-EOF
+#
+# Using an array (instead of heredoc + read -d '') because the heredoc
+# pattern was eating subsequent lines after the first iteration on some
+# bash versions. Arrays are bulletproof here.
+MANIFEST=(
+    "$LOCAL_STAGE/smplx_distill_both_normreward_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn|mimic.pth"
+    "$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn|mimic.pth"
+    "$LOCAL_STAGE/smplx_distill_both_nobetas_normreward_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn|mimic.pth"
+    "$HOME/Downloads/student.pth|/home/ubuntu/InterMimic/checkpoints/smplx_student|student.pth"
+)
 
 # sync_one — push a single checkpoint file to Lambda the safe way.
 #   $1 = local source path (any filename)
@@ -116,12 +120,12 @@ sync_one() {
     ssh "$LAMBDA" "ls -la '$remote_full'"
 }
 
-# Read the manifest line by line and sync each entry.
-while IFS=$'\t' read -r local_path remote_dir remote_name; do
-    [ -z "$local_path" ] && continue
+# Iterate the manifest array and sync each entry.
+for entry in "${MANIFEST[@]}"; do
+    IFS='|' read -r local_path remote_dir remote_name <<< "$entry"
     sync_one "$local_path" "$remote_dir" "$remote_name"
     echo ""
-done <<< "$MANIFEST"
+done
 
 echo "=== Summary ==="
 ssh "$LAMBDA" '
