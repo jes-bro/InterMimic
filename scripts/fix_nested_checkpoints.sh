@@ -28,7 +28,7 @@ REPO_ROOT=${REPO_ROOT:-/home/ubuntu/InterMimic}
 # v2 distill student checkpoints — each lives at $REPO_ROOT/checkpoints/<name>/nn/mimic.pth
 V2_DIRS=(
     smplx_distill_both_normreward_v2
-    smplx_distill_both_v2
+    smplx_distill_both_abl_v2
     smplx_distill_both_nobetas_normreward_v2
 )
 

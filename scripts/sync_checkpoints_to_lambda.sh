@@ -42,7 +42,7 @@ LOCAL_STAGE=$HOME/Downloads/checkpoints/v2
 # Remote_filename ALWAYS ends up as `mimic.pth` or `student.pth` on Lambda.
 read -r -d '' MANIFEST <<EOF
 $LOCAL_STAGE/smplx_distill_both_normreward_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn	mimic.pth
-$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_v2/nn	mimic.pth
+$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn	mimic.pth
 $LOCAL_STAGE/smplx_distill_both_nobetas_normreward_v2_mimic.pth	/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn	mimic.pth
 $LOCAL_STAGE/student.pth	/home/ubuntu/InterMimic/checkpoints/smplx_student	student.pth
 EOF
@@ -121,7 +121,7 @@ done <<< "$MANIFEST"
 echo "=== Summary ==="
 ssh "$LAMBDA" '
 for p in /home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn/mimic.pth \
-         /home/ubuntu/InterMimic/checkpoints/smplx_distill_both_v2/nn/mimic.pth \
+         /home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn/mimic.pth \
          /home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn/mimic.pth \
          /home/ubuntu/InterMimic/checkpoints/smplx_student/student.pth; do
     if [ -f "$p" ]; then
