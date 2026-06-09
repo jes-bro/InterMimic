@@ -51,7 +51,7 @@ LOCAL_STAGE=$HOME/Downloads/checkpoints/v2
 # bash versions. Arrays are bulletproof here.
 MANIFEST=(
     "$LOCAL_STAGE/smplx_distill_both_normreward_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn|mimic.pth"
-    "$LOCAL_STAGE/smplx_distill_both_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn|mimic.pth"
+    "$LOCAL_STAGE/smplx_distill_both_abl_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn|mimic.pth"
     "$LOCAL_STAGE/smplx_distill_both_nobetas_normreward_v2_mimic.pth/mimic.pth|/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn|mimic.pth"
     "$HOME/Downloads/student.pth|/home/ubuntu/InterMimic/checkpoints/smplx_student|student.pth"
 )
@@ -99,10 +99,14 @@ sync_one() {
             ;;
     esac
 
-    # Stage with the correct destination filename so we can use the
-    # rsync trailing-slash-on-dir form (the safest way to avoid the
-    # leaf-as-dir nesting bug).
-    local stage=/tmp/sync_ckpt_$$_$remote_name
+    # Stage in a unique temp DIR with the file inside named exactly
+    # $remote_name. rsync with the trailing-slash-on-dir form preserves
+    # the source basename, so the destination ends up as $remote_dir/$remote_name.
+    # (Earlier version staged as /tmp/sync_ckpt_$$_<name>, which made the
+    # destination get the full temp-prefixed name — bug.)
+    local stage_dir=/tmp/sync_ckpt_$$
+    mkdir -p "$stage_dir"
+    local stage=$stage_dir/$remote_name
     cp "$local_path" "$stage"
 
     # mkdir -p the remote parent (rsync without --mkpath needs this).
@@ -113,8 +117,8 @@ sync_one() {
     # and put $stage's basename ($remote_name) inside it.
     rsync -avh --progress "$stage" "$LAMBDA:$remote_dir/"
 
-    # Cleanup local staging.
-    rm -f "$stage"
+    # Cleanup local staging (whole temp dir).
+    rm -rf "$stage_dir"
 
     # Verify it landed as a regular file.
     ssh "$LAMBDA" "ls -la '$remote_full'"
