@@ -146,10 +146,10 @@ python -u -m intermimic.run \
 # Checkpoint paths — scattered across separate InterMimic copies per ablation.
 # These are absolute paths; the script is run from ~/InterMimic but checkpoints
 # live elsewhere.
-CKPT_FULL=/home/ubuntu/vanilla_intermimic/output/smplx_distill_both_normreward/nn/mimic.pth
-CKPT_REWARD_ABL=/home/ubuntu/reward_ablation/output/smplx_distill_both/nn/mimic.pth
-CKPT_BETAS_ABL=/home/ubuntu/nobetas_ablation/output/smplx_distill_both_nobetas_normreward/nn/mimic.pth
-CKPT_VANILLA=/home/ubuntu/vanilla_intermimic/checkpoints/student.pth
+CKPT_FULL=/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_normreward_v2/nn/mimic.pth
+CKPT_REWARD_ABL=/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_abl_v2/nn/mimic.pth
+CKPT_BETAS_ABL=/home/ubuntu/InterMimic/checkpoints/smplx_distill_both_nobetas_normreward_v2/nn/mimic.pth
+CKPT_VANILLA=/home/ubuntu/InterMimic/checkpoints/smplx_student/student.pth
 
 # 2. Full method on sub10 — uses base InterMimic task (no teachers needed for inference)
 echo ""
