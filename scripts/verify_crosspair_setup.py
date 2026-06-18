@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Sanity-check the cross-pair teacher cfgs before launching training.
 
+Covers BOTH crosspair sets:
+  - object-specific (legacy): name b{B}_s{S}_{obj}[_normreward], has dataObjects.
+  - all-objects (full-cross): name b{B}_s{S}, NO dataObjects (trains on every
+    object the source subject performed).
+
 Verifies:
-  1. All 18 env yamls parse cleanly.
-  2. Required cfg fields (dataSub, subjectBodies, dataObjects, betas_file,
-     bodyNormalizedReward where expected) are present and well-formed.
+  1. All env yamls parse cleanly; counts each set.
+  2. Required cfg fields (dataSub, subjectBodies, betas_file) present.
+     dataObjects is OPTIONAL — present on object-specific cfgs, absent on
+     all-objects cfgs. bodyNormalizedReward must match the _normreward suffix.
   3. Per-body MJCFs exist for every body referenced.
   4. The resume checkpoint exists.
   5. Simulates the dataSub + dataObjects motion-file filter against local
      OMOMO_new and reports the resulting file count. Local only has sub2
-     data, so sub6 cfgs will show 0 motion files — that's expected.
+     data, so non-sub2-source cfgs will show 0 motion files — that's expected.
   6. Existing stage 2 cfg still has no dataObjects (back-compat check).
   7. bodyNormalizedReward is wired into intermimic.py (greps for the flag).
 
@@ -54,10 +60,10 @@ def main():
 
     cfgs = list_crosspair_cfgs()
     print(f"Found {len(cfgs)} crosspair env yamls\n")
-    if len(cfgs) != 18:
-        warnings.append(f"Expected 18 crosspair cfgs, found {len(cfgs)}")
 
-    parsed_all = []  # (path, env_cfg)
+    parsed_all = []  # (path, env_cfg, is_normreward)
+    n_objspecific = 0
+    n_allobjects = 0
     for p in cfgs:
         try:
             data = parse_yaml(p)
@@ -65,9 +71,15 @@ def main():
             errors.append(f"{p.name}: failed to parse YAML: {e}")
             continue
         env = data.get("env", {})
-        for field in ("dataSub", "subjectBodies", "dataObjects", "betas_file"):
+        # dataObjects is OPTIONAL: object-specific cfgs have it, all-objects
+        # full-cross cfgs deliberately omit it (stock InterMimic loads every
+        # object matched by dataSub).
+        for field in ("dataSub", "subjectBodies", "betas_file"):
             if field not in env:
                 errors.append(f"{p.name}: missing field '{field}'")
+        is_allobjects = "dataObjects" not in env
+        n_allobjects += is_allobjects
+        n_objspecific += (not is_allobjects)
         # bodyNormalizedReward should be True iff filename has _normreward
         is_normreward = "_normreward" in p.name
         flag_val = env.get("bodyNormalizedReward", False)
@@ -77,8 +89,11 @@ def main():
             errors.append(f"{p.name}: filename doesn't say normreward but flag is True")
         parsed_all.append((p, env, is_normreward))
 
-    print(f"Parsed {len(parsed_all)} cfgs ({sum(1 for _,_,n in parsed_all if n)} normreward, "
-          f"{sum(1 for _,_,n in parsed_all if not n)} default-reward)")
+    print(f"Parsed {len(parsed_all)} cfgs: {n_objspecific} object-specific "
+          f"(has dataObjects), {n_allobjects} all-objects (no dataObjects); "
+          f"{sum(1 for _,_,n in parsed_all if n)} normreward.")
+    if n_allobjects != 196:
+        warnings.append(f"Expected 196 all-objects (full-cross) cfgs, found {n_allobjects}")
 
     print()
     print(cyan("=" * 64))
@@ -106,9 +121,14 @@ def main():
     for tp in train_cfgs:
         for line in tp.read_text().splitlines():
             stripped = line.lstrip()
-            # ignore comments; only fail on actual yaml key
+            # ignore comments; only fail on actual yaml key.
+            # resume_from: 'None' is the random-init sentinel (agent checks
+            # `if resume_from != 'None'`), so it's GOOD — only a real
+            # checkpoint path is a problem.
             if stripped.startswith("resume_from:"):
-                bad.append(tp.name)
+                val = stripped.split(":", 1)[1].strip().strip("'\"")
+                if val != "None":
+                    bad.append(tp.name)
                 break
     if bad:
         errors.append(f"resume_from set in {len(bad)} cfgs: {bad}")

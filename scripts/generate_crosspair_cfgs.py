@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""Generate per-(body, source, object) cross-pair teacher cfg sets.
+"""Generate cross-pair teacher cfg sets.
 
-For each (body, source, object) triple, writes 4 files:
-  env   yaml: isaacgym/src/intermimic/data/cfg/omomo_train_crosspair_b{body}_s{src}_{obj}.yaml
-  train yaml: isaacgym/src/intermimic/data/cfg/train/rlg/omomo_crosspair_b{body}_s{src}_{obj}.yaml
-  shell:      isaacgym/scripts/train_crosspair_b{body}_s{src}_{obj}.sh
-  slurm:      slurm_crosspair_b{body}_s{src}_{obj}.sh
+Two sets are emitted (both kept; nothing is deleted):
 
-Default-reward set: 4 bodies x 2 sources x 2 objects = 16 teachers.
-Body-normalized-reward variants: 2 teachers, at fixed (body, source) on each
-object, for an A/B against the corresponding default-reward teachers.
+1. LEGACY object-specific set (unchanged): for each (body, source, object)
+   triple over BODIES x SOURCES x OBJECTS, plus the REWARD_VARIANTS A/B.
+   These pin a single object via `dataObjects` for clean per-object demos.
+
+2. FULL-CROSS all-objects set (new): every ordered (body, source) pair over
+   the 14 TRAIN_SUBJECTS -- 14 x 14 = 196 teachers including the 14 identity
+   pairs (body == source). These DROP `dataObjects` entirely, so each teacher
+   trains on ALL of the source subject's objects at once. The held-out
+   subjects (HELD_OUT) never appear as body or source, so they stay unseen
+   for downstream generalization eval.
+
+Each teacher set is 4 files (slug = "b{body}_s{src}_{obj}[_normreward]" for
+legacy, "b{body}_s{src}" for full-cross):
+  env   yaml: isaacgym/src/intermimic/data/cfg/omomo_train_crosspair_{slug}.yaml
+  train yaml: isaacgym/src/intermimic/data/cfg/train/rlg/omomo_crosspair_{slug}.yaml
+  shell:      isaacgym/scripts/train_crosspair_{slug}.sh
+  slurm:      slurm_crosspair_{slug}.sh   (submit one at a time with sbatch)
 
 Run from repo root:
   python scripts/generate_crosspair_cfgs.py
@@ -18,21 +28,31 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
+# --- Legacy object-specific set (kept for back-compat; not deleted) ---
 BODIES  = [10, 17, 9, 3]
 SOURCES = [2, 6]
 OBJECTS = ["largetable", "woodchair"]
 
-# Cap clips per (source, object) bucket so all teachers train on the same
-# motion count regardless of source/object. Set to the MIN across the 4
-# (sub2, sub6) x (largetable, woodchair) buckets on the cluster:
+# --- Full-cross all-objects set ---
+# 14 train subjects: 17 total minus the 3 held-out {4, 10, 16}.
+# Gender (from scripts/omomo_betas.npz _genders): F = {1, 9, 10, 15}, rest M.
+# The split keeps women in train {1, 9, 15} and puts a woman (10) + men
+# (4, 16) in the held-out test set, as requested.
+TRAIN_SUBJECTS = [1, 2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 17]
+HELD_OUT = [4, 10, 16]
+
+# Cap clips per (source, object) bucket so teachers train on a comparable
+# motion count regardless of source/object. For the legacy set this was set
+# to the MIN across the (sub2, sub6) x (largetable, woodchair) buckets:
 #   sub2 x largetable = 18, sub2 x woodchair = 15
-#   sub6 x largetable = 55, sub6 x woodchair = 59
-# MIN = 15 (sub2 x woodchair limits).
+#   sub6 x largetable = 55, sub6 x woodchair = 59  -> MIN = 15.
+# For the full-cross all-objects set the same per-object cap balances objects
+# within each source subject (so a high-count object can't dominate a pair).
 MAX_CLIPS_PER_OBJECT = 15
 
 # (body, source, object) triples that ALSO get a bodyNormalizedReward=true
 # variant. The default-reward teacher at the same triple is still trained,
-# so we get a clean A/B per object.
+# so we get a clean A/B per object. (Legacy set only.)
 REWARD_VARIANTS = [
     (10, 2, "largetable"),
     (10, 2, "woodchair"),
@@ -40,8 +60,8 @@ REWARD_VARIANTS = [
 
 
 ENV_YAML_TMPL = """\
-# Cross-pair teacher: body=sub{body} x source=sub{src} x object={obj}.
-# Single-object specialization for cleaner demonstration quality.
+# Cross-pair teacher: body=sub{body} x source=sub{src} x object={obj_desc}.
+# {specialization_line}
 # Body controlled at runtime is sub{body} (subjectBodies); the motion file
 # subject is sub{src} (dataSub). The policy must adapt sub{src}'s motion
 # to sub{body}'s body.{reward_blurb}
@@ -65,8 +85,7 @@ env:
   dataFPS: 30
   dataFramesScale: 1
   dataSub: ['sub{src}']
-  subjectBodies: ['sub{body}']
-  dataObjects: ['{obj}']
+  subjectBodies: ['sub{body}']{data_objects_line}
   maxClipsPerObject: {max_clips}
   betas_file: scripts/omomo_betas.npz{reward_flag}
   ballSize: 1.
@@ -165,7 +184,7 @@ params:
 
   config:
     name: mimic
-    # Cross-pair teacher: body=sub{body} x source=sub{src} x object={obj}{reward_tag}.
+    # Cross-pair teacher: body=sub{body} x source=sub{src} x object={obj_desc}{reward_tag}.
     full_experiment_name: {exp_name}
     env_name: rlgpu
     multi_gpu: False
@@ -212,8 +231,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${{SCRIPT_DIR}}/../.." && pwd)"
 export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 
-# Cross-pair teacher: body=sub{body} x source=sub{src} x object={obj}{reward_tag}.
-# Trains from random init (no warm-start) so sub2 and sub6 sources are symmetric.
+# Cross-pair teacher: body=sub{body} x source=sub{src} x object={obj_desc}{reward_tag}.
+# Trains from random init (no warm-start) {symmetry_note}.
 # Saves to checkpoints/{exp_name}/nn/.
 python -u -m intermimic.run \\
     --task InterMimic \\
@@ -249,9 +268,28 @@ sh isaacgym/scripts/{shell_basename}.sh
 
 
 def write_one(body, src, obj, norm_reward):
-    """Write 4 files for one (body, src, obj) triple."""
+    """Write the 4 files for one teacher; return its slug.
+
+    obj=None means the ALL-OBJECTS full-cross variant: the `dataObjects`
+    filter is omitted so the teacher trains on every object the source
+    subject performed, and the slug carries no object token.
+    """
+    all_objects = obj is None
     suffix = "_normreward" if norm_reward else ""
-    slug = f"b{body}_s{src}_{obj}{suffix}"
+    if all_objects:
+        slug = f"b{body}_s{src}{suffix}"
+        obj_desc = "all-objects"
+        # Code path: absent/empty dataObjects -> all objects pass through.
+        data_objects_line = ""
+        specialization_line = "Trains on ALL of sub{}'s objects at once.".format(src)
+        symmetry_note = "so all sources are treated symmetrically"
+    else:
+        slug = f"b{body}_s{src}_{obj}{suffix}"
+        obj_desc = obj
+        data_objects_line = f"\n  dataObjects: ['{obj}']"
+        specialization_line = "Single-object specialization for cleaner demonstration quality."
+        # Original legacy wording — keep verbatim so regeneration is a no-op.
+        symmetry_note = "so sub2 and sub6 sources are symmetric"
     exp_name = f"smplx_crosspair_{slug}"
     env_basename = f"omomo_train_crosspair_{slug}"
     train_basename = f"omomo_crosspair_{slug}"
@@ -269,20 +307,21 @@ def write_one(body, src, obj, norm_reward):
     reward_tag = " [body-normalized reward]" if norm_reward else ""
 
     env_yaml = ENV_YAML_TMPL.format(
-        body=body, src=src, obj=obj,
+        body=body, src=src, obj_desc=obj_desc,
+        specialization_line=specialization_line,
+        data_objects_line=data_objects_line,
         reward_blurb=reward_blurb, reward_flag=reward_flag,
         max_clips=MAX_CLIPS_PER_OBJECT,
     )
     train_yaml = TRAIN_YAML_TMPL.format(
-        body=body, src=src, obj=obj, reward_tag=reward_tag, exp_name=exp_name,
+        body=body, src=src, obj_desc=obj_desc, reward_tag=reward_tag, exp_name=exp_name,
     )
     shell = SHELL_TMPL.format(
-        body=body, src=src, obj=obj, reward_tag=reward_tag, exp_name=exp_name,
+        body=body, src=src, obj_desc=obj_desc, reward_tag=reward_tag, exp_name=exp_name,
         env_basename=env_basename, train_basename=train_basename,
+        symmetry_note=symmetry_note,
     )
-    slurm = SLURM_TMPL.format(
-        job_name=job_name, shell_basename=shell_basename,
-    )
+    slurm = SLURM_TMPL.format(job_name=job_name, shell_basename=shell_basename)
 
     env_path   = REPO / "isaacgym/src/intermimic/data/cfg" / f"{env_basename}.yaml"
     train_path = REPO / "isaacgym/src/intermimic/data/cfg/train/rlg" / f"{train_basename}.yaml"
@@ -295,24 +334,38 @@ def write_one(body, src, obj, norm_reward):
     shell_path.chmod(0o755)
     slurm_path.write_text(slurm)
     slurm_path.chmod(0o755)
-    return env_path, train_path, shell_path, slurm_path
+    return slug
 
 
 def main():
-    written = []
+    # --- Legacy object-specific set (kept so we can go back to it) ---
+    legacy = []
     # default-reward set
     for body in BODIES:
         for src in SOURCES:
             for obj in OBJECTS:
-                written.append(write_one(body, src, obj, norm_reward=False))
+                legacy.append(write_one(body, src, obj, norm_reward=False))
     # body-normalized-reward variants
     for body, src, obj in REWARD_VARIANTS:
-        written.append(write_one(body, src, obj, norm_reward=True))
+        legacy.append(write_one(body, src, obj, norm_reward=True))
 
-    print(f"Wrote {len(written)} cfg sets ({len(written) * 4} files total):")
-    for tup in written:
-        env, *_ = tup
-        print(f"  {env.relative_to(REPO)}")
+    # --- Full-cross all-objects set: 14 x 14 ordered (body, source) pairs,
+    # including the 14 identity pairs. obj=None drops the dataObjects filter.
+    # Each teacher gets its own slurm file, submitted separately with sbatch. ---
+    full_cross = []
+    for body in TRAIN_SUBJECTS:
+        for src in TRAIN_SUBJECTS:
+            full_cross.append(write_one(body, src, obj=None, norm_reward=False))
+
+    identity = len(TRAIN_SUBJECTS)
+    print(f"Wrote {len(legacy)} legacy object-specific cfg sets "
+          f"({len(legacy) * 4} files).")
+    print(f"Wrote {len(full_cross)} full-cross all-objects cfg sets "
+          f"({len(full_cross) * 4} files) over {len(TRAIN_SUBJECTS)} train subjects "
+          f"({len(full_cross) - identity} cross + {identity} identity).")
+    print(f"Held-out (never body or source in full-cross): {HELD_OUT}")
+    print(f"Total: {len(legacy) + len(full_cross)} cfg sets, "
+          f"{(len(legacy) + len(full_cross)) * 4} files.")
 
 
 if __name__ == "__main__":
