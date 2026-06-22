@@ -285,6 +285,14 @@ class InterMimicAgent(common_agent.CommonAgent):
         batch_shape = self.experience_buffer.obs_base_shape
         self.experience_buffer.tensor_dict['rand_action_mask'] = torch.zeros(batch_shape, dtype=torch.float32, device=self.ppo_device)
         self.tensor_list += ['amp_obs', 'rand_action_mask']
+        # Optional dead-env gradient mask (curriculum). Off unless the train cfg
+        # sets mask_dead_envs; when off, none of the masking code below runs and
+        # behavior is identical to stock training.
+        self._mask_dead_envs = self.config.get('mask_dead_envs', False)
+        if self._mask_dead_envs:
+            self.experience_buffer.tensor_dict['live_mask'] = torch.zeros(batch_shape, dtype=torch.float32, device=self.ppo_device)
+            self.tensor_list += ['live_mask']
+            print('[intermimic_agent] dead-env gradient masking enabled (mask_dead_envs).', flush=True)
         return
     
     def set_eval(self):
@@ -364,6 +372,13 @@ class InterMimicAgent(common_agent.CommonAgent):
             self.experience_buffer.update_data('next_obses', n, self.obs['obs'])
             self.experience_buffer.update_data('dones', n, self.dones)
             self.experience_buffer.update_data('rand_action_mask', n, res_dict['rand_action_mask'])
+            if self._mask_dead_envs:
+                # Static per-env mask published by the env via infos; 1 = env has
+                # a live pair (counts toward the gradient), 0 = dead (masked out).
+                live_mask = infos.get('live_env_mask', None)
+                if live_mask is None:
+                    live_mask = torch.ones_like(self.dones, dtype=torch.float32)
+                self.experience_buffer.update_data('live_mask', n, live_mask.to(self.ppo_device).float())
 
             terminated = infos['terminate'].float()
             terminated = terminated.unsqueeze(-1)
@@ -470,6 +485,8 @@ class InterMimicAgent(common_agent.CommonAgent):
         super().prepare_dataset(batch_dict)
         rand_action_mask = batch_dict['rand_action_mask']
         self.dataset.values_dict['rand_action_mask'] = rand_action_mask
+        if self._mask_dead_envs:
+            self.dataset.values_dict['live_mask'] = batch_dict['live_mask']
         return
     
     def train_epoch(self):
@@ -604,11 +621,22 @@ class InterMimicAgent(common_agent.CommonAgent):
 
             b_loss = self.bound_loss(mu)
             
-            c_loss = self._loss_mean(c_loss)
-            a_loss = self._loss_mean(a_loss) 
-            entropy = self._loss_mean(entropy)
-            b_loss = self._loss_mean(b_loss)
-            a_clip_frac = self._loss_mean(a_clipped)
+            if self._mask_dead_envs:
+                # Reduce over LIVE envs only: dead envs (mask 0) add nothing to
+                # the gradient, and the denominator is the live-sample count so
+                # the live envs' loss scale is unchanged.
+                m = input_dict['live_mask']
+                c_loss = self._loss_mean_masked(c_loss, m)
+                a_loss = self._loss_mean_masked(a_loss, m)
+                entropy = self._loss_mean_masked(entropy, m)
+                b_loss = self._loss_mean_masked(b_loss, m)
+                a_clip_frac = self._loss_mean_masked(a_clipped, m)
+            else:
+                c_loss = self._loss_mean(c_loss)
+                a_loss = self._loss_mean(a_loss)
+                entropy = self._loss_mean(entropy)
+                b_loss = self._loss_mean(b_loss)
+                a_clip_frac = self._loss_mean(a_clipped)
             
             loss = a_loss + self.critic_coef * c_loss + self.bounds_loss_coef * b_loss # - entropy * self.entropy_coef
             
@@ -661,6 +689,21 @@ class InterMimicAgent(common_agent.CommonAgent):
             c_count = self._ddp_allreduce_sum(c_count)
         c_loss = c_sum / c_count.clamp_min(1.0)
         return c_loss
+
+    def _loss_mean_masked(self, c_unreduced, mask):
+        # Masked counterpart of _loss_mean: average only the live samples
+        # (mask==1), so dead envs contribute zero gradient. Handles per-sample
+        # losses of shape (N,) or (N, K); the denominator is (#live samples)*K
+        # so the result matches the unmasked mean when the mask is all ones.
+        x = c_unreduced.reshape(c_unreduced.shape[0], -1).float()  # (N, K)
+        m = mask.reshape(-1, 1).float()                           # (N, 1)
+        k = x.shape[1]
+        c_sum = (x * m).sum()
+        c_count = m.sum()
+        if dist.is_available() and dist.is_initialized():
+            c_sum = self._ddp_allreduce_sum(c_sum)
+            c_count = self._ddp_allreduce_sum(c_count)
+        return c_sum / (c_count * k).clamp_min(1.0)
     
     def _load_config_params(self, config):
         super()._load_config_params(config)

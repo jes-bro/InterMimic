@@ -277,6 +277,104 @@ class InterMimic(Humanoid_SMPLX):
             self._env_body_height = body_heights_per_subj[self._env_subject_idx]
             print(f"[intermimic] body-normalized reward enabled; per-env body heights {tuple(self._env_body_height.shape)} (min {self._env_body_height.min().item():.3f}, max {self._env_body_height.max().item():.3f})", flush=True)
 
+        # --- Per-(body, source) pair sampling weights (curriculum balancing) ---
+        # Optional. cfg 'subjectPairWeightsFile' points at a JSON mapping
+        # "b{B}_s{S}" -> float weight (B, S = subject numbers). When set, motion
+        # sampling at reset is weighted so each env (whose body is fixed at
+        # creation) picks a source S in proportion to W[body, S]. This lets the
+        # curriculum controller equalize exposure per (body, source) PAIR rather
+        # than just per subject. When absent, sampling is uniform — identical to
+        # the original behavior, so all existing configs are unaffected.
+        # Precomputed as a (num_bodies, num_motions) tensor: row = env's body
+        # index (self._env_subject_idx), col = motion, value = W[body, motion's
+        # source]. A 0-sum row over an object's valid motions falls back to
+        # uniform at sample time (e.g. a pair with no shared object).
+        self._pair_weight_per_body = None
+        pair_weights_file = cfg['env'].get('subjectPairWeightsFile', None)
+        if pair_weights_file is not None and getattr(self, 'subject_bodies', None):
+            import json
+            from ...utils.path_utils import resolve_repo_path
+            with open(resolve_repo_path(pair_weights_file)) as f:
+                pair_w = json.load(f)
+            body_subject_nums = [int(s[3:]) for s in self.subject_bodies]
+            src_nums = self.source_subject_index.tolist()
+            W = torch.ones((len(body_subject_nums), self.num_motions),
+                           dtype=torch.float, device=self.device)
+            for bi, b in enumerate(body_subject_nums):
+                for mi, s in enumerate(src_nums):
+                    W[bi, mi] = float(pair_w.get(f"b{b}_s{s}", 1.0))
+            self._pair_weight_per_body = W
+            # Keep the number maps around for the realized-sample counter below.
+            self._body_subject_nums = body_subject_nums      # body row idx -> subject num
+            self._src_nums = src_nums                        # motion col idx -> source num
+            # Report any (body, source) pair that is physically unreachable:
+            # body bi never co-occurs (in env creation) with an object that
+            # source s performed, so no env can ever realize that pair.
+            unreachable = []
+            for bi, b in enumerate(body_subject_nums):
+                # objects body bi's envs physically own: bi covers object o iff
+                # some env index e has e % num_bodies == bi and e % num_obj == o.
+                body_objs = {int(e % len(self.object_name))
+                             for e in range(self.num_envs)
+                             if int(e % len(body_subject_nums)) == bi}
+                for s in sorted(set(src_nums)):
+                    s_motions = [mi for mi, ss in enumerate(src_nums) if ss == s]
+                    s_objs = {int(self.object_id[mi]) for mi in s_motions}
+                    if not (body_objs & s_objs):
+                        unreachable.append((b, s))
+            print(f"[intermimic] loaded pair sample weights from {pair_weights_file}: "
+                  f"W {tuple(W.shape)} bodies={body_subject_nums}", flush=True)
+            if unreachable:
+                print(f"[intermimic] WARNING: {len(unreachable)} (body,source) pairs "
+                      f"are physically unreachable (no shared object): {unreachable}", flush=True)
+
+        # --- Realized (source, body) sample counter (curriculum measured exposure) ---
+        # Optional. cfg 'pairSampleCountsFile' is an OUTPUT path. When set (and
+        # pair weights are loaded), we tally how many times each (source, body)
+        # pair is actually sampled at reset and periodically flush the tally to
+        # that file. The curriculum controller reads it to (a) reweight the next
+        # sub-stage from MEASURED exposure rather than an estimate, and (b) detect
+        # leaks — a pair we masked (weight 0) but which still has a nonzero count
+        # was sampled via the uniform fallback for an env with no live pair.
+        self._pair_sample_counts = None
+        counts_file = cfg['env'].get('pairSampleCountsFile', None)
+        if counts_file is not None and self._pair_weight_per_body is not None:
+            from ...utils.path_utils import resolve_repo_path
+            self._pair_counts_path = str(resolve_repo_path(counts_file, must_exist=False))
+            self._pair_sample_counts = {}
+            self._pair_counts_flush_every = 200   # flush every N reset batches
+            self._pair_counts_since_flush = 0
+            print(f"[intermimic] realized pair-sample counting on -> {counts_file}", flush=True)
+
+        # --- Dead-env gradient mask (curriculum hard guarantee) ---
+        # Optional. cfg 'maskDeadEnvs' True => publish a per-env boolean mask so
+        # the agent can zero the PPO gradient from "dead" envs — those whose
+        # fixed (body, object) has NO live pair this sub-stage (so their reset
+        # falls back to a not-yet-scheduled pair and would otherwise leak it into
+        # training). Body and object are fixed per env at creation, so this mask
+        # is STATIC for the whole sub-stage: compute it once and hand it to the
+        # agent via self.extras (same channel as 'terminate'). When off (default)
+        # the key is absent and the agent's masking is a no-op, so every other
+        # training run is unaffected.
+        self._live_env_mask = None
+        if cfg['env'].get('maskDeadEnvs', False) and self._pair_weight_per_body is not None:
+            no = len(self.object_name)
+            nb = len(self._body_subject_nums)
+            # live_bo[b, o] True iff body b's envs (which hold object o) have at
+            # least one positively-weighted pair among object o's motions.
+            live_bo = torch.zeros((nb, no), dtype=torch.bool, device=self.device)
+            for o in range(no):
+                valid = torch.where(self.obj2motion[o] == 1)[0]
+                if valid.numel() == 0:
+                    continue
+                live_bo[:, o] = self._pair_weight_per_body[:, valid].sum(dim=1) > 0
+            obj_per_env = torch.arange(self.num_envs, device=self.device) % no
+            self._live_env_mask = live_bo[self._env_subject_idx, obj_per_env].float()
+            self.extras["live_env_mask"] = self._live_env_mask
+            n_dead = int((self._live_env_mask == 0).sum())
+            print(f"[intermimic] dead-env gradient masking ON: {n_dead}/{self.num_envs} "
+                  f"envs have no live pair this sub-stage (gradients masked).", flush=True)
+
         self._curr_ref_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
         self._hist_ref_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
         self._curr_obs = torch.zeros((self.num_envs, self.ref_hoi_obs_size), device=self.device, dtype=torch.float)
@@ -653,6 +751,54 @@ class InterMimic(Humanoid_SMPLX):
         self._reset_default_env_ids = env_ids
         return
 
+    def _sample_motion_ids(self, env_ids):
+        # Pick a motion for each env, restricted to that env's fixed object
+        # bucket (env e physically owns object e % num_objects). Uniform by
+        # default; if per-(body, source) pair weights are loaded, sample
+        # proportional to W[env's body, candidate motion's source].
+        n_obj = len(self.object_name)
+        if self._pair_weight_per_body is None:
+            return to_torch(
+                [torch.where(self.obj2motion[e % n_obj] == 1)[0][
+                    torch.randint(int(self.obj2motion[e % n_obj].sum()), ())]
+                 for e in env_ids],
+                device=self.device, dtype=torch.long)
+        out = []
+        rec = self._pair_sample_counts is not None
+        for e in env_ids:
+            valid = torch.where(self.obj2motion[e % n_obj] == 1)[0]
+            w = self._pair_weight_per_body[self._env_subject_idx[e], valid]
+            if float(w.sum()) <= 0.0:
+                sel = valid[torch.randint(int(valid.shape[0]), ())]  # no live pair: fallback
+            else:
+                sel = valid[torch.multinomial(w, 1).squeeze(0)]
+            out.append(sel)
+            if rec:
+                # Tally the realized (source, body) pair. Counting both branches
+                # means the fallback's leaks show up against their 0 weight.
+                b = self._body_subject_nums[int(self._env_subject_idx[e])]
+                s = self._src_nums[int(sel)]
+                key = f"b{b}_s{s}"
+                self._pair_sample_counts[key] = self._pair_sample_counts.get(key, 0) + 1
+        if rec:
+            self._maybe_flush_pair_counts()
+        return to_torch(out, device=self.device, dtype=torch.long)
+
+    def _maybe_flush_pair_counts(self):
+        """Write the realized-sample tally to disk every _pair_counts_flush_every
+        reset batches (cheap, atomic via tmp+rename so the controller never reads
+        a half-written file)."""
+        self._pair_counts_since_flush += 1
+        if self._pair_counts_since_flush < self._pair_counts_flush_every:
+            return
+        self._pair_counts_since_flush = 0
+        import json
+        import os
+        tmp = self._pair_counts_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self._pair_sample_counts, f, sort_keys=True)
+        os.replace(tmp, self._pair_counts_path)
+
     def _reset_ref_state_init(self, env_ids):
         num_envs = env_ids.shape[0]
 
@@ -683,8 +829,9 @@ class InterMimic(Humanoid_SMPLX):
             for motion_id in i:
                 self._sequence_visit_count[motion_id] += 1
         else:
-            # Original random sampling for training
-            i = to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in env_ids], device=self.device, dtype=torch.long)
+            # Random sampling for training (uniform, or pair-weighted if a
+            # subjectPairWeightsFile is configured).
+            i = self._sample_motion_ids(env_ids)
 
         if (self._state_init == InterMimic.StateInit.Random
             or self._state_init == InterMimic.StateInit.Hybrid):
@@ -724,7 +871,7 @@ class InterMimic(Humanoid_SMPLX):
 
     def _reset_hybrid_state_init(self, env_ids):
         num_envs = env_ids.shape[0]
-        i = to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in env_ids], device=self.device, dtype=torch.long)
+        i = self._sample_motion_ids(env_ids)
         ref_probs = to_torch(np.array([self._hybrid_init_prob] * num_envs), device=self.device)
         ref_init_mask = torch.bernoulli(ref_probs) == 1.0
 
