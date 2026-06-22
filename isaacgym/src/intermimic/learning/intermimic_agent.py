@@ -305,6 +305,12 @@ class InterMimicAgent(common_agent.CommonAgent):
         super().set_train()
         if self._normalize_input:
             self._input_mean_std.train()
+        if getattr(self, '_mask_dead_envs', False) and self.normalize_input:
+            # Freeze the obs normalizer's per-minibatch auto-update during the
+            # training forwards; instead we update it ONCE per rollout over live
+            # envs only (see prepare_dataset), so dead envs never enter the
+            # running mean/std. No-op for non-curriculum runs (gate is off).
+            self.running_mean_std.eval()
         return
 
     def get_stats_weights(self):
@@ -487,6 +493,17 @@ class InterMimicAgent(common_agent.CommonAgent):
         self.dataset.values_dict['rand_action_mask'] = rand_action_mask
         if self._mask_dead_envs:
             self.dataset.values_dict['live_mask'] = batch_dict['live_mask']
+            if self.normalize_input:
+                # Update the obs running mean/std ONCE over this rollout's LIVE
+                # envs only (auto-update was frozen in set_train). Feeding raw
+                # obs in train mode triggers exactly one masked stat update.
+                live = batch_dict['live_mask'].bool()
+                live_obs = batch_dict['obses'][live]
+                if live_obs.shape[0] > 0:
+                    self.running_mean_std.train()
+                    with torch.no_grad():
+                        self.running_mean_std(live_obs)
+                    self.running_mean_std.eval()
         return
     
     def train_epoch(self):
