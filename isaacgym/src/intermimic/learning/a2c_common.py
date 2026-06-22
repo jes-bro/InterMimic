@@ -862,6 +862,12 @@ class DiscreteA2CBase(A2CBase):
         if self.normalize_advantage:
             if self.is_rnn:
                 advantages = torch_ext.normalization_with_masks(advantages, rnn_masks)
+            elif getattr(self, '_mask_dead_envs', False) and 'live_mask' in batch_dict:
+                # Curriculum dead-env masking: standardize advantages over the
+                # LIVE envs only, so envs whose gradient we zero out don't skew
+                # the mean/std the live envs are normalized against. Gated on
+                # _mask_dead_envs, so all other training keeps the plain path.
+                advantages = torch_ext.normalization_with_masks(advantages, batch_dict['live_mask'])
             else:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -1113,6 +1119,12 @@ class ContinuousA2CBase(A2CBase):
         if self.normalize_advantage:
             if self.is_rnn:
                 advantages = torch_ext.normalization_with_masks(advantages, rnn_masks)
+            elif getattr(self, '_mask_dead_envs', False) and 'live_mask' in batch_dict:
+                # Curriculum dead-env masking: standardize advantages over the
+                # LIVE envs only, so envs whose gradient we zero out don't skew
+                # the mean/std the live envs are normalized against. Gated on
+                # _mask_dead_envs, so all other training keeps the plain path.
+                advantages = torch_ext.normalization_with_masks(advantages, batch_dict['live_mask'])
             else:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
