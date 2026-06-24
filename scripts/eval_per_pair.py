@@ -34,8 +34,12 @@ METRIC_PATTERNS = {
 }
 
 
-def make_temp_yaml(base_yaml_path, body, source):
+def make_temp_yaml(base_yaml_path, body, source, all_objects=False):
     """Copy base_yaml and patch subjectBodies=[body], dataSub=[source].
+    If all_objects, also drop any dataObjects restriction so the eval covers
+    the subject's FULL object set (the base test config carries a student-eval
+    leftover `dataObjects: ['largetable','woodchair']` that otherwise filters
+    every clip to 2 objects -- and empties out subjects that lack them).
     Returns path to the temp file."""
     base_text = Path(base_yaml_path).read_text()
     new_text = re.sub(
@@ -48,6 +52,13 @@ def make_temp_yaml(base_yaml_path, body, source):
         rf"\1 ['{body}']",
         new_text, flags=re.MULTILINE,
     )
+    if all_objects:
+        # [] => env treats it as "no restriction" and loads all objects.
+        new_text = re.sub(
+            r"^(\s*dataObjects:).*$",
+            r"\1 []",
+            new_text, flags=re.MULTILINE,
+        )
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=f"_b{body}_s{source}.yaml", delete=False
     )
@@ -71,8 +82,8 @@ def parse_metrics(stdout):
     return out
 
 
-def run_eval(body, source, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec):
-    tmp_yaml = make_temp_yaml(base_yaml, body, source)
+def run_eval(body, source, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec, all_objects=False):
+    tmp_yaml = make_temp_yaml(base_yaml, body, source, all_objects=all_objects)
     cmd = [
         "python", "-u", "-m", "intermimic.run",
         "--task", "InterMimic",
@@ -142,6 +153,11 @@ def main():
     )
     p.add_argument("--num-envs", type=int, default=1024)
     p.add_argument("--timeout-per-pair", type=int, default=900)
+    p.add_argument("--all-objects", action="store_true",
+                   help="drop the base config's dataObjects restriction so each "
+                        "pair is evaluated on the subject's FULL object set (the "
+                        "test config's ['largetable','woodchair'] is a student-eval "
+                        "leftover that filters most subjects to empty).")
     p.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parents[1]),
@@ -161,7 +177,7 @@ def main():
                 metrics, rc, timed_out = run_eval(
                     body, source, args.base_yaml, args.train_yaml,
                     args.checkpoint, args.num_envs, args.repo_root,
-                    args.timeout_per_pair,
+                    args.timeout_per_pair, all_objects=args.all_objects,
                 )
                 row = {
                     "body": body,

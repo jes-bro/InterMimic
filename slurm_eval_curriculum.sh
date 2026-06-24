@@ -43,10 +43,15 @@ SOURCES="${SOURCES:-sub1 sub2 sub3 sub5 sub9 sub17}"
 NUM_ENVS="${NUM_ENVS:-1024}"
 TIMEOUT="${TIMEOUT:-900}"
 OUT="${OUT:-eval_results/curriculum_ist_meas_7700_indist.csv}"
+# The base test config restricts to dataObjects ['largetable','woodchair'] (a
+# student-eval leftover) -- the curriculum trained on ALL objects, so by default
+# we drop that restriction. Set ALL_OBJECTS=0 to keep the base config's filter.
+ALL_OBJ=""
+[ "${ALL_OBJECTS:-1}" = "1" ] && ALL_OBJ="--all-objects"
 
 mkdir -p "$(dirname "$OUT")"
 echo "[eval] checkpoint = $CHECKPOINT"
-echo "[eval] bodies=($BODIES)  x  sources=($SOURCES)"
+echo "[eval] bodies=($BODIES)  x  sources=($SOURCES)  all_objects=${ALL_OBJECTS:-1}"
 echo "[eval] -> $OUT"
 [ -f "$CHECKPOINT" ] || { echo "[eval] ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 
@@ -56,7 +61,7 @@ python -u scripts/eval_per_pair.py \
     --sources $SOURCES \
     --output-csv "$OUT" \
     --num-envs "$NUM_ENVS" \
-    --timeout-per-pair "$TIMEOUT"
+    --timeout-per-pair "$TIMEOUT" $ALL_OBJ
 
 echo
 echo "================ EVAL SUMMARY ================"
