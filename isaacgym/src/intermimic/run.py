@@ -210,6 +210,11 @@ def build_alg_runner(algo_observer):
     runner.player_factory.register_builder('intermimic', lambda **kwargs : intermimic_players.InterMimicPlayerContinuous(**kwargs))
     runner.model_builder.model_factory.register_builder('intermimic', lambda network, **kwargs : intermimic_models.ModelInterMimicContinuous(network))  
     runner.model_builder.network_factory.register_builder('intermimic', lambda **kwargs : intermimic_network_builder.InterMimicBuilder())
+    # Transformer policy variant (temporal transformer over 4 obs horizons).
+    # Harmless to register -- only used when a train config sets network name
+    # 'intermimic_transformer' (requires env useTransformerObs: true).
+    from .learning import intermimic_transformer_network_builder
+    runner.model_builder.network_factory.register_builder('intermimic_transformer', lambda **kwargs : intermimic_transformer_network_builder.InterMimicBuilder())
 
     return runner
 

@@ -39,7 +39,11 @@ EXPOSURE="${EXPOSURE:-estimated}"
 # Set MASK_DEAD_ENVS=1 to hard-guarantee no pair leaks (zeroes dead envs' grads).
 MASK_DEAD=""
 [ -n "${MASK_DEAD_ENVS:-}" ] && MASK_DEAD="--mask-dead-envs"
+# NETWORK=transformer for the temporal-transformer policy (vs default MLP).
+# Use a DIFFERENT RUN_NAME for the transformer arm so its work/checkpoint dirs
+# (and warm-start chain) don't collide with the MLP run.
+NETWORK="${NETWORK:-mlp}"
 
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
-    --exposure "$EXPOSURE" $MASK_DEAD --resume
+    --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" --resume

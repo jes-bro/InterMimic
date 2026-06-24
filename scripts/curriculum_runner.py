@@ -112,7 +112,8 @@ env:
 {pair_weights_line}
 {counts_line}
   ballSize: 1.
-  numObs: 3230
+  numObs: {num_obs}
+  useTransformerObs: {use_transformer_obs}
   motion_file: InterAct/OMOMO_new
   robotType: "smplx/omomo.xml"
   objectDensity: 200
@@ -179,7 +180,7 @@ params:
     name: intermimic
 
   network:
-    name: intermimic
+    name: {network_name}
     separate: True
 
     space:
@@ -476,6 +477,11 @@ def main():
     ap.add_argument("--no-echo-configs", action="store_false", dest="echo_configs",
                     help="don't dump each substage's full env/train YAML into the log "
                          "(the structured per-substage summary is always printed)")
+    ap.add_argument("--network", choices=["mlp", "transformer"], default="mlp",
+                    help="policy network. mlp (stock, 2-horizon obs, numObs 3230) "
+                         "or transformer (temporal transformer over 4-horizon obs, "
+                         "numObs 6524). Same curriculum/fixes either way -- only the "
+                         "net + obs layout change, for a fair MLP-vs-transformer test.")
     args = ap.parse_args()
 
     os.chdir(REPO)  # so all repo-relative paths resolve
@@ -485,11 +491,17 @@ def main():
 
     # Echo the full invocation + settings up front so every run's log is
     # self-describing -- you can always reconstruct exactly what was launched.
+    # Network selection: stock MLP vs the temporal transformer (4-horizon obs).
+    is_transformer = args.network == "transformer"
+    network_name = "intermimic_transformer" if is_transformer else "intermimic"
+    use_transformer_obs = "true" if is_transformer else "false"
+    num_obs = 6524 if is_transformer else 3230
     print(f"[curriculum] invocation: {' '.join(sys.argv)}", flush=True)
     print(f"[curriculum] settings: run={args.run_name} schedule={args.schedule} "
           f"balance={args.balance} exposure={args.exposure} "
           f"mask_dead_envs={args.mask_dead_envs} num_envs={args.num_envs} "
-          f"cross_epoch_divisor={args.cross_epoch_divisor} order={order}", flush=True)
+          f"cross_epoch_divisor={args.cross_epoch_divisor} "
+          f"network={args.network}(numObs={num_obs}) order={order}", flush=True)
 
     # Sub-staging masks not-yet-live pairs via a weights file; plain uniform
     # sampling can't express that, so force weights on whenever we sub-stage.
@@ -586,11 +598,12 @@ def main():
             stage=ss['suffix'], active=active, num_envs=args.num_envs,
             datasub=yaml_sub_list(ss['sources']), bodies=yaml_sub_list(ss['bodies']),
             pair_weights_line=pair_weights_line, counts_line=counts_line,
-            mask_dead_envs=mask_dead))
+            mask_dead_envs=mask_dead, num_obs=num_obs,
+            use_transformer_obs=use_transformer_obs))
         train_cfg.write_text(TRAIN_TMPL.format(
             stage=ss['suffix'], active=active, exp_name=exp_name,
             save_frequency=args.save_frequency, resume_from=resume_from,
-            mask_dead_envs=mask_dead))
+            mask_dead_envs=mask_dead, network_name=network_name))
 
         print(f"\n[curriculum] === substage {idx + 1}/{len(substages)} "
               f"[s{ss['suffix']} {ss['phase']} +sub{ss['new']}] active={active} "

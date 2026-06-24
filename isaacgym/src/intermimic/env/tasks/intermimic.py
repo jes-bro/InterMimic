@@ -215,6 +215,13 @@ class InterMimic(Humanoid_SMPLX):
         # numObs keeps its old value. The user is responsible for setting
         # numObs to base+32 in cfg when they enable betas_file.
         self._use_betas_obs = betas_file is not None
+        # Transformer policy obs (opt-in). When True, obs_buf is built as 4
+        # multi-horizon tokens (delta_t = 0, 1, 4, 16) instead of the MLP's
+        # 2-horizon (1, 16), so the temporal transformer can attend over them.
+        # Betas (if used) are folded into EACH token so the net's
+        # view(batch, 4, -1) reshape stays clean: numObs = 4 * 1599 = 6396, or
+        # 4 * (1599 + 32) = 6524 with betas. Default False => stock MLP obs.
+        self._use_transformer_obs = cfg['env'].get('useTransformerObs', False)
         if betas_file is not None:
             from ...utils.path_utils import resolve_repo_path
             betas_path = resolve_repo_path(betas_file)
@@ -1097,37 +1104,44 @@ class InterMimic(Humanoid_SMPLX):
         return ig_all, ig, ref_ig
         
     def _compute_observations(self, env_ids=None):
+        # Horizons stacked into obs_buf: MLP uses 2 (delta_t 1, 16); the
+        # transformer policy uses 4 (0, 1, 4, 16) so it can attend over them.
+        horizons = [0, 1, 4, 16] if self._use_transformer_obs else [1, 16]
         if (env_ids is None):
             self._curr_ref_obs[:] = self.hoi_data[self.data_id[env_ids], self.progress_buf[env_ids]].clone()
-            # Teacher policy always uses MLP (2 time steps: 1, 16)
-            obs_terms = [
-                self._compute_observations_iter(self.hoi_data, None, 1),
-                self._compute_observations_iter(self.hoi_data, None, 16),
-            ]
-            if self._use_betas_obs:
-                # Append (source_betas, target_betas) — 32 dims total.
-                # source_betas[data_id]: from motion file (whose mocap we're tracking)
-                # _env_target_betas:     env's actual body in sim (chunk 1 assignment)
-                obs_terms.append(torch.cat(
-                    [self.source_betas[self.data_id], self._env_target_betas],
-                    dim=-1,
-                ))
-            self.obs_buf[:] = torch.cat(obs_terms, dim=-1)
-
+            # (source_betas, target_betas) — 32 dims. source_betas[data_id]: from
+            # the motion file; _env_target_betas: the env's actual body in sim.
+            betas = torch.cat([self.source_betas[self.data_id], self._env_target_betas], dim=-1) \
+                if self._use_betas_obs else None
+            self.obs_buf[:] = self._stack_obs_horizons(None, horizons, betas)
         else:
             self._curr_ref_obs[env_ids] = self.hoi_data[self.data_id[env_ids], self.progress_buf[env_ids]].clone()
-            # Teacher policy always uses MLP (2 time steps: 1, 16)
-            obs_terms = [
-                self._compute_observations_iter(self.hoi_data, env_ids, 1),
-                self._compute_observations_iter(self.hoi_data, env_ids, 16),
-            ]
-            if self._use_betas_obs:
-                obs_terms.append(torch.cat(
-                    [self.source_betas[self.data_id[env_ids]],
-                     self._env_target_betas[env_ids]],
-                    dim=-1,
-                ))
-            self.obs_buf[env_ids] = torch.cat(obs_terms, dim=-1)
+            betas = torch.cat([self.source_betas[self.data_id[env_ids]],
+                               self._env_target_betas[env_ids]], dim=-1) \
+                if self._use_betas_obs else None
+            self.obs_buf[env_ids] = self._stack_obs_horizons(env_ids, horizons, betas)
+
+    def _stack_obs_horizons(self, env_ids, horizons, betas):
+        """Build the stacked policy obs over `horizons` (delta_t values).
+
+        MLP (2 horizons 1,16): [obs@1, obs@16, betas?] -- betas appended ONCE,
+        byte-identical to the original teacher obs.
+        Transformer (4 horizons 0,1,4,16): each horizon is one token with betas
+        folded IN, so the net's view(batch, 4, -1) recovers clean per-token
+        features (4 * (1599+32) = 6524, or 4*1599 = 6396 without betas).
+        """
+        if self._use_transformer_obs:
+            toks = []
+            for dt in horizons:
+                o = self._compute_observations_iter(self.hoi_data, env_ids, dt)
+                if betas is not None:
+                    o = torch.cat([o, betas], dim=-1)   # fold betas into each token
+                toks.append(o)
+            return torch.cat(toks, dim=-1)
+        obs_terms = [self._compute_observations_iter(self.hoi_data, env_ids, dt) for dt in horizons]
+        if betas is not None:
+            obs_terms.append(betas)
+        return torch.cat(obs_terms, dim=-1)
 
         return
     
