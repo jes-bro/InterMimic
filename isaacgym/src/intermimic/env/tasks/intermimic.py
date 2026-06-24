@@ -256,6 +256,12 @@ class InterMimic(Humanoid_SMPLX):
             print(f"[intermimic] reward structure: objectTerms(ro*rig*rcg)={self._object_terms_enable}, "
                   f"pose={self._pose_term_enable}(lambda={self._pose_lambda}), "
                   f"hold={self._hold_term_enable}(lambda={self._hold_lambda})", flush=True)
+        # Opt-in verification prints (mass-hold + pose-error sanity). Off unless
+        # cfg objectAugDebug is set OR the OBJECTAUG_DEBUG=1 env var is exported
+        # (the env var lets the verify slurm job enable it with no config edit).
+        # No effect on training when off.
+        self._objectaug_debug = (bool(cfg['env'].get('objectAugDebug', False))
+                                 or os.environ.get('OBJECTAUG_DEBUG') == '1')
 
         self.ref_hoi_obs_size = 7 + 51 * 6 + 52 * 13 + 13 + 52 * 3 + 52 + 1
         self.num_motions = len(self.motion_file)
@@ -784,6 +790,14 @@ class InterMimic(Humanoid_SMPLX):
                 bp.inertia.z.x *= inv; bp.inertia.z.y *= inv; bp.inertia.z.z *= inv
             self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
                                                      recomputeInertia=False)
+
+        if self._objectaug_debug and env_id < 6:
+            # Verify mass-hold: total object mass should be ~constant across
+            # envs with different aug (if it scales with aug**3, the correction
+            # didn't take -> the set_actor_scale prop-ordering assumption is wrong).
+            dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            print(f"[masschk] env {env_id} aug={aug:.3f} "
+                  f"total_mass={sum(p.mass for p in dbg):.4f}", flush=True)
 
         return
 
@@ -1489,6 +1503,17 @@ class InterMimic(Humanoid_SMPLX):
         dof_sim = self.extract_data_component('dof_pos', obs=self._curr_obs)
         dof_ref = self.extract_data_component('dof_pos', obs=self._curr_ref_obs)
         err = ((dof_ref - dof_sim) ** 2).sum(dim=-1)
+        if self._objectaug_debug:
+            # Verify dof alignment + lambda scale: just-reset envs are state-init'd
+            # TO the reference, so their err must be ~0 (large => sim/ref dof
+            # orderings differ). Throttled so it doesn't flood the log.
+            self._posechk_n = getattr(self, '_posechk_n', 0) + 1
+            if self._posechk_n % 50 == 1:
+                fresh = (self.progress_buf - self.start_times) <= 1
+                if bool(fresh.any()):
+                    print(f"[posechk] {int(fresh.sum())} fresh envs: err mean="
+                          f"{err[fresh].mean().item():.5f} max={err[fresh].max().item():.5f} "
+                          f"(expect ~0 at reset => dof sim/ref aligned)", flush=True)
         return torch.exp(-self._pose_lambda * err)
 
     def _compute_hold_reward(self, key_pos, obj_points):
