@@ -372,6 +372,22 @@ class InterMimicAgent(common_agent.CommonAgent):
                 self.dones[invalid_batches] = True
                 infos['terminate'][invalid_batches] = True
 
+            # Contain non-finite rewards. A blown-up physics env yields a NaN/Inf
+            # reward that -- unlike its observation, which is zeroed above -- is
+            # NOT sanitized: it flows through the PPO advantage/gradient and NaNs
+            # the policy weights, so the NEXT forward produces Normal(loc=NaN) for
+            # the whole batch and the job dies (the ValueError we saw). Zero such
+            # rewards and terminate those envs (so their next_value is zeroed at
+            # the terminated-bootstrap below too). Reduce over any value dims to
+            # a per-env mask so this works whether rewards is (N,) or (N,1).
+            bad_rew = ~torch.isfinite(rewards.view(rewards.shape[0], -1)).all(dim=1)
+            if torch.any(bad_rew):
+                print(f"[agent] non-finite reward in {int(bad_rew.sum())} env(s); "
+                      f"zeroing + terminating to protect the PPO update")
+                rewards = torch.nan_to_num(rewards, nan=0.0, posinf=0.0, neginf=0.0)
+                self.dones[bad_rew] = True
+                infos['terminate'][bad_rew] = True
+
             shaped_rewards = self.rewards_shaper(rewards)
             # shaped_rewards = shaped_rewards * (((res_dict['actions'] - res_dict['mus'])**2).sum(dim=-1).mul(-0.01).exp().unsqueeze(-1))
             self.experience_buffer.update_data('rewards', n, shaped_rewards)
