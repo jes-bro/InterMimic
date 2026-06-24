@@ -394,13 +394,16 @@ class InterMimicAgent(common_agent.CommonAgent):
             self.experience_buffer.update_data('next_obses', n, self.obs['obs'])
             self.experience_buffer.update_data('dones', n, self.dones)
             self.experience_buffer.update_data('rand_action_mask', n, res_dict['rand_action_mask'])
+            live_mask_env = None  # per-env bool: True = env has a live pair this substage
             if self._mask_dead_envs:
                 # Static per-env mask published by the env via infos; 1 = env has
                 # a live pair (counts toward the gradient), 0 = dead (masked out).
                 live_mask = infos.get('live_env_mask', None)
                 if live_mask is None:
                     live_mask = torch.ones_like(self.dones, dtype=torch.float32)
-                self.experience_buffer.update_data('live_mask', n, live_mask.to(self.ppo_device).float())
+                live_mask = live_mask.to(self.ppo_device).float()
+                self.experience_buffer.update_data('live_mask', n, live_mask)
+                live_mask_env = live_mask.bool()
 
             terminated = infos['terminate'].float()
             terminated = terminated.unsqueeze(-1)
@@ -412,9 +415,20 @@ class InterMimicAgent(common_agent.CommonAgent):
             self.current_lengths += 1
             all_done_indices = self.dones.nonzero(as_tuple=False)
             self.done_indices = all_done_indices[::self.num_agents]
-  
-            self.game_rewards.update(self.current_rewards[self.done_indices])
-            self.game_lengths.update(self.current_lengths[self.done_indices])
+
+            # Report mean_rewards / lengths over LIVE done envs only when masking
+            # dead envs. Dead/leaked envs run not-yet-scheduled pairs and are
+            # already excluded from the gradient (mask_dead_envs); including them
+            # here would pollute mean_rewards with pairs we are NOT training --
+            # the curriculum "leak" where high-dead substages report a reward
+            # dominated by hard untrained pairs. With masking OFF, live_mask_env
+            # is None and this is exactly the stock behavior (report all done).
+            report_indices = self.done_indices
+            if live_mask_env is not None and report_indices.numel() > 0:
+                flat = report_indices.squeeze(-1)
+                report_indices = flat[live_mask_env[flat]].unsqueeze(-1)
+            self.game_rewards.update(self.current_rewards[report_indices])
+            self.game_lengths.update(self.current_lengths[report_indices])
             self.algo_observer.process_infos(infos, self.done_indices)
 
             not_dones = 1.0 - self.dones.float()

@@ -473,12 +473,23 @@ def main():
                     help="resume curriculum from state.json in the run dir")
     ap.add_argument("--dry-run", action="store_true",
                     help="generate all stage configs + weights and exit (no training)")
+    ap.add_argument("--no-echo-configs", action="store_false", dest="echo_configs",
+                    help="don't dump each substage's full env/train YAML into the log "
+                         "(the structured per-substage summary is always printed)")
     args = ap.parse_args()
 
     os.chdir(REPO)  # so all repo-relative paths resolve
     order = args.order
     assert not (set(order) & set(HELD_OUT)), \
         f"fold order must not include held-out subjects {HELD_OUT}"
+
+    # Echo the full invocation + settings up front so every run's log is
+    # self-describing -- you can always reconstruct exactly what was launched.
+    print(f"[curriculum] invocation: {' '.join(sys.argv)}", flush=True)
+    print(f"[curriculum] settings: run={args.run_name} schedule={args.schedule} "
+          f"balance={args.balance} exposure={args.exposure} "
+          f"mask_dead_envs={args.mask_dead_envs} num_envs={args.num_envs} "
+          f"cross_epoch_divisor={args.cross_epoch_divisor} order={order}", flush=True)
 
     # Sub-staging masks not-yet-live pairs via a weights file; plain uniform
     # sampling can't express that, so force weights on whenever we sub-stage.
@@ -585,6 +596,18 @@ def main():
               f"[s{ss['suffix']} {ss['phase']} +sub{ss['new']}] active={active} "
               f"live_pairs={len(ss['live'])} budget(min/pat/cap={min_e}/{pat}/{smax}) "
               f"exp={exp_name} resume={resume_from} ===", flush=True)
+        # Self-describing substage block: dump the exact configs it runs into the
+        # log so you never have to go find the cfg files to know what ran.
+        if args.echo_configs:
+            for label, cfg_path in (("env", env_cfg), ("train", train_cfg)):
+                print(f"[curriculum] ----- {label} cfg ({rel(cfg_path)}) -----", flush=True)
+                print(cfg_path.read_text(), flush=True)
+            if use_weights:
+                nlive = sum(v > 0 for v in weights.values())
+                print(f"[curriculum] ----- pair weights ({rel(weights_file)}): "
+                      f"{nlive} live / {len(weights)} pairs, {len(weights) - nlive} masked "
+                      f"-----", flush=True)
+            print(f"[curriculum] ----- end substage {idx + 1} configs -----", flush=True)
         if args.dry_run:
             extra = (f", {rel(weights_file)} ({len(weights)} pairs, "
                      f"{sum(v > 0 for v in weights.values())} live)" if use_weights
