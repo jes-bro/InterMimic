@@ -344,6 +344,17 @@ class InterMimicAgent(common_agent.CommonAgent):
         for n in range(self.horizon_length):
 
             self.obs = self.env_reset(self.done_indices)
+            # Sanitize the RESET obs too. A freshly-reset env that didn't recover
+            # from a blow-up can still be non-finite, and (unlike the post-step
+            # obs below) this one is both STORED in the buffer and FED to the
+            # policy with no guard -> NaN mus/values in the rollout -> poisoned
+            # PPO update -> NaN weights -> Normal(loc=NaN) crash next epoch. This
+            # is the obs path my reward fix couldn't catch.
+            reset_bad = ~torch.isfinite(self.obs['obs'])
+            if torch.any(reset_bad):
+                print(f"[agent] non-finite RESET obs in "
+                      f"{int(reset_bad.any(dim=1).sum())} env(s); zeroing", flush=True)
+                self.obs['obs'][reset_bad] = 0.0
 
             self.experience_buffer.update_data('obses', n, self.obs['obs'])
 
@@ -459,6 +470,13 @@ class InterMimicAgent(common_agent.CommonAgent):
 
     def get_action_values(self, obs_dict, rand_action_probs):
         processed_obs = self._preproc_obs(obs_dict['obs'])
+        # Last-line guard at the policy's doorstep: a non-finite obs (any path)
+        # or a poisoned obs-normalizer would make processed_obs NaN -> NaN mu ->
+        # Normal(loc=NaN) crash, and NaN mus/values get written to the rollout
+        # buffer. Every obs reaching the model passes through here, so zeroing
+        # non-finite entries here is the catch-all.
+        if not torch.isfinite(processed_obs).all():
+            processed_obs = torch.nan_to_num(processed_obs, nan=0.0, posinf=0.0, neginf=0.0)
 
         self.model.eval()
         input_dict = {
