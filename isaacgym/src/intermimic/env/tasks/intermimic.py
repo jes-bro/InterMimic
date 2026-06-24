@@ -189,6 +189,74 @@ class InterMimic(Humanoid_SMPLX):
         self.object_name = object_name_set
         self.robot_type = cfg['env']['robotType']
         self.object_density = cfg['env']['objectDensity']
+
+        # --- Object augmentation (opt-in) ------------------------------------
+        # When enabled, each env's object is perturbed so the policy must ADAPT
+        # its interaction to a diverse object rather than reproduce the exact
+        # source clip:
+        #   * scale     : per-env, FIXED at env creation. Isaac Gym cannot
+        #                 rescale collision geometry after prepare_sim, so the
+        #                 scale spread is baked across the env pool; a training
+        #                 "stage" re-bakes envs with a wider range and warm-
+        #                 starts the policy (curriculum without a live sim).
+        #                 Mass is held ~constant (corrected in _build_target).
+        #   * yaw       : per-EPISODE spin of the object about world-Z, applied
+        #                 to the initial object pose in _reset_target.
+        #   * translate : per-EPISODE XY offset of the initial object pose.
+        # OFF (default) => self._obj_scale is all ones and every gate is a
+        # no-op, so behaviour is byte-identical to stock InterMimic.
+        oa = cfg['env'].get('objectAug', None)
+        self._object_aug = bool(oa) and bool(oa.get('enable', False))
+        num_envs_cfg = int(cfg['env']['numEnvs'])
+        if self._object_aug:
+            scale_lo = float(oa.get('scaleMin', 1.0))
+            scale_hi = float(oa.get('scaleMax', 1.0))
+            self._object_aug_yaw = float(oa.get('yawRad', 0.0))            # +/- radians
+            self._object_aug_translate = float(oa.get('translateM', 0.0))  # +/- metres (XY)
+            self._object_aug_hold_mass = bool(oa.get('holdMass', True))
+            # Per-env scale sampled once with a FIXED seed: reproducible and
+            # decorrelated from the object/body env-striping. The whole
+            # [lo,hi] range is spread across the pool so one stage trains on
+            # the full diversity for its range.
+            g = torch.Generator().manual_seed(12345)
+            self._obj_scale = (torch.rand(num_envs_cfg, generator=g)
+                               * (scale_hi - scale_lo) + scale_lo).to(self._init_device)
+            print(f"[intermimic] objectAug ON: scale U({scale_lo},{scale_hi}), "
+                  f"yaw +/-{self._object_aug_yaw:.3f}rad, translate +/-{self._object_aug_translate:.3f}m, "
+                  f"holdMass={self._object_aug_hold_mass}", flush=True)
+        else:
+            self._object_aug_yaw = 0.0
+            self._object_aug_translate = 0.0
+            self._object_aug_hold_mass = False
+            self._obj_scale = torch.ones(num_envs_cfg, device=self._init_device)
+
+        # --- Optional extra reward-term toggles (opt-in) ---------------------
+        # Two INDEPENDENT multiplicative factors layered onto the stock reward
+        # product (rb*ro*rig*rcg). Each defaults OFF; when off it is never
+        # multiplied in, so the reward is byte-identical to stock. Any
+        # combination (neither / pose / hold / both) is selectable from config
+        # alone, no code change. These LAYER ON -- they do not replace ro/rig/rcg.
+        rt = cfg['env'].get('rewardTerms', {}) or {}
+        pose_cfg = rt.get('pose', {}) or {}
+        hold_cfg = rt.get('hold', {}) or {}
+        # Term 1: parent-relative joint-angle pose matching off dof_pos.
+        self._pose_term_enable = bool(pose_cfg.get('enable', False))
+        self._pose_lambda = float(pose_cfg.get('lambda', 0.02))
+        # Term 2: relaxed contact / "hold" factor (promotion-only).
+        self._hold_term_enable = bool(hold_cfg.get('enable', False))
+        self._hold_lambda = float(hold_cfg.get('lambda', 5.0))
+        # Stock object-interaction terms (ro*rig*rcg) -- ON by default, so the
+        # default reward is byte-identical to stock InterMimic (rb*ro*rig*rcg).
+        # Toggle OFF (objectTermsEnable: false) for objectAug runs, where the
+        # perturbed object makes those terms unachievable and they'd collapse
+        # the multiplicative product. OFF => reward base is rb (humanoid
+        # tracking) plus whichever extra factors below are enabled.
+        self._object_terms_enable = bool(cfg['env'].get('objectTermsEnable', True))
+        if self._pose_term_enable or self._hold_term_enable or not self._object_terms_enable:
+            print(f"[intermimic] reward structure: objectTerms(ro*rig*rcg)={self._object_terms_enable}, "
+                  f"pose={self._pose_term_enable}(lambda={self._pose_lambda}), "
+                  f"hold={self._hold_term_enable}(lambda={self._hold_lambda})", flush=True)
+
         self.ref_hoi_obs_size = 7 + 51 * 6 + 52 * 13 + 13 + 52 * 3 + 52 + 1
         self.num_motions = len(self.motion_file)
 
@@ -689,7 +757,33 @@ class InterMimic(Humanoid_SMPLX):
         self.gym.set_actor_rigid_shape_properties(env_ptr, target_handle, props)
 
         self._target_handles.append(target_handle)
-        self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size)
+
+        # Apply this env's augmentation scale on top of the nominal ballSize.
+        # aug == 1.0 when objectAug is off, so this is identical to the stock
+        # `set_actor_scale(env_ptr, target_handle, self.ball_size)` call.
+        aug = float(self._obj_scale[env_id])
+        self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size * aug)
+
+        # Hold mass ~constant under scaling. set_actor_scale grows mass by the
+        # cube of the scale (and inertia by the 5th power). Relative to the
+        # nominal ballSize object, the aug factor alone multiplies mass by
+        # aug**3 and inertia by aug**5. Dividing both by aug**3 restores the
+        # nominal mass while leaving inertia consistent with that mass at the
+        # new size (inertia ~ mass * L**2, i.e. scaled by aug**2). This keeps
+        # the geometric/contact challenge separate from a dynamics change.
+        # NOTE: assumes set_actor_scale has already scaled the rigid-body
+        # props before we read them back here — verify on the cluster (print
+        # a few masses) when first enabling objectAug.
+        if self._object_aug and self._object_aug_hold_mass and aug != 1.0:
+            inv = 1.0 / (aug ** 3)
+            props = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            for bp in props:
+                bp.mass *= inv
+                bp.inertia.x.x *= inv; bp.inertia.x.y *= inv; bp.inertia.x.z *= inv
+                bp.inertia.y.x *= inv; bp.inertia.y.y *= inv; bp.inertia.y.z *= inv
+                bp.inertia.z.x *= inv; bp.inertia.z.y *= inv; bp.inertia.z.z *= inv
+            self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
+                                                     recomputeInertia=False)
 
         return
 
@@ -710,7 +804,29 @@ class InterMimic(Humanoid_SMPLX):
         self._target_states[env_ids, 3:7] = self.extract_ref_component('obj_rot', self.data_id[env_ids], self.ref_index[env_ids], self.progress_buf[env_ids])
         self._target_states[env_ids, 7:10] = self.extract_ref_component('obj_pos_vel', self.data_id[env_ids], self.ref_index[env_ids], self.progress_buf[env_ids])
         self._target_states[env_ids, 10:13] = self.extract_ref_component('obj_rot_vel', self.data_id[env_ids], self.ref_index[env_ids], self.progress_buf[env_ids])
-        return  
+
+        # Object augmentation: perturb the INITIAL object pose per episode so
+        # the policy starts from a diverse object placement and must adapt its
+        # grasp/interaction. Physics then takes over. No-op when objectAug is
+        # off (yaw/translate ranges default to 0).
+        if self._object_aug and (self._object_aug_yaw > 0.0 or self._object_aug_translate > 0.0):
+            n = env_ids.shape[0] if torch.is_tensor(env_ids) else len(env_ids)
+            if self._object_aug_yaw > 0.0:
+                # Random spin about world-Z, applied to the object's orientation
+                # (object stays at its position, just rotated in place). Build
+                # the yaw quaternion directly (xyzw) to avoid a helper import.
+                yaw = (torch.rand(n, device=self.device) * 2.0 - 1.0) * self._object_aug_yaw
+                half = yaw * 0.5
+                z_quat = torch.zeros(n, 4, device=self.device)
+                z_quat[:, 2] = torch.sin(half)
+                z_quat[:, 3] = torch.cos(half)
+                self._target_states[env_ids, 3:7] = quat_mul(z_quat, self._target_states[env_ids, 3:7])
+            if self._object_aug_translate > 0.0:
+                # Random XY offset (height left untouched so the object neither
+                # floats nor sinks into the floor).
+                dxy = (torch.rand(n, 2, device=self.device) * 2.0 - 1.0) * self._object_aug_translate
+                self._target_states[env_ids, 0:2] += dxy
+        return
 
     def _reset_env_tensors(self, env_ids):
         super()._reset_env_tensors(env_ids)
@@ -1131,6 +1247,20 @@ class InterMimic(Humanoid_SMPLX):
 
         return
     
+    def _current_object_points(self):
+        """Per-env object surface point cloud (num_envs, 1024, 3).
+
+        Gathers each env's object template by object_id, then scales it by that
+        env's fixed objectAug factor so the reward/obs geometry matches the
+        actually-scaled collision body. When objectAug is off, self._obj_scale
+        is all ones and this is exactly the stock
+        `self.object_points[self.object_id[self.data_id]]` gather.
+        """
+        pts = self.object_points[self.object_id[self.data_id]]
+        if self._object_aug:
+            pts = pts * self._obj_scale.view(-1, 1, 1)
+        return pts
+
     def _compute_hoi_observations(self, env_ids=None):
         self._curr_obs[:] = self.build_hoi_observations(self._rigid_body_pos[:, 0, :],
                                                         self._rigid_body_rot[:, 0, :],
@@ -1141,7 +1271,7 @@ class InterMimic(Humanoid_SMPLX):
                                                         self._dof_obs_size, self._target_states,
                                                         self._tar_contact_forces,
                                                         self._contact_forces,
-                                                        self.object_points[self.object_id[self.data_id]],
+                                                        self._current_object_points(),
                                                         self._rigid_body_rot,
                                                         self._rigid_body_vel,
                                                         self._rigid_body_ang_vel
@@ -1285,10 +1415,35 @@ class InterMimic(Humanoid_SMPLX):
         ro, object_reset, obj_points, ref_obj_points = self.compute_obj_reward(self.reward_weights)
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
-        self.rew_buf[:] = rb * ro * rig * rcg
+
+        # Reward product. Base is rb (humanoid pose tracking), always on.
+        reward = rb
+        # Stock object-interaction terms (object-pose ro, interaction-graph rig,
+        # contact-graph rcg). ON by default => byte-identical to stock
+        # InterMimic (rb*ro*rig*rcg). Toggle OFF for objectAug runs where the
+        # perturbed object makes them unachievable and they'd collapse the
+        # product.
+        if self._object_terms_enable:
+            reward = reward * ro * rig * rcg
+        # Optional EXTRA factors, each independently toggled, each in (0, 1].
+        # They LAYER ON; disabled => not multiplied in.
+        if self._pose_term_enable:
+            reward = reward * self._compute_pose_reward()                     # Term 1
+        if self._hold_term_enable:
+            reward = reward * self._compute_hold_reward(key_pos, obj_points)  # Term 2
+        self.rew_buf[:] = reward
+
+        # Stock reset logic.
         kinematic_reset = torch.logical_or(human_reset, object_reset)
         self.contact_reset = (self.contact_reset + contact_reset) * contact_reset
         self.kinematic_reset = torch.logical_or(ig_reset, kinematic_reset)
+        # If the object terms are dropped (objectTermsEnable off) or the object
+        # is perturbed (objectAug), the object/ig/contact resets are either
+        # meaningless or fire spuriously every step -> relax to human-only
+        # termination. Default (object terms on, no aug) => stock resets.
+        if self._object_aug or not self._object_terms_enable:
+            self.contact_reset = torch.zeros_like(self.contact_reset)
+            self.kinematic_reset = human_reset
         index = torch.arange(self._curr_reward.shape[0])
         # # print(self._humanoid_root_states.dtype)
         self._curr_reward[index, self.progress_buf - self.start_times] = self.rew_buf
@@ -1313,6 +1468,72 @@ class InterMimic(Humanoid_SMPLX):
 
         return
     
+    def _compute_pose_reward(self):
+        """Term 1: parent-relative joint-angle pose matching (opt-in factor).
+
+        Compares simulated vs reference dof_pos -- the 51x3 = 153 parent-
+        relative joint DOFs (raw, identical convention on both sides, no
+        heading dependence). The SMPL-X humanoid's DOFs are all bounded hinges
+        (type='hinge', range +/-180deg, limited='true'), so they do NOT wrap;
+        and the codebase's dof_vel / energy penalty already diff dof values by
+        plain subtraction. We match that: plain subtraction, no +/-pi wrap.
+
+            rew_factor = exp(-lambda_pose * sum_j (dof_ref - dof_sim)^2)
+
+        in (0, 1], multiplied into the reward product when rewardTerms.pose.
+        enable is set. NOTE: the error is a SUM over 153 DOFs (per the spec),
+        so lambda_pose is ~1/150 of a mean-based weight -- the 0.02 default is
+        roughly the rotation term's 2.5 expressed per-DOF. Tune via
+        rewardTerms.pose.lambda.
+        """
+        dof_sim = self.extract_data_component('dof_pos', obs=self._curr_obs)
+        dof_ref = self.extract_data_component('dof_pos', obs=self._curr_ref_obs)
+        err = ((dof_ref - dof_sim) ** 2).sum(dim=-1)
+        return torch.exp(-self._pose_lambda * err)
+
+    def _compute_hold_reward(self, key_pos, obj_points):
+        """Term 2: relaxed contact / "hold" factor (opt-in, promotion-only).
+
+        A LAYERED factor (NOT a replacement for rcg/ro/rig). Encourages the
+        policy to keep the object held without requiring the source clip's
+        exact contact pattern -- useful when objectAug perturbs the object so
+        the exact pattern is unreachable. Two soft sub-factors, both from LIVE
+        sim state:
+
+          r_prox    : hands (wrist key bodies) near the (scaled) object surface
+                      -> exp(-lambda_hold * mean hand->surface distance)
+          r_contact : the hands the SOURCE used for contact are actually in
+                      contact now (PROMOTION-only -- no -1 penalty regime); kept
+                      in [0.5, 1] so it shapes rather than starves.
+
+        Returns r_prox * r_contact in (0, 1]. Weight is rewardTerms.hold.lambda.
+        """
+        # --- hand proximity to the (scaled, posed) object surface ----------
+        if not hasattr(self, '_hand_key_ids'):
+            # Wrist key bodies act as hand proxies within key_pos, which is
+            # ordered like self.key_bodies. Cache the lookup once.
+            self._hand_key_ids = [i for i, n in enumerate(self.key_bodies)
+                                  if n in ('L_Wrist', 'R_Wrist')]
+        hand_pos = key_pos[:, self._hand_key_ids, :]                # (E, H, 3)
+        min_d = torch.cdist(hand_pos, obj_points).min(dim=-1)[0]    # (E, H)
+        r_prox = torch.exp(-self._hold_lambda * min_d.mean(dim=-1))
+
+        # --- contact existence on the source-designated hands --------------
+        contact_thres = 0.1
+        ref_contact = self.extract_data_component('contact_human', obs=self._curr_ref_obs)
+        live_contact = self.extract_data_component('contact_human', obs=self._curr_obs)
+        sides = []
+        for ids in (list(range(17, 33)), list(range(36, 52))):     # left, right hand links
+            ref_any = (ref_contact[:, ids] > contact_thres).any(dim=-1).float()
+            live_any = (live_contact[:, ids] > contact_thres).any(dim=-1).float()
+            # source wants this hand on the object -> reward only when it is;
+            # source didn't use it -> this side contributes 1 (no penalty).
+            sides.append(ref_any * live_any + (1.0 - ref_any))
+        mean_side = torch.stack(sides, dim=-1).mean(dim=-1)        # [0, 1]
+        r_contact = 0.5 + 0.5 * mean_side                          # [0.5, 1]
+
+        return r_prox * r_contact
+
     def compute_humanoid_reward(self, w):
         # body pos reward
         len_keypos = len(self._key_body_ids)
@@ -1385,7 +1606,7 @@ class InterMimic(Humanoid_SMPLX):
 
         local_obj_rot = quat_mul(heading_rot, obj_rot)
 
-        object_points = self.object_points[self.object_id[self.data_id]]
+        object_points = self._current_object_points()
         obj_rot_extend = obj_rot.unsqueeze(1).repeat(1, object_points.shape[1], 1).view(-1, 4)
         object_points_extend = object_points.view(-1, 3)
         obj_points = torch_utils.quat_rotate(obj_rot_extend, object_points_extend).view(obj_rot.shape[0], object_points.shape[1], 3) + obj_pos.unsqueeze(1)
