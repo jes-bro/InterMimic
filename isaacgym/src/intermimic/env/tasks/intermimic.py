@@ -791,13 +791,19 @@ class InterMimic(Humanoid_SMPLX):
             self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
                                                      recomputeInertia=False)
 
-        if self._objectaug_debug and env_id < 6:
-            # Verify mass-hold: total object mass should be ~constant across
-            # envs with different aug (if it scales with aug**3, the correction
-            # didn't take -> the set_actor_scale prop-ordering assumption is wrong).
-            dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
-            print(f"[masschk] env {env_id} aug={aug:.3f} "
-                  f"total_mass={sum(p.mass for p in dbg):.4f}", flush=True)
+        if self._objectaug_debug:
+            # Verify mass-hold on the SAME object across different aug. Env e
+            # holds object e % n_obj, so fix object 0 (env_id % n_obj == 0) and
+            # vary aug. If hold-mass works, total_mass is ~CONSTANT despite aug;
+            # if it tracks aug**3, the correction didn't take (set_actor_scale
+            # prop-ordering assumption wrong). Comparing different envs here
+            # would confound aug with each object's own base mass.
+            n_obj = len(self.object_name)
+            if (env_id % n_obj == 0) and (env_id // n_obj) < 6:
+                dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+                print(f"[masschk] obj={self.object_name[0]} aug={aug:.3f} "
+                      f"total_mass={sum(p.mass for p in dbg):.4f} "
+                      f"(should be ~constant across these lines)", flush=True)
 
         return
 
@@ -1511,9 +1517,15 @@ class InterMimic(Humanoid_SMPLX):
             if self._posechk_n % 50 == 1:
                 fresh = (self.progress_buf - self.start_times) <= 1
                 if bool(fresh.any()):
-                    print(f"[posechk] {int(fresh.sum())} fresh envs: err mean="
-                          f"{err[fresh].mean().item():.5f} max={err[fresh].max().item():.5f} "
-                          f"(expect ~0 at reset => dof sim/ref aligned)", flush=True)
+                    fe = err[fresh]
+                    # min/median are robust to the ~10% hybrid default-init resets
+                    # (hybridInitProb) that don't init to the reference and show up
+                    # as the large max. Scrambled dof orderings would give err
+                    # ~1000 (153 DOFs); a small min/median => orderings ALIGNED.
+                    print(f"[posechk] {int(fresh.sum())} fresh: err min={fe.min().item():.4f} "
+                          f"med={fe.median().item():.4f} mean={fe.mean().item():.4f} "
+                          f"max={fe.max().item():.4f} (small min/med => dof aligned; "
+                          f"max = hybrid default-init resets)", flush=True)
         return torch.exp(-self._pose_lambda * err)
 
     def _compute_hold_reward(self, key_pos, obj_points):
