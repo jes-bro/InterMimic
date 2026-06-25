@@ -43,7 +43,12 @@ MASK_DEAD=""
 # Use a DIFFERENT RUN_NAME for the transformer arm so its work/checkpoint dirs
 # (and warm-start chain) don't collide with the MLP run.
 NETWORK="${NETWORK:-mlp}"
+# NUM_ENVS: lower it (e.g. 2048) for later substages -- once many subjects are
+# folded in, all their motion clips + 4096 envs of physics state can exceed the
+# GPU's memory and PhysX OOMs (cudaErrorMemoryAllocation / illegal access).
+NUM_ENVS="${NUM_ENVS:-4096}"
 
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
-    --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" --resume
+    --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
+    --num-envs "$NUM_ENVS" --resume
