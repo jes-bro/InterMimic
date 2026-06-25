@@ -419,6 +419,31 @@ class InterMimic(Humanoid_SMPLX):
         super().post_physics_step()
         return
 
+    def debug_env_tags(self, env_ids):
+        """Best-effort '<body>/<object>×count' summary for a set of env ids, so
+        the agent's blow-up guards can say WHICH (body, object) combos exploded
+        instead of just a count. Static per-env identity: object = env%num_objects,
+        body = subject behind _env_subject_idx. Defensive by design -- a logging
+        helper must NEVER raise into the training hot path, so any failure just
+        yields a marker string."""
+        try:
+            from collections import Counter
+            if torch.is_tensor(env_ids):
+                env_ids = env_ids.detach().flatten().cpu().tolist()
+            no = len(self.object_name)
+            tags = Counter()
+            for e in env_ids:
+                e = int(e)
+                obj = self.object_name[e % no] if no else '?'
+                if hasattr(self, '_body_subject_nums') and hasattr(self, '_env_subject_idx'):
+                    body = f"sub{int(self._body_subject_nums[int(self._env_subject_idx[e])])}"
+                else:
+                    body = 'sub?'
+                tags[f"{body}/{obj}"] += 1
+            return ', '.join(f"{k}×{v}" for k, v in tags.most_common(8)) or '(none)'
+        except Exception as ex:  # noqa: BLE001 -- must not crash training
+            return f"<tag-failed: {ex}>"
+
     def _update_hist_hoi_obs(self, env_ids=None):
         self._hist_obs = self._curr_obs.clone()
         return

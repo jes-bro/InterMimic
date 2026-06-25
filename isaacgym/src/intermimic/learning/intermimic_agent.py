@@ -46,6 +46,18 @@ from . import common_agent
 
 from tensorboardX import SummaryWriter
 
+
+def _blowup_tag(agent, env_mask):
+    """' :: <body>/<object>×n, ...' suffix naming WHICH (body,object) envs blew
+    up, for the agent's NaN/Inf guards. Reaches the task via vec_env.env.task and
+    asks it to summarize the flagged env ids. Fully defensive -- a logging helper
+    must never raise into the training loop, so any failure returns ''."""
+    try:
+        ids = env_mask.nonzero(as_tuple=False).flatten()
+        return ' :: ' + agent.vec_env.env.task.debug_env_tags(ids)
+    except Exception:
+        return ''
+
 class InterMimicAgent(common_agent.CommonAgent):
     def __init__(self, base_name, config):
         if config.get('multi_gpu', False):
@@ -352,8 +364,9 @@ class InterMimicAgent(common_agent.CommonAgent):
             # is the obs path my reward fix couldn't catch.
             reset_bad = ~torch.isfinite(self.obs['obs'])
             if torch.any(reset_bad):
+                _tag = _blowup_tag(self, reset_bad.any(dim=1))
                 print(f"[agent] non-finite RESET obs in "
-                      f"{int(reset_bad.any(dim=1).sum())} env(s); zeroing", flush=True)
+                      f"{int(reset_bad.any(dim=1).sum())} env(s); zeroing{_tag}", flush=True)
                 self.obs['obs'][reset_bad] = 0.0
 
             self.experience_buffer.update_data('obses', n, self.obs['obs'])
@@ -376,8 +389,9 @@ class InterMimicAgent(common_agent.CommonAgent):
             invalid_batches = torch.any(invalid_obs, dim=1)  # Check if any invalid number in each batch (B, N)
 
             if torch.any(invalid_obs):
-                print("invalid observation")
-                print(torch.where(invalid_obs))
+                _tag = _blowup_tag(self, invalid_batches)
+                print(f"[agent] invalid observation in {int(invalid_batches.sum())} env(s); "
+                      f"zeroing + terminating{_tag}", flush=True)
                 self.obs['obs'][invalid_batches] = 0
             # Set self.dones to True for batches with invalid observations
                 self.dones[invalid_batches] = True
@@ -393,8 +407,9 @@ class InterMimicAgent(common_agent.CommonAgent):
             # a per-env mask so this works whether rewards is (N,) or (N,1).
             bad_rew = ~torch.isfinite(rewards.view(rewards.shape[0], -1)).all(dim=1)
             if torch.any(bad_rew):
+                _tag = _blowup_tag(self, bad_rew)
                 print(f"[agent] non-finite reward in {int(bad_rew.sum())} env(s); "
-                      f"zeroing + terminating to protect the PPO update")
+                      f"zeroing + terminating to protect the PPO update{_tag}")
                 rewards = torch.nan_to_num(rewards, nan=0.0, posinf=0.0, neginf=0.0)
                 self.dones[bad_rew] = True
                 infos['terminate'][bad_rew] = True
