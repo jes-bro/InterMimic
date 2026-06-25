@@ -49,6 +49,9 @@ OUT="${OUT:-eval_results/curriculum_ist_meas_7700_indist.csv}"
 ALL_OBJ=""
 [ "${ALL_OBJECTS:-1}" = "1" ] && ALL_OBJ="--all-objects"
 
+# Rename the job so `squeue` shows which eval this is (the output CSV stem).
+scontrol update JobId="$SLURM_JOB_ID" JobName="ev-$(basename "${OUT%.csv}")" 2>/dev/null || true
+
 mkdir -p "$(dirname "$OUT")"
 echo "[eval] checkpoint = $CHECKPOINT"
 echo "[eval] bodies=($BODIES)  x  sources=($SOURCES)  all_objects=${ALL_OBJECTS:-1}"

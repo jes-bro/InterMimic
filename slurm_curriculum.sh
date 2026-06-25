@@ -48,6 +48,10 @@ NETWORK="${NETWORK:-mlp}"
 # GPU's memory and PhysX OOMs (cudaErrorMemoryAllocation / illegal access).
 NUM_ENVS="${NUM_ENVS:-4096}"
 
+# Rename the job so `squeue` shows which run this is (widen with:
+#   squeue --me -o "%.18i %.24j %.8T %.10M")
+scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || true
+
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \

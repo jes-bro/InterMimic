@@ -34,6 +34,9 @@ FRAMES="${FRAMES:-300}"
 BASE=isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml
 TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
 
+# Rename the job so `squeue` shows which subjects this replay is for.
+scontrol update JobId="$SLURM_JOB_ID" JobName="rep-$(echo $SUBJECTS | tr ' ' '-')" 2>/dev/null || true
+
 mkdir -p renders
 for S in $SUBJECTS; do
     CFG="/tmp/replay_$S.yaml"

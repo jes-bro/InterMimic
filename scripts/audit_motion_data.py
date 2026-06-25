@@ -35,8 +35,15 @@ import torch
 # per-subject/object medians in the report to spot subtler outliers).
 POSE_EXTENT_MAX = 3.0    # m   (human root->extremity is <~1.5m)
 DOF_MAX         = 3.30   # rad (joint hinges are bounded +-pi ~= 3.14159)
-VEL_MAX         = 0.50   # m per frame (at 30fps that's 15 m/s -- a teleport)
+VEL_MAX         = 0.50   # m per frame (at 30fps that's 15 m/s -- a gross teleport)
 OBJ_DIST_MAX    = 1.00   # m   (if the closest body never gets within 1m, no interaction)
+# Occlusion glitches snap a joint OUT and BACK over 1-2 frames: the per-frame
+# velocity can stay UNDER VEL_MAX, but the acceleration (2nd difference of
+# position) spikes. Smooth fast motion = high velocity, ~0 acceleration; a
+# tracking glitch = the reverse. So acceleration is what catches the foot jitter
+# you can see in the replay but velocity-thresholding misses.
+ACC_MAX         = 0.15   # m/frame^2 -- a clip with any body this jerky is flagged 'jitter'
+ACC_FLAG        = 0.10   # m/frame^2 -- per-(frame,body) accel above this counts as one jumpy sample
 
 
 def clip_stats(x):
@@ -55,15 +62,25 @@ def clip_stats(x):
     pose_extent = float(rel.norm(dim=-1).max())          # furthest limb from root
     max_dof = float(dof.abs().max())
     max_vel = float((body[1:] - body[:-1]).norm(dim=-1).max()) if T > 1 else 0.0
+    # acceleration = 2nd difference of body position; spikes on snap-and-return
+    # glitches (occlusion) but stays ~0 for smooth motion, however fast.
+    if T > 2:
+        acc = (body[2:] - 2 * body[1:-1] + body[:-2]).norm(dim=-1)  # (T-2, 52)
+        max_acc = float(acc.max())
+        n_jitter = int((acc > ACC_FLAG).sum())   # how many (frame,body) samples snap
+    else:
+        max_acc, n_jitter = 0.0, 0
     min_body_obj = float((body - obj.unsqueeze(1)).norm(dim=-1).min())
 
     flags = []
     if pose_extent > POSE_EXTENT_MAX: flags.append('explosion')
     if max_dof > DOF_MAX:             flags.append('joint_limit')
     if max_vel > VEL_MAX:             flags.append('teleport')
+    if max_acc > ACC_MAX:             flags.append('jitter')
     if min_body_obj > OBJ_DIST_MAX:   flags.append('no_interaction')
     return dict(T=T, finite=True, pose_extent=pose_extent, max_dof=max_dof,
-                max_vel=max_vel, min_body_obj=min_body_obj), flags
+                max_vel=max_vel, max_acc=max_acc, n_jitter=n_jitter,
+                min_body_obj=min_body_obj), flags
 
 
 def load_clip(path):
@@ -105,22 +122,25 @@ def audit(motion_dir, subjects=None):
 
     def summarize(group, label):
         print(f"\n=== per {label} ({len(group)} {label}s) ===")
-        print(f"{label:9} {'clips':>5} {'flagged':>7} {'med_extent':>10} "
-              f"{'max_extent':>10} {'med_objdist':>11} {'flags'}")
+        print(f"{label:11} {'clips':>5} {'flag':>5} {'medext':>7} "
+              f"{'maxacc':>7} {'jitfrm':>7} {'medobjd':>8} {'flags'}")
         rows = []
         for key, items in group.items():
             n = len(items)
             nflag = sum(1 for _, fl in items if fl)
             exts = [s['pose_extent'] for s, _ in items if s['finite']]
+            accs = [s['max_acc'] for s, _ in items if s['finite']]
+            jit  = sum(s['n_jitter'] for s, _ in items if s['finite'])
             objd = [s['min_body_obj'] for s, _ in items if s['finite']]
             allflags = sorted({f for _, fl in items for f in fl})
-            rows.append((nflag, key, n, exts, objd, allflags))
-        for nflag, key, n, exts, objd, allflags in sorted(rows, reverse=True):
+            rows.append((jit, nflag, key, n, exts, accs, jit, objd, allflags))
+        # sort jitteriest-first so a glitchy subject/object floats to the top
+        for _, nflag, key, n, exts, accs, jit, objd, allflags in sorted(rows, reverse=True):
             me = statistics.median(exts) if exts else float('nan')
-            mx = max(exts) if exts else float('nan')
+            ma = max(accs) if accs else float('nan')
             mo = statistics.median(objd) if objd else float('nan')
             mark = ' <-- ' + ','.join(allflags) if allflags else ''
-            print(f"{key:9} {n:>5} {nflag:>7} {me:>10.2f} {mx:>10.2f} {mo:>11.2f}{mark}")
+            print(f"{key:11} {n:>5} {nflag:>5} {me:>7.2f} {ma:>7.2f} {jit:>7} {mo:>8.2f}{mark}")
 
     summarize(per_subj, 'subject')
     summarize(per_obj, 'object')
@@ -169,10 +189,26 @@ def selftest():
     x = clean(); x[:, 9:162] = 5.0                            # joints past +-pi
     cases['joint_limit'] = (x, ['joint_limit'])
 
-    # one-frame 0.6m jump: velocity spikes past 0.5 but pose extent stays < 3m
-    # (so it trips ONLY teleport, not explosion)
-    x = clean(); x[30, 162:318] = x[30, 162:318] + 0.6
+    # SUSTAINED unrealistic speed: rigid translation 0.4/axis -> velocity
+    # 0.4*sqrt(3)=0.69 > VEL_MAX, but acceleration ~0 (linear) -> teleport only.
+    x = clean()
+    ramp = (torch.arange(T).float() * 0.4).unsqueeze(1)
+    x[:, 0:3] += ramp; x[:, 162:318] += ramp; x[:, 318:321] += ramp
     cases['teleport'] = (x, ['teleport'])
+
+    # smooth FAST move at 0.2/axis -> velocity 0.2*sqrt(3)=0.35 (< VEL_MAX),
+    # acceleration ~0 -> NO flags. Same velocity as occlusion_snap below, but
+    # smooth -> proves 'jitter' is acceleration, not velocity in disguise.
+    x = clean()
+    ramp = (torch.arange(T).float() * 0.2).unsqueeze(1)
+    x[:, 0:3] += ramp; x[:, 162:318] += ramp; x[:, 318:321] += ramp
+    cases['smooth_fast'] = (x, [])
+
+    # OCCLUSION snap: one foot (body #7) jumps out for a SINGLE frame and back.
+    # Same ~0.35 per-frame velocity as smooth_fast (< VEL_MAX, so the old velocity
+    # check MISSES it) -- but the acceleration spikes -> caught as 'jitter'.
+    x = clean(); x[30, 183:186] += 0.2
+    cases['occlusion_snap'] = (x, ['jitter'])
 
     x = clean(); x[:, 318:321] = x[:, 162:165] + 5.0          # object 5m from every body
     cases['no_interaction'] = (x, ['no_interaction'])

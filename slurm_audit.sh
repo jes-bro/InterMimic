@@ -30,6 +30,9 @@ MOTION_DIR="${MOTION_DIR:-InterAct/OMOMO_new}"
 ARGS="--motion-dir $MOTION_DIR"
 [ -n "${SUBJECTS:-}" ] && ARGS="$ARGS --subjects $SUBJECTS"
 
+# Rename the job so `squeue` shows what's being audited.
+scontrol update JobId="$SLURM_JOB_ID" JobName="aud-$(echo ${SUBJECTS:-all} | tr ' ' '-')" 2>/dev/null || true
+
 echo "========== self-test: prove the detector in this env =========="
 python scripts/audit_motion_data.py --selftest
 
