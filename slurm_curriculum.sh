@@ -43,10 +43,11 @@ MASK_DEAD=""
 # Use a DIFFERENT RUN_NAME for the transformer arm so its work/checkpoint dirs
 # (and warm-start chain) don't collide with the MLP run.
 NETWORK="${NETWORK:-mlp}"
-# NUM_ENVS: lower it (e.g. 2048) for later substages -- once many subjects are
-# folded in, all their motion clips + 4096 envs of physics state can exceed the
-# GPU's memory and PhysX OOMs (cudaErrorMemoryAllocation / illegal access).
-NUM_ENVS="${NUM_ENVS:-4096}"
+# NUM_ENVS: defaults to 2048 -- the value that fits the FULL curriculum (14+
+# subjects, +synthetic bodies) without PhysX OOM. 4096 OOMs once ~11 subjects are
+# folded in (motion clips + per-env physics state exceed the GPU). Override UP to
+# 4096 only for short / few-subject runs that won't reach the memory wall.
+NUM_ENVS="${NUM_ENVS:-2048}"
 # BETAS_FILE: stock gendered betas by default. Point at omomo_betas_neutral.npz
 # for the shared-neutral-space conditioning experiment (bodies/motion unchanged).
 BETAS_FILE="${BETAS_FILE:-scripts/omomo_betas.npz}"
