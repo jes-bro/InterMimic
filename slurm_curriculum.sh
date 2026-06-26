@@ -50,6 +50,14 @@ NUM_ENVS="${NUM_ENVS:-4096}"
 # BETAS_FILE: stock gendered betas by default. Point at omomo_betas_neutral.npz
 # for the shared-neutral-space conditioning experiment (bodies/motion unchanged).
 BETAS_FILE="${BETAS_FILE:-scripts/omomo_betas.npz}"
+# Synthetic target-only training bodies (0=off). Use BETAS_FILE=omomo_betas_neutral_aug.npz
+# and make sure smplx_omomo_sub100..sub<99+N>.xml exist (generate_per_subject_mjcfs.py).
+NUM_SYNTHETIC="${NUM_SYNTHETIC:-0}"
+SYN_ARGS=""
+[ "$NUM_SYNTHETIC" -gt 0 ] && SYN_ARGS="--num-synthetic $NUM_SYNTHETIC \
+    --synthetic-position ${SYNTHETIC_POSITION:-append} \
+    --synthetic-mode ${SYNTHETIC_MODE:-batched} \
+    --synthetic-batch-size ${SYNTHETIC_BATCH_SIZE:-5}"
 
 # Rename the job so `squeue` shows which run this is (widen with:
 #   squeue --me -o "%.18i %.24j %.8T %.10M")
@@ -58,4 +66,4 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || tru
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
-    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" --resume
+    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS --resume
