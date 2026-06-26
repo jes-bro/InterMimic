@@ -109,6 +109,8 @@ env:
   dataSub: {datasub}
   subjectBodies: {bodies}
   betas_file: {betas_file}
+  bodyNormalizedReward: {body_norm}
+{heights_line}
 {pair_weights_line}
 {counts_line}
   ballSize: 1.
@@ -557,6 +559,12 @@ def main():
                     help="batched: --synthetic-batch-size bodies per stage; "
                          "staged: one body per stage")
     ap.add_argument("--synthetic-batch-size", type=int, default=5)
+    ap.add_argument("--body-norm-reward", action="store_true",
+                    help="height-normalize the pose-error reward (removes body-size "
+                         "bias). Synthetic bodies need a --subject-heights-file.")
+    ap.add_argument("--subject-heights-file", default=None,
+                    help="JSON {subject_id: height_m} extending SUBJECT_HEIGHTS, for "
+                         "synthetic bodies (sub100+) under --body-norm-reward")
     ap.add_argument("--betas-file", default="scripts/omomo_betas.npz",
                     help="SMPL-X betas file for body conditioning. Default = stock "
                          "GENDERED betas. Use scripts/omomo_betas_neutral.npz for the "
@@ -577,6 +585,10 @@ def main():
     network_name = "intermimic_transformer" if is_transformer else "intermimic"
     use_transformer_obs = "true" if is_transformer else "false"
     num_obs = 6524 if is_transformer else 3230
+    body_norm = "true" if args.body_norm_reward else "false"
+    heights_line = (f"  subjectHeightsFile: {args.subject_heights_file}"
+                    if args.subject_heights_file else
+                    "  # subjectHeightsFile omitted (SUBJECT_HEIGHTS dict only)")
     print(f"[curriculum] invocation: {' '.join(sys.argv)}", flush=True)
     print(f"[curriculum] settings: run={args.run_name} schedule={args.schedule} "
           f"balance={args.balance} exposure={args.exposure} "
@@ -689,7 +701,7 @@ def main():
             datasub=yaml_sub_list(ss['sources']), bodies=yaml_sub_list(ss['bodies']),
             pair_weights_line=pair_weights_line, counts_line=counts_line,
             mask_dead_envs=mask_dead, num_obs=num_obs,
-            betas_file=args.betas_file,
+            betas_file=args.betas_file, body_norm=body_norm, heights_line=heights_line,
             use_transformer_obs=use_transformer_obs))
         train_cfg.write_text(TRAIN_TMPL.format(
             stage=ss['suffix'], active=active, exp_name=exp_name,

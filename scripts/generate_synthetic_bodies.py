@@ -121,6 +121,14 @@ def main():
     tall = [n for n, h in heights.items() if not (1.40 <= h <= 2.10)]
     print(f"  bodies outside 140-210cm (sanity flag): {tall if tall else 'none'}")
 
+    # heights file for bodyNormalizedReward (synthetic bodies aren't in SUBJECT_HEIGHTS).
+    # Approx = neutral mesh extent; measure_subject_bodies.py on the MJCFs is the exact version.
+    import json
+    hpath = args.out.parent / "synthetic_heights.json"
+    json.dump({str(args.start_id + i): round(heights[n], 4) for i, n in enumerate(names)},
+              open(hpath, "w"), indent=2)
+    print(f"  wrote heights -> {hpath} (for --subject-heights-file under body-norm)")
+
 
 if __name__ == "__main__":
     main()

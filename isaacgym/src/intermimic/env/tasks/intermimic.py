@@ -277,7 +277,15 @@ class InterMimic(Humanoid_SMPLX):
         self._env_body_height = None
         if self._body_normalized_reward:
             if getattr(self, 'subject_bodies', None) is not None:
-                heights = [SUBJECT_HEIGHTS[int(s[3:])] for s in self.subject_bodies]
+                # An optional heights file EXTENDS the hardcoded SUBJECT_HEIGHTS --
+                # needed for synthetic bodies (sub100+) that aren't in the dict.
+                heights_map = dict(SUBJECT_HEIGHTS)
+                hfile = cfg['env'].get('subjectHeightsFile', None)
+                if hfile is not None:
+                    import json
+                    heights_map.update({int(k): float(v)
+                                        for k, v in json.load(open(hfile)).items()})
+                heights = [heights_map[int(s[3:])] for s in self.subject_bodies]
             else:
                 heights = [1.585]   # canonical SMPL-X height
             body_heights_per_subj = to_torch(heights, dtype=torch.float).to(self.device)
