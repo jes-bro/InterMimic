@@ -75,37 +75,48 @@ def latest_epoch(run_dir):
 
 
 def main():
-    if not WORK.is_dir():
-        print(f"no {WORK} -- run from the repo root on the cluster")
-        return
-    jobs = running_jobs()
+    jobs = running_jobs()                       # run -> (jobid, state, time), incl. PENDING
+    # Discover from BOTH the on-disk work dirs AND squeue, so queued / just-started
+    # runs (no config written yet) still show up -- that was the missing-run bug.
+    cfg_dir = {}
+    if WORK.is_dir():
+        for d in sorted(WORK.glob("*")):
+            if d.is_dir() and glob.glob(str(d / "cfgs" / "env_s*.yaml")):
+                cfg_dir[d.name] = d
     rows = []
-    for d in sorted(WORK.glob("*")):
-        if not d.is_dir():
-            continue
-        cfgs = sorted(glob.glob(str(d / "cfgs" / "env_s*.yaml")))
-        if not cfgs:
-            continue
-        net, betas, bal, bnorm, n_syn = features(Path(cfgs[-1]).read_text())
-        stage, ep = latest_epoch(d)
-        if d.name in jobs:
-            jid, state, tm = jobs[d.name]
-            status = f"RUNNING {jid} ({tm})"
+    for name in sorted(set(cfg_dir) | set(jobs)):
+        d = cfg_dir.get(name)
+        if d is not None:
+            cfgs = sorted(glob.glob(str(d / "cfgs" / "env_s*.yaml")))
+            net, betas, bal, bnorm, n_syn = features(Path(cfgs[-1]).read_text())
+            stage, ep = latest_epoch(d)
+        else:                                   # in squeue but hasn't written configs yet
+            net = betas = bal = bnorm = "?"
+            n_syn, stage, ep = 0, "(starting)", "-"
+        if name in jobs:
+            jid, state, tm = jobs[name]
+            status = f"{state} {jid} ({tm})"     # RUNNING or PENDING
         else:
             status = "STOPPED -> resume?"
-        rows.append((d.name, net, betas, bal, bnorm, str(n_syn) if n_syn else "-",
+        rows.append((name, net, betas, bal, bnorm, str(n_syn) if n_syn else "-",
                      stage, ep, status))
+    if not rows:
+        print(f"no runs found (looked in {WORK} and squeue) -- run from the repo root on the cluster")
+        return
 
     hdr = ("RUN", "NET", "BETAS", "BAL", "BNORM", "SYN", "STAGE", "EPOCH", "STATUS")
     w = [max(len(r[i]) for r in rows + [hdr]) for i in range(len(hdr))]
     fmt = "  ".join(f"{{:<{x}}}" for x in w)
     print(fmt.format(*hdr))
     print(fmt.format(*["-" * x for x in w]))
-    # running first, then stopped
-    for r in sorted(rows, key=lambda r: (not r[-1].startswith("RUNNING"), r[0])):
+    # running, then pending, then stopped
+    rank = lambda s: 0 if s.startswith("RUNNING") else 1 if s.startswith("PENDING") else 2
+    for r in sorted(rows, key=lambda r: (rank(r[-1]), r[0])):
         print(fmt.format(*r))
     n_run = sum(1 for r in rows if r[-1].startswith("RUNNING"))
-    print(f"\n{len(rows)} runs | {n_run} running | {len(rows) - n_run} stopped")
+    n_pend = sum(1 for r in rows if r[-1].startswith("PENDING"))
+    print(f"\n{len(rows)} runs | {n_run} running | {n_pend} pending | "
+          f"{len(rows) - n_run - n_pend} stopped")
 
 
 if __name__ == "__main__":
