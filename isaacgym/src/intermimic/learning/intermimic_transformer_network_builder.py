@@ -86,6 +86,17 @@ class InterMimicBuilder(network_builder.A2CBuilder):
             self.MLPEmbedding = torch.compile(self.MLPEmbedding)
             self.PositionalEmbedding = torch.compile(self.PositionalEmbedding)
             self.encoder = torch.compile(self.encoder)
+
+            # The transformer actor outputs num_channels (256) from the encoder, NOT
+            # the actor-MLP's last unit -- so the parent A2CBuilder's mu (built at the
+            # MLP width, 512) shape-mismatches it: (B,256) x (512,153). Rebuild the
+            # action head(s) to take 256. fixed_sigma keeps self.sigma as a Parameter.
+            actions_num = kwargs.get('actions_num')
+            self.mu = nn.Linear(num_channels, actions_num)
+            self.init_factory.create(**self.space_config['mu_init'])(self.mu.weight)
+            if self.space_config.get('learn_sigma'):
+                self.sigma = nn.Linear(num_channels, actions_num)
+                self.init_factory.create(**self.space_config['sigma_init'])(self.sigma.weight)
             return
 
         def forward(self, obs_dict):
