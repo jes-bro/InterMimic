@@ -559,6 +559,12 @@ def main():
                     help="batched: --synthetic-batch-size bodies per stage; "
                          "staged: one body per stage")
     ap.add_argument("--synthetic-batch-size", type=int, default=5)
+    ap.add_argument("--final-train-epochs", type=int, default=0,
+                    help="after ALL data is folded in, keep training on the full set "
+                         "for up to this many more epochs with NO early plateau-stop "
+                         "(substage budgets advance the curriculum; they don't converge "
+                         "it). Bounded in practice by the slurm time limit. 0 = stop at "
+                         "the last substage (old behavior).")
     ap.add_argument("--body-norm-reward", action="store_true",
                     help="height-normalize the pose-error reward (removes body-size "
                          "bias). Synthetic bodies need a --subject-heights-file.")
@@ -617,6 +623,16 @@ def main():
         print(f"[curriculum] +{args.num_synthetic} synthetic bodies "
               f"(sub{syn_ids[0]}..sub{syn_ids[-1]}) {args.synthetic_position}/"
               f"{args.synthetic_mode} -> {len(substages)} total substages", flush=True)
+    # Final converge stage: same full live set as the last substage, but trained
+    # long (no plateau-stop) so the policy actually converges on the complete data.
+    if args.final_train_epochs > 0 and substages:
+        last = substages[-1]
+        substages.append(dict(stage=last["stage"], suffix="final", phase="final",
+                              new=last["new"], bodies=last["bodies"],
+                              sources=last["sources"], live=set(last["live"])))
+        print(f"[curriculum] + final converge stage on the full set, up to "
+              f"{args.final_train_epochs} epochs, NO plateau-stop (bounded by slurm time)",
+              flush=True)
 
     work = REPO / "curriculum_work" / args.run_name
     cfgdir = work / "cfgs"
@@ -650,10 +666,14 @@ def main():
         # identity phase and coarse 'full' stages keep the full budget. The cap
         # is floored at min_e+pat so it can never fire before a plateau is even
         # possible.
-        div = args.cross_epoch_divisor if ss['phase'] in ('source', 'target') else 1
-        min_e = max(1, args.min_epochs // div)
-        pat = max(1, args.patience // div)
-        smax = max(min_e + pat, args.stage_max_epochs // div)
+        if ss['phase'] == 'final':
+            # train long, never plateau-stop -- run to the cap or the slurm timeout.
+            min_e, pat, smax = 1, args.final_train_epochs, args.final_train_epochs
+        else:
+            div = args.cross_epoch_divisor if ss['phase'] in ('source', 'target') else 1
+            min_e = max(1, args.min_epochs // div)
+            pat = max(1, args.patience // div)
+            smax = max(min_e + pat, args.stage_max_epochs // div)
 
         # Pair weights: inverse-exposure over live pairs, 0 for masked ones.
         # Skipped entirely for the uniform baseline (plain random sampling).

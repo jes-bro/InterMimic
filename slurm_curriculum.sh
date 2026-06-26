@@ -64,6 +64,10 @@ SYN_ARGS=""
 BODY_NORM=""
 [ -n "${BODY_NORM_REWARD:-}" ] && BODY_NORM="--body-norm-reward"
 [ -n "${SUBJECT_HEIGHTS_FILE:-}" ] && BODY_NORM="$BODY_NORM --subject-heights-file $SUBJECT_HEIGHTS_FILE"
+# After all data is folded in, keep training the full set until the slurm time
+# limit (substage budgets only advance the curriculum, they don't converge it).
+# Set FINAL_TRAIN_EPOCHS=0 to stop at the last substage instead.
+FINAL_TRAIN_EPOCHS="${FINAL_TRAIN_EPOCHS:-100000}"
 
 # Rename the job so `squeue` shows which run this is (widen with:
 #   squeue --me -o "%.18i %.24j %.8T %.10M")
@@ -72,4 +76,5 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || tru
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
-    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM --resume
+    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM \
+    --final-train-epochs "$FINAL_TRAIN_EPOCHS" --resume
