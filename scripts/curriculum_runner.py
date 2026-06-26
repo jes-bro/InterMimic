@@ -561,10 +561,9 @@ def main():
     ap.add_argument("--synthetic-batch-size", type=int, default=5)
     ap.add_argument("--final-train-epochs", type=int, default=0,
                     help="after ALL data is folded in, keep training on the full set "
-                         "for up to this many more epochs with NO early plateau-stop "
-                         "(substage budgets advance the curriculum; they don't converge "
-                         "it). Bounded in practice by the slurm time limit. 0 = stop at "
-                         "the last substage (old behavior).")
+                         "with NO early plateau-stop. -1 = UNBOUNDED (train until the "
+                         "slurm time limit, no epoch cap); N>0 = stop after N more "
+                         "epochs; 0 = stop at the last substage (old behavior).")
     ap.add_argument("--body-norm-reward", action="store_true",
                     help="height-normalize the pose-error reward (removes body-size "
                          "bias). Synthetic bodies need a --subject-heights-file.")
@@ -625,14 +624,15 @@ def main():
               f"{args.synthetic_mode} -> {len(substages)} total substages", flush=True)
     # Final converge stage: same full live set as the last substage, but trained
     # long (no plateau-stop) so the policy actually converges on the complete data.
-    if args.final_train_epochs > 0 and substages:
+    if args.final_train_epochs != 0 and substages:
         last = substages[-1]
         substages.append(dict(stage=last["stage"], suffix="final", phase="final",
                               new=last["new"], bodies=last["bodies"],
                               sources=last["sources"], live=set(last["live"])))
-        print(f"[curriculum] + final converge stage on the full set, up to "
-              f"{args.final_train_epochs} epochs, NO plateau-stop (bounded by slurm time)",
-              flush=True)
+        cap = ("UNBOUNDED (until slurm time limit)" if args.final_train_epochs < 0
+               else f"up to {args.final_train_epochs} epochs")
+        print(f"[curriculum] + final converge stage on the full set, {cap}, "
+              f"NO plateau-stop", flush=True)
 
     work = REPO / "curriculum_work" / args.run_name
     cfgdir = work / "cfgs"
@@ -667,8 +667,10 @@ def main():
         # is floored at min_e+pat so it can never fire before a plateau is even
         # possible.
         if ss['phase'] == 'final':
-            # train long, never plateau-stop -- run to the cap or the slurm timeout.
-            min_e, pat, smax = 1, args.final_train_epochs, args.final_train_epochs
+            # never plateau-stop; -1 => no epoch cap at all (run to the slurm timeout).
+            min_e = 1
+            pat = smax = (float('inf') if args.final_train_epochs < 0
+                          else args.final_train_epochs)
         else:
             div = args.cross_epoch_divisor if ss['phase'] in ('source', 'target') else 1
             min_e = max(1, args.min_epochs // div)

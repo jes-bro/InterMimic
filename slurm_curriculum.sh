@@ -66,8 +66,9 @@ BODY_NORM=""
 [ -n "${SUBJECT_HEIGHTS_FILE:-}" ] && BODY_NORM="$BODY_NORM --subject-heights-file $SUBJECT_HEIGHTS_FILE"
 # After all data is folded in, keep training the full set until the slurm time
 # limit (substage budgets only advance the curriculum, they don't converge it).
-# Set FINAL_TRAIN_EPOCHS=0 to stop at the last substage instead.
-FINAL_TRAIN_EPOCHS="${FINAL_TRAIN_EPOCHS:-100000}"
+# -1 = UNBOUNDED (no epoch cap, train until slurm kills it); N = cap at N more
+# epochs; 0 = stop at the last substage.
+FINAL_TRAIN_EPOCHS="${FINAL_TRAIN_EPOCHS:--1}"
 
 # Rename the job so `squeue` shows which run this is (widen with:
 #   squeue --me -o "%.18i %.24j %.8T %.10M")
