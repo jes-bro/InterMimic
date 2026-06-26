@@ -45,8 +45,14 @@ def main():
     ap.add_argument("--held-out", nargs="+", default=["sub4", "sub10", "sub16"])
     ap.add_argument("--min-heldout-dist", type=float, default=2.0,
                     help="reject synthetic bodies closer than this (L2 in betas) to any held-out subject")
+    ap.add_argument("--start-id", type=int, default=100,
+                    help="synthetic bodies are named sub<start-id>.. so the env's "
+                         "int(sub[3:]) machinery + smplx_omomo_sub<N>.xml loading just work")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, default=Path("scripts/synthetic_bodies_neutral.npz"))
+    ap.add_argument("--combined-out", type=Path,
+                    default=Path("scripts/omomo_betas_neutral_aug.npz"),
+                    help="real neutral betas + synthetic, in one file for the env's betas_file")
     args = ap.parse_args()
     args.models_dir = args.models_dir.expanduser()
 
@@ -83,15 +89,23 @@ def main():
             b = sampler()
             if not far_from_heldout(b):
                 continue                                    # too close to a test body -> resample
-            name = f"syn{len(out)}"
+            name = f"sub{args.start_id + len(out)}"          # sub100, sub101, ... (env-compatible)
             out[name] = b.astype(np.float32)
             kinds.append(kind)
             made += 1
 
-    out["_genders"] = np.array([f"{k}:neutral" for k in out if k != "_genders"], dtype=object)
+    out["_genders"] = np.array([f"{k}:neutral" for k in out if not k.startswith("_")], dtype=object)
     out["_kinds"] = np.array(kinds, dtype=object)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.out, **out)
+
+    # combined file the env reads: real neutral betas + synthetic, all gender=neutral
+    combined = {k: src[k] for k in src.files if k != "_genders"}
+    combined.update({k: out[k] for k in out if not k.startswith("_")})
+    combined["_genders"] = np.array([f"{k}:neutral" for k in combined], dtype=object)
+    np.savez(args.combined_out, **combined)
+    print(f"wrote combined real+synthetic betas -> {args.combined_out} "
+          f"({len(combined) - 1} bodies)")
 
     # report
     names = [k for k in out if not k.startswith("_")]

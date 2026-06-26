@@ -253,19 +253,21 @@ def yaml_sub_list(subjects):
     return "[" + ", ".join(f"'sub{n}'" for n in subjects) + "]"
 
 
-def compute_pair_weights(active, live, exposure, eps=1.0):
+def compute_pair_weights(bodies, sources, live, exposure, eps=1.0):
     """Per (source, body) pair weight: inverse-exposure for live, 0 otherwise.
 
-    `live` is the set of (s, b) tuples currently allowed to be sampled. Live
-    pairs get weight ∝ 1/(exposure + eps), normalized to mean 1 over the live
-    set (scale is irrelevant to multinomial sampling but keeps numbers
-    readable). Not-yet-live pairs are written as an explicit 0.0 — the env
-    defaults a MISSING key to 1.0, so we must emit the zero to mask them out.
-    Keys are 'b{B}_s{S}' to match what the env reads (body-first layout).
+    `bodies` and `sources` are usually the same active set, but differ when
+    target-only synthetic bodies are folded in (they appear as bodies, never as
+    sources). `live` is the set of (s, b) tuples currently allowed to be
+    sampled. Live pairs get weight ∝ 1/(exposure + eps), normalized to mean 1
+    over the live set (scale is irrelevant to multinomial sampling but keeps
+    numbers readable). Not-yet-live pairs are written as an explicit 0.0 — the
+    env defaults a MISSING key to 1.0, so we must emit the zero to mask them
+    out. Keys are 'b{B}_s{S}' to match what the env reads (body-first layout).
     """
     w, live_vals = {}, {}
-    for b in active:
-        for s in active:
+    for b in bodies:
+        for s in sources:
             key = f"b{b}_s{s}"
             if (s, b) in live:
                 live_vals[key] = 1.0 / (exposure.get(key, 0.0) + eps)
@@ -316,6 +318,65 @@ def build_substages(order, schedule):
                 subs.append(dict(stage=st + 1, suffix=f"{st + 1:02d}c", phase="target",
                                  new=n, bodies=active, sources=active, live=set(live)))
     return subs
+
+
+def inject_synthetic(real_subs, order, syn_ids, position, mode, batch_size):
+    """Fold target-only synthetic bodies into the substage list.
+
+    Synthetic bodies (subject ids >= synthetic-start-id, e.g. sub100..) are
+    BODIES the policy controls but never SOURCES -- they're driven by the real
+    sources, scored against the real reference (no GT of their own). So their
+    live pairs are (real_source, syn_body) only.
+
+    position: 'append'     -> all synthetic stages after the full real curriculum
+              'interleave'  -> spread between the real stages (each syn body then
+                               pairs only with the real sources live SO FAR, and
+                               later real sources retro-pair with it).
+    mode:     'staged'      -> one synthetic body per stage (batch_size forced 1)
+              'batched'     -> batch_size synthetic bodies per stage
+    Returns a new substage list with cumulative live/bodies/sources recomputed.
+    """
+    if not syn_ids:
+        return real_subs
+    bs = 1 if mode == "staged" else max(1, batch_size)
+    batches = [syn_ids[i:i + bs] for i in range(0, len(syn_ids), bs)]
+
+    # new real pairs introduced at each real substage (cumulative -> per-stage delta)
+    real_new, prev = [], set()
+    for ss in real_subs:
+        real_new.append(ss["live"] - prev)
+        prev = ss["live"]
+
+    # which real substage index each batch is inserted AFTER
+    after = {}
+    n = len(real_subs)
+    if position == "append":
+        after[n - 1] = list(batches)
+    else:  # interleave: evenly spaced across the real stages
+        for k, b in enumerate(batches):
+            pos = min(n - 1, int((k + 1) * n / (len(batches) + 1)))
+            after.setdefault(pos, []).append(b)
+
+    merged, cum, syn_live, real_src = [], set(), [], set()
+    syn_n = 0
+    for ridx, ss in enumerate(real_subs):
+        cum |= real_new[ridx]
+        # a newly-live real source retro-pairs with every synthetic body so far
+        for s in {s for (s, _) in real_new[ridx]} - real_src:
+            real_src.add(s)
+            cum |= {(s, syn_b) for syn_b in syn_live}
+        merged.append({**ss, "bodies": sorted({b for (_, b) in cum}),
+                       "sources": sorted({s for (s, _) in cum}), "live": set(cum)})
+        for batch in after.get(ridx, []):
+            for syn_b in batch:
+                cum |= {(s, syn_b) for s in real_src}   # driven by real sources live so far
+                syn_live.append(syn_b)
+            syn_n += 1
+            merged.append(dict(stage=ss["stage"], suffix=f"y{syn_n:02d}",
+                               phase="synthetic", new=batch[0],
+                               bodies=sorted({b for (_, b) in cum}),
+                               sources=sorted({s for (s, _) in cum}), live=set(cum)))
+    return merged
 
 
 def update_exposure(exposure, active, weights, epochs):
@@ -482,6 +543,20 @@ def main():
                          "or transformer (temporal transformer over 4-horizon obs, "
                          "numObs 6524). Same curriculum/fixes either way -- only the "
                          "net + obs layout change, for a fair MLP-vs-transformer test.")
+    # Synthetic target-only training bodies (sub<start-id>..). Need matching
+    # smplx_omomo_sub<N>.xml + betas entries (use omomo_betas_neutral_aug.npz).
+    ap.add_argument("--num-synthetic", type=int, default=0,
+                    help="number of synthetic target-only bodies to fold in (0=off)")
+    ap.add_argument("--synthetic-start-id", type=int, default=100,
+                    help="first synthetic body id; bodies are sub<id>..sub<id+num-1>")
+    ap.add_argument("--synthetic-position", choices=["append", "interleave"],
+                    default="append",
+                    help="append: synthetic stages after the full real curriculum; "
+                         "interleave: spread between real stages")
+    ap.add_argument("--synthetic-mode", choices=["batched", "staged"], default="batched",
+                    help="batched: --synthetic-batch-size bodies per stage; "
+                         "staged: one body per stage")
+    ap.add_argument("--synthetic-batch-size", type=int, default=5)
     ap.add_argument("--betas-file", default="scripts/omomo_betas.npz",
                     help="SMPL-X betas file for body conditioning. Default = stock "
                          "GENDERED betas. Use scripts/omomo_betas_neutral.npz for the "
@@ -521,6 +596,15 @@ def main():
               "pairs are live; it is a no-op under --balance uniform.", flush=True)
 
     substages = build_substages(order, args.schedule)
+    if args.num_synthetic > 0:
+        syn_ids = list(range(args.synthetic_start_id,
+                             args.synthetic_start_id + args.num_synthetic))
+        substages = inject_synthetic(substages, order, syn_ids,
+                                     args.synthetic_position, args.synthetic_mode,
+                                     args.synthetic_batch_size)
+        print(f"[curriculum] +{args.num_synthetic} synthetic bodies "
+              f"(sub{syn_ids[0]}..sub{syn_ids[-1]}) {args.synthetic_position}/"
+              f"{args.synthetic_mode} -> {len(substages)} total substages", flush=True)
 
     work = REPO / "curriculum_work" / args.run_name
     cfgdir = work / "cfgs"
@@ -563,7 +647,7 @@ def main():
         # Skipped entirely for the uniform baseline (plain random sampling).
         weights = weights_file = None
         if use_weights:
-            weights = compute_pair_weights(active, ss["live"], exposure)
+            weights = compute_pair_weights(ss["bodies"], ss["sources"], ss["live"], exposure)
             weights_file = cfgdir / f"weights_s{ss['suffix']}.json"
             weights_file.write_text(json.dumps(weights, indent=2, sort_keys=True))
             pair_weights_line = f"  subjectPairWeightsFile: {rel(weights_file)}"
