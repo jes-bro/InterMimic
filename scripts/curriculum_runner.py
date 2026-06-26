@@ -108,7 +108,7 @@ env:
   dataFramesScale: 1
   dataSub: {datasub}
   subjectBodies: {bodies}
-  betas_file: scripts/omomo_betas.npz
+  betas_file: {betas_file}
 {pair_weights_line}
 {counts_line}
   ballSize: 1.
@@ -482,6 +482,12 @@ def main():
                          "or transformer (temporal transformer over 4-horizon obs, "
                          "numObs 6524). Same curriculum/fixes either way -- only the "
                          "net + obs layout change, for a fair MLP-vs-transformer test.")
+    ap.add_argument("--betas-file", default="scripts/omomo_betas.npz",
+                    help="SMPL-X betas file for body conditioning. Default = stock "
+                         "GENDERED betas. Use scripts/omomo_betas_neutral.npz for the "
+                         "shared-neutral-space conditioning experiment (bodies/MJCFs "
+                         "and ground-truth motion are UNCHANGED -- only the 32 betas "
+                         "obs dims switch to a coherent cross-gender descriptor).")
     args = ap.parse_args()
 
     os.chdir(REPO)  # so all repo-relative paths resolve
@@ -599,6 +605,7 @@ def main():
             datasub=yaml_sub_list(ss['sources']), bodies=yaml_sub_list(ss['bodies']),
             pair_weights_line=pair_weights_line, counts_line=counts_line,
             mask_dead_envs=mask_dead, num_obs=num_obs,
+            betas_file=args.betas_file,
             use_transformer_obs=use_transformer_obs))
         train_cfg.write_text(TRAIN_TMPL.format(
             stage=ss['suffix'], active=active, exp_name=exp_name,

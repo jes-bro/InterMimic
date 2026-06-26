@@ -47,6 +47,9 @@ NETWORK="${NETWORK:-mlp}"
 # folded in, all their motion clips + 4096 envs of physics state can exceed the
 # GPU's memory and PhysX OOMs (cudaErrorMemoryAllocation / illegal access).
 NUM_ENVS="${NUM_ENVS:-4096}"
+# BETAS_FILE: stock gendered betas by default. Point at omomo_betas_neutral.npz
+# for the shared-neutral-space conditioning experiment (bodies/motion unchanged).
+BETAS_FILE="${BETAS_FILE:-scripts/omomo_betas.npz}"
 
 # Rename the job so `squeue` shows which run this is (widen with:
 #   squeue --me -o "%.18i %.24j %.8T %.10M")
@@ -55,4 +58,4 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || tru
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
-    --num-envs "$NUM_ENVS" --resume
+    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" --resume
