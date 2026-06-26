@@ -425,6 +425,13 @@ class InterMimic(Humanoid_SMPLX):
 
     def post_physics_step(self):
         super().post_physics_step()
+        # GPU memory diagnostic (read-only, throttled): watch total usage climb
+        # toward the OOM point. torch alloc = our tensors; GPU used = incl PhysX.
+        self._memchk_n = getattr(self, '_memchk_n', 0) + 1
+        if self._memchk_n % 200 == 1:
+            free, total = torch.cuda.mem_get_info()
+            print(f"[mem] step {self._memchk_n}: torch {torch.cuda.memory_allocated() / 1024 ** 3:.2f}G | "
+                  f"GPU used {(total - free) / 1024 ** 3:.1f}/{total / 1024 ** 3:.0f}G", flush=True)
         return
 
     def debug_env_tags(self, env_ids):
@@ -579,6 +586,17 @@ class InterMimic(Humanoid_SMPLX):
         # Stack on CPU, then move to self.device
         hoi_data = torch.stack(hoi_data, dim=0).to(self.device)
         self.hoi_refs = torch.stack(self.hoi_refs, dim=0).unsqueeze(1).repeat(1, topk, 1, 1).to(self.device)
+
+        # --- GPU memory diagnostic (read-only) -- how big are the motion tensors,
+        # and total GPU used (incl PhysX, via mem_get_info) right after loading them?
+        _gb = lambda t: t.element_size() * t.nelement() / 1024 ** 3
+        free, total = torch.cuda.mem_get_info()
+        print(f"[mem] motion tensors: hoi_data {_gb(hoi_data):.2f}G {tuple(hoi_data.shape)} + "
+              f"hoi_refs {_gb(self.hoi_refs):.2f}G {tuple(self.hoi_refs.shape)} = "
+              f"{_gb(hoi_data) + _gb(self.hoi_refs):.2f}G", flush=True)
+        print(f"[mem] after motion load: torch {torch.cuda.memory_allocated() / 1024 ** 3:.2f}G | "
+              f"GPU used {(total - free) / 1024 ** 3:.1f}/{total / 1024 ** 3:.0f}G (incl PhysX/other)",
+              flush=True)
 
         self.ref_reward = torch.zeros((self.hoi_refs.shape[0], self.hoi_refs.shape[1], self.hoi_refs.shape[2]), device=self.device)
         self.ref_reward[:, 0, :] = 1.0
