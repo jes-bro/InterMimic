@@ -116,6 +116,7 @@ env:
   ballSize: 1.
   numObs: {num_obs}
   useTransformerObs: {use_transformer_obs}
+  cpuMotionData: {cpu_motion}
   motion_file: InterAct/OMOMO_new
   robotType: "smplx/omomo.xml"
   objectDensity: 200
@@ -567,6 +568,11 @@ def main():
     ap.add_argument("--body-norm-reward", action="store_true",
                     help="height-normalize the pose-error reward (removes body-size "
                          "bias). Synthetic bodies need a --subject-heights-file.")
+    ap.add_argument("--cpu-motion-data", action="store_true",
+                    help="keep reference-motion tensors on CPU and stream in-flight "
+                         "frames to GPU per step (frees ~all the clip VRAM; small "
+                         "per-step transfer). Needed to scale past ~14 OMOMO subjects "
+                         "on <=44GB GPUs, or to add more source data.")
     ap.add_argument("--subject-heights-file", default=None,
                     help="JSON {subject_id: height_m} extending SUBJECT_HEIGHTS, for "
                          "synthetic bodies (sub100+) under --body-norm-reward")
@@ -591,6 +597,7 @@ def main():
     use_transformer_obs = "true" if is_transformer else "false"
     num_obs = 6524 if is_transformer else 3230
     body_norm = "true" if args.body_norm_reward else "false"
+    cpu_motion = "true" if args.cpu_motion_data else "false"
     heights_line = (f"  subjectHeightsFile: {args.subject_heights_file}"
                     if args.subject_heights_file else
                     "  # subjectHeightsFile omitted (SUBJECT_HEIGHTS dict only)")
@@ -724,7 +731,7 @@ def main():
             pair_weights_line=pair_weights_line, counts_line=counts_line,
             mask_dead_envs=mask_dead, num_obs=num_obs,
             betas_file=args.betas_file, body_norm=body_norm, heights_line=heights_line,
-            use_transformer_obs=use_transformer_obs))
+            use_transformer_obs=use_transformer_obs, cpu_motion=cpu_motion))
         train_cfg.write_text(TRAIN_TMPL.format(
             stage=ss['suffix'], active=active, exp_name=exp_name,
             save_frequency=args.save_frequency, resume_from=resume_from,

@@ -104,6 +104,11 @@ class InterMimic(Humanoid_SMPLX):
         self.more_rigid = cfg['env']['moreRigid']
         self.rollout_length = cfg['env']['rolloutLength']
         self.psi = cfg['env'].get('physicalBufferSize', 1)
+        # cpuMotionData: keep the (large) reference-motion tensors on CPU and stream
+        # the in-flight frames to GPU per step instead of holding every clip resident
+        # in VRAM. Trades a small per-step transfer for ~all the motion data's memory,
+        # so the curriculum scales to far more source data than fits on the GPU.
+        self._cpu_motion = cfg['env'].get('cpuMotionData', False)
         # Evaluation only works with stateInit "Start"
         state_init_is_start = (state_init == "Start")
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
@@ -583,9 +588,13 @@ class InterMimic(Humanoid_SMPLX):
             padded_data = F.pad(data, pad_size, "constant", 0)
             hoi_data.append(padded_data)
             self.hoi_refs.append(F.pad(hoi_refs[i], pad_size, "constant", 0))
-        # Stack on CPU, then move to self.device
-        hoi_data = torch.stack(hoi_data, dim=0).to(self.device)
-        self.hoi_refs = torch.stack(self.hoi_refs, dim=0).unsqueeze(1).repeat(1, topk, 1, 1).to(self.device)
+        # Stack on CPU. With cpuMotionData we KEEP them on CPU and stream per step
+        # (_motion_gather); otherwise move the whole thing to GPU as before.
+        hoi_data = torch.stack(hoi_data, dim=0)
+        self.hoi_refs = torch.stack(self.hoi_refs, dim=0).unsqueeze(1).repeat(1, topk, 1, 1)
+        if not self._cpu_motion:
+            hoi_data = hoi_data.to(self.device)
+            self.hoi_refs = self.hoi_refs.to(self.device)
 
         # --- GPU memory diagnostic (read-only) -- how big are the motion tensors,
         # and total GPU used (incl PhysX, via mem_get_info) right after loading them?
@@ -593,7 +602,8 @@ class InterMimic(Humanoid_SMPLX):
         free, total = torch.cuda.mem_get_info()
         print(f"[mem] motion tensors: hoi_data {_gb(hoi_data):.2f}G {tuple(hoi_data.shape)} + "
               f"hoi_refs {_gb(self.hoi_refs):.2f}G {tuple(self.hoi_refs.shape)} = "
-              f"{_gb(hoi_data) + _gb(self.hoi_refs):.2f}G", flush=True)
+              f"{_gb(hoi_data) + _gb(self.hoi_refs):.2f}G "
+              f"{'on CPU (streamed per step)' if self._cpu_motion else 'on GPU'}", flush=True)
         print(f"[mem] after motion load: torch {torch.cuda.memory_allocated() / 1024 ** 3:.2f}G | "
               f"GPU used {(total - free) / 1024 ** 3:.1f}/{total / 1024 ** 3:.0f}G (incl PhysX/other)",
               flush=True)
@@ -605,13 +615,13 @@ class InterMimic(Humanoid_SMPLX):
 
         # Evaluation metrics tracking per sequence (only if evaluation is enabled)
         if self.enable_evaluation:
-            self._max_execution_steps = torch.zeros([self.num_motions], device=self.hoi_refs.device, dtype=torch.long)
-            self._human_pose_error_per_seq_step = torch.ones([self.num_motions, max_length], device=self.hoi_refs.device, dtype=torch.float) * 1e6
-            self._object_pose_error_per_seq_step = torch.ones([self.num_motions, max_length], device=self.hoi_refs.device, dtype=torch.float) * 1e6
-            self._best_human_pose_error_per_seq = torch.ones([self.num_motions], device=self.hoi_refs.device, dtype=torch.float) * 1e6
-            self._best_object_pose_error_per_seq = torch.ones([self.num_motions], device=self.hoi_refs.device, dtype=torch.float) * 1e6
+            self._max_execution_steps = torch.zeros([self.num_motions], device=self.device, dtype=torch.long)
+            self._human_pose_error_per_seq_step = torch.ones([self.num_motions, max_length], device=self.device, dtype=torch.float) * 1e6
+            self._object_pose_error_per_seq_step = torch.ones([self.num_motions, max_length], device=self.device, dtype=torch.float) * 1e6
+            self._best_human_pose_error_per_seq = torch.ones([self.num_motions], device=self.device, dtype=torch.float) * 1e6
+            self._best_object_pose_error_per_seq = torch.ones([self.num_motions], device=self.device, dtype=torch.float) * 1e6
             # Track visit counts for balanced sampling
-            self._sequence_visit_count = torch.zeros([self.num_motions], device=self.hoi_refs.device, dtype=torch.long)
+            self._sequence_visit_count = torch.zeros([self.num_motions], device=self.device, dtype=torch.long)
 
         if not hasattr(self, 'data_component_order'):
             self.create_component_stat(loaded_dict)
@@ -648,14 +658,27 @@ class InterMimic(Humanoid_SMPLX):
         # For each i, calculate the sum of component_sizes[:i] to determine the starting index for that component.
         self.ref_component_index = [sum(ref_component_sizes[:i]) for i in range(len(ref_component_sizes) + 1)]
 
+    def _motion_gather(self, tensor, idx):
+        """Index a reference-motion tensor (hoi_data / hoi_refs) that may live on CPU
+        under cpuMotionData. `idx` is the full index tuple (advanced-index tensors +
+        an optional trailing `slice`). Returns the gathered slice on self.device.
+        When the tensor is already on GPU this is plain indexing -- identical result,
+        zero overhead. Correct by construction: t[(a,b,slice(s,e))] == t[a,b,s:e], and
+        moving the index to CPU / the small result to GPU changes neither which nor
+        what values are selected (verified)."""
+        if tensor.is_cuda:
+            return tensor[idx]
+        idx = tuple(i.cpu() if torch.is_tensor(i) else i for i in idx)
+        return tensor[idx].to(self.device, non_blocking=True)
+
     def extract_ref_component(self, var_name, data_id, ref_index, t):
         index = self.ref_component_order.index(var_name)
-        
+
         # The number of columns to extract for this component.
         start = self.ref_component_index[index]
         end = self.ref_component_index[index+1]
-        
-        return self.hoi_refs[data_id, ref_index, t, start:end]
+
+        return self._motion_gather(self.hoi_refs, (data_id, ref_index, t, slice(start, end)))
 
 
     def extract_data_component(self, var_name, ref=False, data_id=None, t=None, obs=None):
@@ -666,7 +689,7 @@ class InterMimic(Humanoid_SMPLX):
         end = self.data_component_index[index+1]
         
         if ref and data_id is not None and t is not None:
-            return self.hoi_data[data_id, t, start:end]
+            return self._motion_gather(self.hoi_data, (data_id, t, slice(start, end)))
         
         if obs is not None:
             return obs[..., start:end]
@@ -1134,7 +1157,7 @@ class InterMimic(Humanoid_SMPLX):
 
         ts = self.progress_buf[env_ids].clone() 
         next_ts = torch.clamp(ts + delta_t, max=self.max_episode_length[self.data_id[env_ids]]-1)
-        ref_obs = hoi_data[self.data_id[env_ids], next_ts].clone()
+        ref_obs = self._motion_gather(hoi_data, (self.data_id[env_ids], next_ts)).clone()
         obs = self._compute_humanoid_obs(env_ids, ref_obs, next_ts)
         task_obs = self._compute_task_obs(env_ids, ref_obs)
         obs = torch.cat([obs, task_obs], dim=-1)    
@@ -1159,14 +1182,14 @@ class InterMimic(Humanoid_SMPLX):
         # transformer policy uses 4 (0, 1, 4, 16) so it can attend over them.
         horizons = [0, 1, 4, 16] if self._use_transformer_obs else [1, 16]
         if (env_ids is None):
-            self._curr_ref_obs[:] = self.hoi_data[self.data_id[env_ids], self.progress_buf[env_ids]].clone()
+            self._curr_ref_obs[:] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
             # (source_betas, target_betas) — 32 dims. source_betas[data_id]: from
             # the motion file; _env_target_betas: the env's actual body in sim.
             betas = torch.cat([self.source_betas[self.data_id], self._env_target_betas], dim=-1) \
                 if self._use_betas_obs else None
             self.obs_buf[:] = self._stack_obs_horizons(None, horizons, betas)
         else:
-            self._curr_ref_obs[env_ids] = self.hoi_data[self.data_id[env_ids], self.progress_buf[env_ids]].clone()
+            self._curr_ref_obs[env_ids] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
             betas = torch.cat([self.source_betas[self.data_id[env_ids]],
                                self._env_target_betas[env_ids]], dim=-1) \
                 if self._use_betas_obs else None
@@ -1325,7 +1348,8 @@ class InterMimic(Humanoid_SMPLX):
 
                     if idx > 0 and idx < self.rollout_length and adjust_reward[i, j] > 0.5:
                         self.ref_reward[i, index, j] = adjust_reward[i, j]
-                        self.hoi_refs[i, index, j] = state[id1, idx]
+                        # state is on GPU; hoi_refs may be on CPU (cpuMotionData) -> match its device
+                        self.hoi_refs[i, index, j] = state[id1, idx].to(self.hoi_refs.device)
             self.ref_reward[:, 1:, :] = self.ref_reward[:, 1:, :] * (1 - 1e-5)
         return
 

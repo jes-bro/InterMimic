@@ -64,6 +64,10 @@ SYN_ARGS=""
 BODY_NORM=""
 [ -n "${BODY_NORM_REWARD:-}" ] && BODY_NORM="--body-norm-reward"
 [ -n "${SUBJECT_HEIGHTS_FILE:-}" ] && BODY_NORM="$BODY_NORM --subject-heights-file $SUBJECT_HEIGHTS_FILE"
+# CPU_MOTION_DATA=1: stream reference motion from CPU (frees ~all the clip VRAM).
+# Lets the full curriculum (and bigger source datasets) fit on <=44GB GPUs.
+CPU_MOTION=""
+[ -n "${CPU_MOTION_DATA:-}" ] && CPU_MOTION="--cpu-motion-data"
 # After all data is folded in, keep training the full set until the slurm time
 # limit (substage budgets only advance the curriculum, they don't converge it).
 # -1 = UNBOUNDED (no epoch cap, train until slurm kills it); N = cap at N more
@@ -77,5 +81,5 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || tru
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
-    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM \
+    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM $CPU_MOTION \
     --final-train-epochs "$FINAL_TRAIN_EPOCHS" --resume
