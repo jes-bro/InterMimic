@@ -117,6 +117,7 @@ env:
   numObs: {num_obs}
   useTransformerObs: {use_transformer_obs}
   cpuMotionData: {cpu_motion}
+{pose_term_block}
   motion_file: InterAct/OMOMO_new
   robotType: "smplx/omomo.xml"
   objectDensity: 200
@@ -576,6 +577,13 @@ def main():
     ap.add_argument("--subject-heights-file", default=None,
                     help="JSON {subject_id: height_m} extending SUBJECT_HEIGHTS, for "
                          "synthetic bodies (sub100+) under --body-norm-reward")
+    ap.add_argument("--pose-reward", action="store_true",
+                    help="enable Term 1: parent-relative joint-angle (dof_pos) pose "
+                         "reward, layered exp(-lambda*sum (dof_ref-dof_sim)^2) into "
+                         "the reward product. Default OFF = stock reward.")
+    ap.add_argument("--pose-lambda", type=float, default=0.02,
+                    help="lambda for --pose-reward (SUM over 153 DOFs; ~0.02 is the "
+                         "rotation term's 2.5 expressed per-DOF).")
     ap.add_argument("--betas-file", default="scripts/omomo_betas.npz",
                     help="SMPL-X betas file for body conditioning. Default = stock "
                          "GENDERED betas. Use scripts/omomo_betas_neutral.npz for the "
@@ -598,6 +606,10 @@ def main():
     num_obs = 6524 if is_transformer else 3230
     body_norm = "true" if args.body_norm_reward else "false"
     cpu_motion = "true" if args.cpu_motion_data else "false"
+    pose_term_block = (
+        f"  rewardTerms:\n    pose:\n      enable: true\n      lambda: {args.pose_lambda}"
+        if args.pose_reward else
+        "  # rewardTerms.pose omitted (relative joint-angle reward off)")
     heights_line = (f"  subjectHeightsFile: {args.subject_heights_file}"
                     if args.subject_heights_file else
                     "  # subjectHeightsFile omitted (SUBJECT_HEIGHTS dict only)")
@@ -731,7 +743,8 @@ def main():
             pair_weights_line=pair_weights_line, counts_line=counts_line,
             mask_dead_envs=mask_dead, num_obs=num_obs,
             betas_file=args.betas_file, body_norm=body_norm, heights_line=heights_line,
-            use_transformer_obs=use_transformer_obs, cpu_motion=cpu_motion))
+            use_transformer_obs=use_transformer_obs, cpu_motion=cpu_motion,
+            pose_term_block=pose_term_block))
         train_cfg.write_text(TRAIN_TMPL.format(
             stage=ss['suffix'], active=active, exp_name=exp_name,
             save_frequency=args.save_frequency, resume_from=resume_from,

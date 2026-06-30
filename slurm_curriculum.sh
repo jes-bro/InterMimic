@@ -68,6 +68,10 @@ BODY_NORM=""
 # Lets the full curriculum (and bigger source datasets) fit on <=44GB GPUs.
 CPU_MOTION=""
 [ -n "${CPU_MOTION_DATA:-}" ] && CPU_MOTION="--cpu-motion-data"
+# POSE_REWARD=1: enable Term 1, the parent-relative joint-angle (dof_pos) reward,
+# layered into the reward product. Tune strength with POSE_LAMBDA (default 0.02).
+POSE_ARGS=""
+[ -n "${POSE_REWARD:-}" ] && POSE_ARGS="--pose-reward --pose-lambda ${POSE_LAMBDA:-0.02}"
 # After all data is folded in, keep training the full set until the slurm time
 # limit (substage budgets only advance the curriculum, they don't converge it).
 # -1 = UNBOUNDED (no epoch cap, train until slurm kills it); N = cap at N more
@@ -81,5 +85,5 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || tru
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
-    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM $CPU_MOTION \
+    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM $CPU_MOTION $POSE_ARGS \
     --final-train-epochs "$FINAL_TRAIN_EPOCHS" --resume

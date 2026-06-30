@@ -297,6 +297,22 @@ class InterMimic(Humanoid_SMPLX):
             self._env_body_height = body_heights_per_subj[self._env_subject_idx]
             print(f"[intermimic] body-normalized reward enabled; per-env body heights {tuple(self._env_body_height.shape)} (min {self._env_body_height.min().item():.3f}, max {self._env_body_height.max().item():.3f})", flush=True)
 
+        # --- Term 1: parent-relative joint-angle pose reward (opt-in factor) ---
+        # Ported from the objectaug-experiment branch. Compares simulated vs
+        # reference dof_pos (the 51x3=153 parent-relative joint DOFs) and folds
+        # exp(-lambda * sum_j (dof_ref - dof_sim)^2) into the reward PRODUCT when
+        # rewardTerms.pose.enable is set. Default OFF => reward byte-identical to
+        # stock. The error is a SUM over 153 DOFs, so lambda ~0.02 is roughly the
+        # rotation term's 2.5 expressed per-DOF. See _compute_pose_reward.
+        pose_cfg = (cfg['env'].get('rewardTerms', {}) or {}).get('pose', {}) or {}
+        self._pose_term_enable = bool(pose_cfg.get('enable', False))
+        self._pose_lambda = float(pose_cfg.get('lambda', 0.02))
+        # Env-var-gated dof-alignment sanity print (no effect on training).
+        self._pose_reward_debug = os.environ.get('POSE_REWARD_DEBUG') == '1'
+        if self._pose_term_enable:
+            print(f"[intermimic] pose reward (relative joint-angle) enabled; "
+                  f"lambda={self._pose_lambda}", flush=True)
+
         # --- Per-(body, source) pair sampling weights (curriculum balancing) ---
         # Optional. cfg 'subjectPairWeightsFile' points at a JSON mapping
         # "b{B}_s{S}" -> float weight (B, S = subject numbers). When set, motion
@@ -1374,7 +1390,11 @@ class InterMimic(Humanoid_SMPLX):
         ro, object_reset, obj_points, ref_obj_points = self.compute_obj_reward(self.reward_weights)
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
-        self.rew_buf[:] = rb * ro * rig * rcg
+        reward = rb * ro * rig * rcg
+        # Term 1 (opt-in): relative joint-angle pose factor, layered on the product.
+        if self._pose_term_enable:
+            reward = reward * self._compute_pose_reward()
+        self.rew_buf[:] = reward
         kinematic_reset = torch.logical_or(human_reset, object_reset)
         self.contact_reset = (self.contact_reset + contact_reset) * contact_reset
         self.kinematic_reset = torch.logical_or(ig_reset, kinematic_reset)
@@ -1402,6 +1422,36 @@ class InterMimic(Humanoid_SMPLX):
 
         return
     
+    def _compute_pose_reward(self):
+        """Term 1: parent-relative joint-angle pose matching (opt-in factor).
+
+        Compares simulated vs reference dof_pos -- the 51x3 = 153 parent-relative
+        joint DOFs (raw, identical convention on both sides, no heading
+        dependence). The SMPL-X DOFs are all bounded hinges (range +/-180deg),
+        so they do NOT wrap; the existing energy term already diffs dof values by
+        plain subtraction, and we match that (no +/-pi wrap):
+
+            rew_factor = exp(-lambda_pose * sum_j (dof_ref - dof_sim)^2)  in (0, 1]
+
+        multiplied into the reward product when rewardTerms.pose.enable is set.
+        """
+        dof_sim = self.extract_data_component('dof_pos', obs=self._curr_obs)
+        dof_ref = self.extract_data_component('dof_pos', obs=self._curr_ref_obs)
+        err = ((dof_ref - dof_sim) ** 2).sum(dim=-1)
+        if self._pose_reward_debug:
+            # Just-reset envs are state-init'd TO the reference, so their err must
+            # be ~0; a large min/median would mean sim/ref dof orderings differ.
+            self._posechk_n = getattr(self, '_posechk_n', 0) + 1
+            if self._posechk_n % 50 == 1:
+                fresh = (self.progress_buf - self.start_times) <= 1
+                if bool(fresh.any()):
+                    fe = err[fresh]
+                    print(f"[posechk] {int(fresh.sum())} fresh: err min={fe.min().item():.4f} "
+                          f"med={fe.median().item():.4f} max={fe.max().item():.4f} "
+                          f"(small min/med => dof aligned; max = hybrid default-init resets)",
+                          flush=True)
+        return torch.exp(-self._pose_lambda * err)
+
     def compute_humanoid_reward(self, w):
         # body pos reward
         len_keypos = len(self._key_body_ids)
