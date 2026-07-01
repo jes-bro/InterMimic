@@ -72,6 +72,14 @@ CPU_MOTION=""
 # layered into the reward product. Tune strength with POSE_LAMBDA (default 0.02).
 POSE_ARGS=""
 [ -n "${POSE_REWARD:-}" ] && POSE_ARGS="--pose-reward --pose-lambda ${POSE_LAMBDA:-0.02}"
+# Plateau-detector tuning (governs when a substage ADVANCES to the next).
+# IMPROVE_FRAC: fractional reward gain that counts as progress (default 0.01).
+#   Lower => slow/noisy reward growth still resets the patience clock => each
+#   substage trains LONGER. IMPROVE_FRAC=0 => any new all-time-high counts.
+# PATIENCE: epochs of no >IMPROVE_FRAC gain before advancing (default 300).
+PLATEAU_ARGS=""
+[ -n "${IMPROVE_FRAC:-}" ] && PLATEAU_ARGS="$PLATEAU_ARGS --improve-frac $IMPROVE_FRAC"
+[ -n "${PATIENCE:-}" ]     && PLATEAU_ARGS="$PLATEAU_ARGS --patience $PATIENCE"
 # After all data is folded in, keep training the full set until the slurm time
 # limit (substage budgets only advance the curriculum, they don't converge it).
 # -1 = UNBOUNDED (no epoch cap, train until slurm kills it); N = cap at N more
@@ -85,5 +93,5 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="c-${RUN_NAME}" 2>/dev/null || tru
 python scripts/curriculum_runner.py \
     --run-name "$RUN_NAME" --schedule "$SCHEDULE" --balance "$BALANCE" \
     --exposure "$EXPOSURE" $MASK_DEAD --network "$NETWORK" \
-    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM $CPU_MOTION $POSE_ARGS \
+    --num-envs "$NUM_ENVS" --betas-file "$BETAS_FILE" $SYN_ARGS $BODY_NORM $CPU_MOTION $POSE_ARGS $PLATEAU_ARGS \
     --final-train-epochs "$FINAL_TRAIN_EPOCHS" --resume
