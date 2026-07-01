@@ -145,6 +145,24 @@ class InterMimic(Humanoid_SMPLX):
         self.save_images = cfg['env']['saveImages']
         self.init_vel = cfg['env']['initVel']
         self.ball_size = cfg['env']['ballSize']
+        # --- KINEMATIC object-perturbation test (opt-in, play_dataset ONLY) ---
+        # No physics/policy: perturbs the object (isotropic scale, fixed XY
+        # translate, fixed yaw) and measures how well the retargeted subject's
+        # hands still reach the perturbed object surface on the source-contact
+        # frames. This is the no-physics probe of whether kinematic retargeting
+        # (subject retargeted via subjectBodies + object perturbed here) keeps the
+        # interaction. OFF => scale=1, translate=yaw=0 => byte-identical replay.
+        op = cfg['env'].get('objectPerturb', None)
+        self._obj_perturb = bool(op) and bool(op.get('enable', False))
+        self._op_scale = float(op.get('scale', 1.0)) if self._obj_perturb else 1.0
+        self._op_translate = float(op.get('translateM', 0.0)) if self._obj_perturb else 0.0
+        self._op_yaw = float(op.get('yawRad', 0.0)) if self._obj_perturb else 0.0
+        self._km_gap_sum = 0.0; self._km_max_gap = 0.0; self._km_n = 0; self._km_hit = 0
+        self._km_eps = 0.05  # hand within 5cm of surface = "contact preserved"
+        if self._obj_perturb:
+            print(f"[objperturb] KINEMATIC test: scale={self._op_scale} "
+                  f"translate={self._op_translate}m yaw={self._op_yaw:.3f}rad "
+                  f"({self._op_yaw*57.3:.0f}deg)", flush=True)
         self.more_rigid = cfg['env']['moreRigid']
         self.rollout_length = cfg['env']['rolloutLength']
         self.psi = cfg['env'].get('physicalBufferSize', 1)
@@ -870,7 +888,7 @@ class InterMimic(Humanoid_SMPLX):
         self.gym.set_actor_rigid_shape_properties(env_ptr, target_handle, props)
 
         self._target_handles.append(target_handle)
-        self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size)
+        self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size * self._op_scale)
 
         return
 
@@ -1873,6 +1891,17 @@ class InterMimic(Humanoid_SMPLX):
         self._target_states[env_ids, 3:7] = self.extract_data_component('obj_rot', True, self.data_id[env_ids], t)
         self._target_states[env_ids, 7:10] = torch.zeros_like(self._target_states[env_ids, 7:10])
         self._target_states[env_ids, 10:13] = torch.zeros_like(self._target_states[env_ids, 10:13])
+        # KINEMATIC object perturbation: fixed XY translate + yaw about Z (scale is
+        # baked at env creation via set_actor_scale). Applied identically to all envs
+        # so a yaw/scale sweep is clean. No-op when objectPerturb is off.
+        if self._obj_perturb:
+            if self._op_translate != 0.0:
+                self._target_states[env_ids, 0] += self._op_translate
+            if self._op_yaw != 0.0:
+                half = self._op_yaw * 0.5
+                zq = torch.zeros(env_ids.shape[0], 4, device=self.device)
+                zq[:, 2] = float(np.sin(half)); zq[:, 3] = float(np.cos(half))
+                self._target_states[env_ids, 3:7] = quat_mul(zq, self._target_states[env_ids, 3:7])
 
         ### update subject ###   
         _humanoid_root_pos = self.extract_data_component('root_pos', True, self.data_id[env_ids], t)
@@ -1902,6 +1931,29 @@ class InterMimic(Humanoid_SMPLX):
         obj_contact = self.extract_data_component('contact_obj', True, self.data_id[env_ids], t)
         obj_contact = torch.any(obj_contact > 0.1, dim=-1)
         human_contact = self.extract_data_component('contact_human', True, self.data_id[env_ids], t)
+        # KINEMATIC-RETARGET METRIC: on the frames the source used a hand for
+        # contact, how far is the RETARGETED body's hand from the PERTURBED object
+        # surface? gap~0 => interaction survived retargeting; gap large => broke.
+        if self._obj_perturb:
+            obj_idx = self.object_id[self.data_id[env_ids]]
+            pts = self.object_points[obj_idx] * self._op_scale                 # (E,P,3) scaled local surface
+            P = pts.shape[1]
+            orot = self._target_states[env_ids, 3:7]; opos = self._target_states[env_ids, :3]
+            world = quat_rotate(orot.unsqueeze(1).repeat(1, P, 1).reshape(-1, 4),
+                                pts.reshape(-1, 3)).reshape(env_ids.shape[0], P, 3) + opos.unsqueeze(1)
+            hands = self._rigid_body_pos[env_ids][:, [17, 36], :]              # L_Wrist, R_Wrist (world)
+            gap = torch.cdist(hands, world).min(dim=-1)[0]                     # (E,2) hand -> nearest surface pt
+            lc = (human_contact[:, 17:33] > 0.5).any(-1)                       # source used LEFT hand
+            rc = (human_contact[:, 36:52] > 0.5).any(-1)                       # source used RIGHT hand
+            cmask = torch.stack([lc, rc], dim=-1)                              # (E,2) contact-hand frames only
+            if bool(cmask.any()):
+                g = gap[cmask]
+                self._km_gap_sum += float(g.sum()); self._km_n += int(g.numel())
+                self._km_hit += int((g < self._km_eps).sum()); self._km_max_gap = max(self._km_max_gap, float(g.max()))
+            if self._km_n > 0 and (time % 100 == 0):
+                print(f"[objperturb] t={time} contact-hand gap mean={100*self._km_gap_sum/self._km_n:.1f}cm "
+                      f"max={100*self._km_max_gap:.1f}cm  preserved(<{100*self._km_eps:.0f}cm)="
+                      f"{100*self._km_hit/self._km_n:.0f}%  (n={self._km_n})", flush=True)
         for env_id, env_ptr in enumerate(self.envs):
             if env_id in env_ids:
                 env_ptr = self.envs[env_id]
