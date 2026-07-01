@@ -1,0 +1,44 @@
+#!/bin/bash
+#SBATCH --account=simurgh
+#SBATCH --partition=simurgh --qos=normal
+#SBATCH --time=7-00:00:00
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --gres=gpu:1
+
+#SBATCH --job-name="tch-src2_xf"
+#SBATCH --output=teacher-src2_xf-%j.out
+
+#SBATCH --mail-user=jesb@stanford.edu
+#SBATCH --mail-type=ALL
+
+# SOURCE-TEACHER validation run: source=sub2 driving ALL 14 train bodies,
+# body-conditioned (neutral betas), NO staging -- one straight RL run.
+#
+# The question this answers: can a per-source teacher learn 1-source x 14-bodies
+# without a fold-in curriculum? Watch mean_rewards: if it climbs and converges
+# to a good level across bodies, the teacher-student direction is validated
+# (14 such teachers -> 1 distilled student, no staging, ~14 teachers not 196).
+# If it stalls/struggles, staging wasn't avoidable and the curriculum stands.
+#
+# Runs from repo root. Saves to checkpoints/smplx_teacher_src2_xf/nn/.
+
+source ~/.bashrc
+conda deactivate
+conda activate intermimic-gym2
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
+
+CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_teacher_src2_xf.yaml
+CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src2_xf.yaml
+
+echo "[teacher] source=sub2 x 14 train bodies, TRANSFORMER + neutral betas + body-norm + pose, no staging"
+echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src2_xf/nn/"
+
+python -u -m intermimic.run \
+    --task InterMimic \
+    --cfg_env "$CFG_ENV" \
+    --cfg_train "$CFG_TRAIN" \
+    --headless \
+    --output checkpoints
