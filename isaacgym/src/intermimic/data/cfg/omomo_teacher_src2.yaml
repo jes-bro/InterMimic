@@ -30,7 +30,9 @@ env:
   dataFPS: 30
   dataFramesScale: 1
   dataSub: ['sub2']
-  subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub13', 'sub14', 'sub15', 'sub17']
+  # 13 train bodies: sub13 is HELD OUT as a teacher test body (unseen), on top of
+  # the global held-out {4,10,16}. Tests the teacher's body-generalization.
+  subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']
   betas_file: scripts/omomo_betas_neutral.npz
   bodyNormalizedReward: true
   ballSize: 1.
