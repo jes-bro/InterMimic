@@ -313,6 +313,15 @@ class InterMimic(Humanoid_SMPLX):
             print(f"[intermimic] pose reward (relative joint-angle) enabled; "
                   f"lambda={self._pose_lambda}", flush=True)
 
+        # Per-body reward breakdown (opt-in, PERBODY_REWARD=1). Throttled print of
+        # mean step-reward grouped by the env's body -> shows which bodies in the
+        # fold carry vs drag the average mean_rewards. Accumulators allocated
+        # lazily (need subject_bodies/_env_subject_idx from super().__init__).
+        # No effect on training when off.
+        self._perbody_reward_debug = os.environ.get('PERBODY_REWARD') == '1'
+        self._perbody_sum = None
+        self._perbody_n = 0
+
         # --- Per-(body, source) pair sampling weights (curriculum balancing) ---
         # Optional. cfg 'subjectPairWeightsFile' points at a JSON mapping
         # "b{B}_s{S}" -> float weight (B, S = subject numbers). When set, motion
@@ -1395,6 +1404,20 @@ class InterMimic(Humanoid_SMPLX):
         if self._pose_term_enable:
             reward = reward * self._compute_pose_reward()
         self.rew_buf[:] = reward
+        # Per-body reward breakdown (opt-in). Group per-step reward by env body.
+        if self._perbody_reward_debug and getattr(self, 'subject_bodies', None) is not None:
+            nb = len(self.subject_bodies)
+            if self._perbody_sum is None:
+                self._perbody_sum = torch.zeros(nb, device=self.device)
+                self._perbody_cnt = torch.zeros(nb, device=self.device)
+            self._perbody_sum.index_add_(0, self._env_subject_idx, self.rew_buf)
+            self._perbody_cnt.index_add_(0, self._env_subject_idx, torch.ones_like(self.rew_buf))
+            self._perbody_n += 1
+            if self._perbody_n % 500 == 0:
+                m = (self._perbody_sum / self._perbody_cnt.clamp(min=1)).tolist()
+                parts = " ".join(f"{self.subject_bodies[i]}={m[i]:.2f}" for i in range(nb))
+                print(f"[perbody] mean step-reward/body (last 500 steps): {parts}", flush=True)
+                self._perbody_sum.zero_(); self._perbody_cnt.zero_()
         kinematic_reset = torch.logical_or(human_reset, object_reset)
         self.contact_reset = (self.contact_reset + contact_reset) * contact_reset
         self.kinematic_reset = torch.logical_or(ig_reset, kinematic_reset)
