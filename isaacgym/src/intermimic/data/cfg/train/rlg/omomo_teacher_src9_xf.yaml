@@ -70,3 +70,4 @@ params:
     bounds_loss_coef: 10
     enable_eps_greedy: False
     save_intermediate: True
+    resume_from: 'None'
