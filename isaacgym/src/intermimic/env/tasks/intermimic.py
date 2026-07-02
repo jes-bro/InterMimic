@@ -340,6 +340,10 @@ class InterMimic(Humanoid_SMPLX):
         # Stock object-match terms (ro*rig*rcg). ON by default => stock reward. Toggle OFF
         # for objectAug runs where the perturbed object makes them unachievable.
         self._object_terms_enable = bool(cfg['env'].get('objectTermsEnable', True))
+        # Opt-in mass-hold verification print (OBJECTAUG_DEBUG=1): prints per-object
+        # total_mass vs aug for the first envs so you can confirm mass tracks
+        # scale**massExp (not scale**3) before trusting a run. No training effect.
+        self._oa_debug = os.environ.get('OBJECTAUG_DEBUG') == '1'
 
         super().__init__(cfg=cfg,
                          sim_params=sim_params,
@@ -934,6 +938,12 @@ class InterMimic(Humanoid_SMPLX):
                 bp.inertia.z.x *= corr; bp.inertia.z.y *= corr; bp.inertia.z.z *= corr
             self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
                                                      recomputeInertia=False)
+
+        if self._oa_debug and env_id < 8:
+            dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            print(f"[masschk] env{env_id} obj={self.object_name[env_id % len(self.object_name)]} "
+                  f"aug={aug:.3f} total_mass={sum(p.mass for p in dbg):.4f} "
+                  f"(expect mass ~ nominal * aug^{self._oa_mass_exp:.1f})", flush=True)
 
         return
 
