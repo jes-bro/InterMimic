@@ -8,7 +8,7 @@
 # Fixings ON: neutral betas, body-normalized reward, pose reward, PSI.
 # cpuMotionData OFF (one source's clips are small). No mask-dead-envs.
 env:
-  numEnvs: 2048  # transformer: less memory headroom than MLP
+  numEnvs: 4096  # transformer at 4096; cpu-motion offload frees the VRAM
   envSpacing: 2
   episodeLength: 300
   isFlagrun: False
