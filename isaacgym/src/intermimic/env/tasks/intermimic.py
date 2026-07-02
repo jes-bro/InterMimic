@@ -1941,8 +1941,17 @@ class InterMimic(Humanoid_SMPLX):
             orot = self._target_states[env_ids, 3:7]; opos = self._target_states[env_ids, :3]
             world = quat_rotate(orot.unsqueeze(1).repeat(1, P, 1).reshape(-1, 4),
                                 pts.reshape(-1, 3)).reshape(env_ids.shape[0], P, 3) + opos.unsqueeze(1)
-            hands = self._rigid_body_pos[env_ids][:, [17, 36], :]              # L_Wrist, R_Wrist (world)
-            gap = torch.cdist(hands, world).min(dim=-1)[0]                     # (E,2) hand -> nearest surface pt
+            # Nearest of ALL left-/right-hand bodies (wrist + fingers -- the same
+            # 17:33 / 36:52 blocks used for the contact mask below) to the perturbed
+            # object surface. Measuring the WRIST alone reads ~9cm even for a perfect
+            # grip (the wrist sits a hand-length behind the fingertips that actually
+            # touch), which fails the <5cm test at yaw=0 and made the null-check look
+            # broken; fingertips are the honest contact point.
+            lh = self._rigid_body_pos[env_ids][:, 17:33, :]                    # (E,16,3) left-hand bodies
+            rh = self._rigid_body_pos[env_ids][:, 36:52, :]                    # (E,16,3) right-hand bodies
+            gap_l = torch.cdist(lh, world).min(dim=-1)[0].min(dim=-1)[0]       # (E,) closest L body -> surface
+            gap_r = torch.cdist(rh, world).min(dim=-1)[0].min(dim=-1)[0]       # (E,) closest R body -> surface
+            gap = torch.stack([gap_l, gap_r], dim=-1)                          # (E,2) [left, right]
             lc = (human_contact[:, 17:33] > 0.5).any(-1)                       # source used LEFT hand
             rc = (human_contact[:, 36:52] > 0.5).any(-1)                       # source used RIGHT hand
             cmask = torch.stack([lc, rc], dim=-1)                              # (E,2) contact-hand frames only
