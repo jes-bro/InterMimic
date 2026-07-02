@@ -11,7 +11,7 @@
 # only add per-step transfer for no VRAM win. No mask-dead-envs / pair-weights
 # (all 14 bodies are live; that machinery is curriculum-only).
 env:
-  numEnvs: 4096  # transformer at 4096; cpu-motion offload frees the VRAM
+  numEnvs: 4096  # 4096 fits w/o offload: single-source motion is tiny; only obs/experience grows
   envSpacing: 2
   episodeLength: 300
   isFlagrun: False
