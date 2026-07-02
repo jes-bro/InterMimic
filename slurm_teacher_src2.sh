@@ -36,6 +36,20 @@ CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src2.yaml
 echo "[teacher] source=sub2 x 14 train bodies, neutral betas + body-norm + pose, no staging"
 echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src2_neutral/nn/"
 
+# --- auto-resume: continue from the latest checkpoint if one exists (survives the
+# July 3-5 outage / any requeue). resume_from loads mimic.pth at agent-init BEFORE
+# any new save, so it never clobbers progress. Fresh start when no checkpoint yet. ---
+EXP=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$CFG_TRAIN" | awk '{print $2}')
+CKPT="checkpoints/${EXP}/nn/mimic.pth"
+if [ -f "$CKPT" ]; then
+    RESUME_TRAIN="/tmp/${EXP}_resume_${SLURM_JOB_ID}.yaml"
+    sed "s|resume_from: 'None'|resume_from: '${CKPT}'|" "$CFG_TRAIN" > "$RESUME_TRAIN"
+    CFG_TRAIN="$RESUME_TRAIN"
+    echo "[teacher] RESUMING from ${CKPT}"
+else
+    echo "[teacher] fresh start (no checkpoint at ${CKPT})"
+fi
+
 python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_ENV" \
