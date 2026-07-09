@@ -48,6 +48,14 @@ OUT="${OUT:-eval_results/curriculum_ist_meas_7700_indist.csv}"
 # we drop that restriction. Set ALL_OBJECTS=0 to keep the base config's filter.
 ALL_OBJ=""
 [ "${ALL_OBJECTS:-1}" = "1" ] && ALL_OBJ="--all-objects"
+# Arch-matched configs. Default = MLP. For a TRANSFORMER checkpoint set
+#   BASE_YAML=.../omomo_test_multibody_xf.yaml  TRAIN_YAML=<transformer train yaml>.
+# BETAS_FILE overrides the base yaml's betas_file so the beta obs matches the
+# checkpoint's training betas (neutral vs gendered vs neutral_aug).
+BASE_YAML="${BASE_YAML:-isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml}"
+TRAIN_YAML="${TRAIN_YAML:-isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml}"
+BETAS_ARG=""
+[ -n "${BETAS_FILE:-}" ] && BETAS_ARG="--betas-file $BETAS_FILE"
 
 # Rename the job so `squeue` shows which eval this is (the output CSV stem).
 scontrol update JobId="$SLURM_JOB_ID" JobName="ev-$(basename "${OUT%.csv}")" 2>/dev/null || true
@@ -56,6 +64,7 @@ mkdir -p "$(dirname "$OUT")"
 echo "[eval] checkpoint = $CHECKPOINT"
 echo "[eval] bodies=($BODIES)  x  sources=($SOURCES)  all_objects=${ALL_OBJECTS:-1}"
 echo "[eval] -> $OUT"
+echo "[eval] base=$BASE_YAML train=$TRAIN_YAML betas=${BETAS_FILE:-<base default>}"
 [ -f "$CHECKPOINT" ] || { echo "[eval] ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 
 python -u scripts/eval_per_pair.py \
@@ -63,8 +72,10 @@ python -u scripts/eval_per_pair.py \
     --bodies $BODIES \
     --sources $SOURCES \
     --output-csv "$OUT" \
+    --base-yaml "$BASE_YAML" \
+    --train-yaml "$TRAIN_YAML" \
     --num-envs "$NUM_ENVS" \
-    --timeout-per-pair "$TIMEOUT" $ALL_OBJ
+    --timeout-per-pair "$TIMEOUT" $ALL_OBJ $BETAS_ARG
 
 echo
 echo "================ EVAL SUMMARY ================"

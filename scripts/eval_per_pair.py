@@ -34,7 +34,7 @@ METRIC_PATTERNS = {
 }
 
 
-def make_temp_yaml(base_yaml_path, body, source, all_objects=False):
+def make_temp_yaml(base_yaml_path, body, source, all_objects=False, betas_file=None):
     """Copy base_yaml and patch subjectBodies=[body], dataSub=[source].
     If all_objects, also drop any dataObjects restriction so the eval covers
     the subject's FULL object set (the base test config carries a student-eval
@@ -57,6 +57,14 @@ def make_temp_yaml(base_yaml_path, body, source, all_objects=False):
         new_text = re.sub(
             r"^(\s*dataObjects:).*$",
             r"\1 []",
+            new_text, flags=re.MULTILINE,
+        )
+    if betas_file:
+        # Match the checkpoint's training betas (gendered vs neutral vs neutral_aug);
+        # the betas occupy part of the obs, so a mismatch silently corrupts eval.
+        new_text = re.sub(
+            r"^(\s*betas_file:).*$",
+            rf"\1 {betas_file}",
             new_text, flags=re.MULTILINE,
         )
     tmp = tempfile.NamedTemporaryFile(
@@ -82,8 +90,8 @@ def parse_metrics(stdout):
     return out
 
 
-def run_eval(body, source, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec, all_objects=False):
-    tmp_yaml = make_temp_yaml(base_yaml, body, source, all_objects=all_objects)
+def run_eval(body, source, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec, all_objects=False, betas_file=None):
+    tmp_yaml = make_temp_yaml(base_yaml, body, source, all_objects=all_objects, betas_file=betas_file)
     cmd = [
         "python", "-u", "-m", "intermimic.run",
         "--task", "InterMimic",
@@ -158,6 +166,10 @@ def main():
                         "pair is evaluated on the subject's FULL object set (the "
                         "test config's ['largetable','woodchair'] is a student-eval "
                         "leftover that filters most subjects to empty).")
+    p.add_argument("--betas-file", default=None,
+                   help="override betas_file in the base yaml to match the checkpoint's "
+                        "training betas, e.g. scripts/omomo_betas_neutral.npz. Required "
+                        "when the base test config's betas differ from what was trained.")
     p.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parents[1]),
@@ -178,6 +190,7 @@ def main():
                     body, source, args.base_yaml, args.train_yaml,
                     args.checkpoint, args.num_envs, args.repo_root,
                     args.timeout_per_pair, all_objects=args.all_objects,
+                    betas_file=args.betas_file,
                 )
                 row = {
                     "body": body,
