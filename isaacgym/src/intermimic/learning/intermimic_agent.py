@@ -494,6 +494,13 @@ class InterMimicAgent(common_agent.CommonAgent):
         # buffer. Every obs reaching the model passes through here, so zeroing
         # non-finite entries here is the catch-all.
         if not torch.isfinite(processed_obs).all():
+            # Match the reset-obs / reward paths: don't zero SILENTLY. A
+            # persistent non-finite obs (bad clip, poisoned normalizer) would
+            # otherwise be masked to zeros every step and quietly degrade the
+            # policy. Report the affected-env count so it can't pass unnoticed.
+            _bad = ~torch.isfinite(processed_obs.view(processed_obs.shape[0], -1)).all(dim=1)
+            print(f"[agent] non-finite obs at policy input in {int(_bad.sum())} "
+                  f"env(s); zeroing (investigate if this recurs)", flush=True)
             processed_obs = torch.nan_to_num(processed_obs, nan=0.0, posinf=0.0, neginf=0.0)
 
         self.model.eval()
