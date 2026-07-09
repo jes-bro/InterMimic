@@ -224,15 +224,17 @@ class InterMimic(Humanoid_SMPLX):
                 f"[intermimic] no motion files matched dataSub={sorted(data_sub_nums)} "
                 f"objects={data_objects} under '{self.motion_file}'. Check the "
                 f"motion_file dir and dataSub numbers (misspelled?).")
-        # The filter above keeps entries whose target subject is in dataSub, so
-        # mirror that field here: every requested dataSub subject must appear.
+        # Per-subject presence is only a WARNING, not an error: a subject can
+        # legitimately have zero clips for a given dataObjects filter (e.g. it
+        # never handled that object), and crashing a valid run on that would be
+        # a false positive. The empty-total case above is the unambiguous error.
         matched = {p[2] for p in parsed}
         missing = sorted(set(data_sub_nums) - matched)
         if missing:
-            raise ValueError(
-                f"[intermimic] dataSub subject(s) {missing} matched ZERO motion "
-                f"files under '{self.motion_file}' (objects={data_objects}). "
-                f"Refusing to silently train/eval on a subset of the requested set.")
+            print(f"[intermimic] WARNING: dataSub subject(s) {missing} matched ZERO "
+                  f"motion files under '{self.motion_file}' (objects={data_objects}). "
+                  f"Training/eval will proceed WITHOUT them -- check for a typo if "
+                  f"that's unexpected.", flush=True)
 
         self.motion_file = [p[0] for p in parsed]
         source_subject_nums = [p[1] for p in parsed]
