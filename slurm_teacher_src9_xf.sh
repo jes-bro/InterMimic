@@ -29,6 +29,7 @@ export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
 CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_teacher_src9_xf.yaml
 CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src9_xf.yaml
+echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 
 echo "[teacher] source=sub9 x 13 train bodies (sub13 held out), TRANSFORMER + neutral betas + body-norm + pose, no staging"
 echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src9_xf/nn/"

@@ -167,7 +167,7 @@ def main():
     fields = ["body", "source", "is_identity",
               "avg_steps", "human_pose_error", "object_pose_error",
               "success_rate", "success_count", "success_total",
-              "exit_code", "timed_out"]
+              "exit_code", "timed_out", "checkpoint"]
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.output_csv.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -185,6 +185,7 @@ def main():
                     "is_identity": body == source,
                     "exit_code": rc,
                     "timed_out": timed_out,
+                    "checkpoint": str(args.checkpoint),
                 }
                 if metrics is not None:
                     row.update(metrics)

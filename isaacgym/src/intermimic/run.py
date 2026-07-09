@@ -227,6 +227,20 @@ def main():
     args = get_args()
     cfg, cfg_train, logdir = load_cfg(args)
 
+    # --- record what launched this run, so every experiment's log self-identifies
+    #     (mirrors curriculum_runner's '[curriculum] invocation:' line). Teachers /
+    #     anything through run.py go straight through here, so without this you can't
+    #     tell after the fact which cfg + checkpoint a run used. Logs both the raw
+    #     argv AND the resolved experiment name (survives the auto-resume yaml rewrite).
+    import sys
+    _cfg_cfg = cfg_train.get('params', {}).get('config', {})
+    _exp = _cfg_cfg.get('full_experiment_name') or _cfg_cfg.get('name', '?')
+    print(f"[run] invocation: {' '.join(sys.argv)}", flush=True)
+    print(f"[run] task={getattr(args, 'task', '?')} "
+          f"cfg_env={getattr(args, 'cfg_env', '?')} "
+          f"cfg_train={getattr(args, 'cfg_train', '?')} "
+          f"experiment={_exp} -> checkpoints/{_exp}/nn/", flush=True)
+
     cfg_train['params']['seed'] = set_seed(cfg_train['params'].get("seed", -1), cfg_train['params'].get("torch_deterministic", False))
 
     cfg_train['params']['config']['multi_gpu'] = args.multi_gpu

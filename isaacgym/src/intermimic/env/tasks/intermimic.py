@@ -1385,12 +1385,126 @@ class InterMimic(Humanoid_SMPLX):
 
         return reset, terminated
 
+    # ---- Opt-in reward diagnostics (REWARD_BREAKDOWN=1) -----------------------
+    # Periodically prints mean reward TERMS (rb=body, ro=object, rig=interaction,
+    # rcg=contact) and the mean reward, grouped by object type, real-vs-synthetic
+    # body, beta-cluster, and per-clip contact difficulty. Never affects training
+    # (guarded by env var + try/except in the caller). Cadence: REWARD_BREAKDOWN_EVERY
+    # steps (default 1000); beta clusters: REWARD_BREAKDOWN_KCLUSTERS (default 4).
+    def _kmeans_np(self, X, k, iters=30, seed=0):
+        import numpy as np
+        rng = np.random.RandomState(seed)
+        C = X[rng.choice(len(X), size=k, replace=False)].copy()
+        a = np.zeros(len(X), dtype=int)
+        for _ in range(iters):
+            a = ((X[:, None, :] - C[None, :, :]) ** 2).sum(-1).argmin(1)
+            for j in range(k):
+                m = a == j
+                if m.any():
+                    C[j] = X[m].mean(0)
+        return a
+
+    def _compute_motion_difficulty(self):
+        """Per-motion difficulty (0 easy,1 med,2 hard) from contact_obj (ch 330):
+        sustained grip = easy, long object free-flight = hard."""
+        fps = float(getattr(self, 'fps_data', 30) or 30)
+        buckets = torch.full((len(self.motion_file),), 1, dtype=torch.long, device=self.device)
+        for mi, path in enumerate(self.motion_file):
+            try:
+                x = torch.load(path, map_location='cpu', weights_only=False).detach().float()
+                contact = torch.round(x[:, 330])
+                cf = float(contact.mean())
+                free = (contact < 0.5).tolist()
+                run = mx = 0
+                for v in free:
+                    run = run + 1 if v else 0
+                    mx = run if run > mx else mx
+                max_ff = mx / fps
+                buckets[mi] = 0 if (cf >= 0.85 and max_ff < 0.4) else (2 if (cf < 0.6 or max_ff >= 1.0) else 1)
+            except Exception:
+                pass
+        return buckets
+
+    def _init_reward_breakdown(self):
+        import numpy as np, os as _os
+        dev, n = self.device, self.num_envs
+        no = max(1, len(self.object_name))
+        self._rbd_obj_ids = (torch.arange(n, device=dev) % no).long()
+        rs = torch.zeros(n, dtype=torch.long, device=dev)
+        if hasattr(self, '_body_subject_nums') and hasattr(self, '_env_subject_idx'):
+            subj = torch.as_tensor(self._body_subject_nums, device=dev)[self._env_subject_idx]
+            rs = (subj >= 100).long()
+        self._rbd_rs_ids = rs
+        K = int(_os.environ.get('REWARD_BREAKDOWN_KCLUSTERS', '4'))
+        if getattr(self, '_env_target_betas', None) is not None and K > 1:
+            B = self._env_target_betas.detach().cpu().numpy().astype('float64')
+            uniq, inv = np.unique(B.round(4), axis=0, return_inverse=True)
+            k = min(K, len(uniq))
+            lab = self._kmeans_np(uniq, k)
+            self._rbd_cluster_ids = torch.as_tensor(lab[inv], device=dev).long()
+            nclust = k
+        else:
+            self._rbd_cluster_ids = torch.zeros(n, dtype=torch.long, device=dev); nclust = 1
+        self._rbd_diff_of_motion = self._compute_motion_difficulty()
+        self._rbd_specs = {
+            'object':     (self._rbd_obj_ids,     list(self.object_name)),
+            'body':       (self._rbd_rs_ids,      ['real', 'synthetic']),
+            'beta-clust': (self._rbd_cluster_ids, ['c%d' % i for i in range(nclust)]),
+            'difficulty': (None,                  ['easy', 'medium', 'hard']),
+        }
+        self._rbd_every = int(_os.environ.get('REWARD_BREAKDOWN_EVERY', '1000'))
+        self._rbd_reset_accum()
+        self._rbd_ready = True
+        print("[reward-breakdown] on: %d objects, real/synth=%d/%d, %d beta-clusters, every %d steps"
+              % (len(self.object_name), int((rs == 0).sum()), int((rs == 1).sum()), nclust, self._rbd_every), flush=True)
+
+    def _rbd_reset_accum(self):
+        self._rbd_sums, self._rbd_cnts = {}, {}
+        for g, (ids, names) in self._rbd_specs.items():
+            self._rbd_sums[g] = torch.zeros((len(names), 5), device=self.device)  # rb,ro,rig,rcg,reward
+            self._rbd_cnts[g] = torch.zeros(len(names), device=self.device)
+        self._rbd_steps = 0
+
+    def _log_reward_breakdown(self, rb, ro, rig, rcg):
+        if not getattr(self, '_rbd_ready', False):
+            self._init_reward_breakdown()
+        T = torch.stack([rb, ro, rig, rcg, rb * ro * rig * rcg], dim=1).detach()
+        ids_by_g = {'object': self._rbd_obj_ids, 'body': self._rbd_rs_ids,
+                    'beta-clust': self._rbd_cluster_ids,
+                    'difficulty': self._rbd_diff_of_motion[self.data_id]}
+        for g, ids in ids_by_g.items():
+            ng = len(self._rbd_specs[g][1])
+            self._rbd_cnts[g] += torch.bincount(ids, minlength=ng).float()
+            for k in range(5):
+                self._rbd_sums[g][:, k] += torch.bincount(ids, weights=T[:, k], minlength=ng)
+        self._rbd_steps += 1
+        if self._rbd_steps >= self._rbd_every:
+            print("\n[reward-breakdown] over %d steps  (rb=body ro=object rig=interaction rcg=contact)" % self._rbd_steps, flush=True)
+            for g, (ids, names) in self._rbd_specs.items():
+                cnt = self._rbd_cnts[g]; tot = cnt.sum().item()
+                print("  by %s:" % g, flush=True)
+                for j in torch.argsort(cnt, descending=True).tolist():
+                    c = cnt[j].item()
+                    if c <= 0:
+                        continue
+                    m = self._rbd_sums[g][j] / c
+                    print("     %-14s %4.0f%%  rb=%.3f ro=%.3f rig=%.3f rcg=%.3f  reward=%.3f"
+                          % (names[j], 100 * c / tot, m[0], m[1], m[2], m[3], m[4]), flush=True)
+            self._rbd_reset_accum()
+
     def _compute_reward(self, actions):
         rb, human_reset, key_pos, ref_key_pos = self.compute_humanoid_reward(self.reward_weights)
         ro, object_reset, obj_points, ref_obj_points = self.compute_obj_reward(self.reward_weights)
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
         reward = rb * ro * rig * rcg
+        if os.environ.get('REWARD_BREAKDOWN') == '1':
+            try:
+                self._log_reward_breakdown(rb, ro, rig, rcg)
+            except Exception as _rbde:
+                if not getattr(self, '_rbd_warned', False):
+                    print("[reward-breakdown] disabled after error: %r" % (_rbde,), flush=True)
+                    self._rbd_warned = True
         # Term 1 (opt-in): relative joint-angle pose factor, layered on the product.
         if self._pose_term_enable:
             reward = reward * self._compute_pose_reward()
