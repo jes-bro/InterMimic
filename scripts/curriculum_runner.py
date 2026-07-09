@@ -491,6 +491,28 @@ def run_stage(env_cfg, train_cfg, exp_name, log_path, args,
     return epochs_in_stage, exited_on_own
 
 
+# Curriculum-SHAPE-defining flags. Changing any of these mid-run changes the
+# substage list, the obs/reward layout, or the warm-start compatibility -- so
+# resuming with a different value silently produces a Frankenstein curriculum
+# (old next_substage index into a NEW substage list, or an MLP checkpoint
+# warm-started into a transformer). Budget knobs (patience/min-epochs/
+# stage-max/save-frequency/num-envs) are deliberately NOT here: tuning those on
+# resume is legitimate and doesn't corrupt anything.
+_FINGERPRINT_KEYS = (
+    "order", "schedule", "balance", "exposure", "mask_dead_envs", "network",
+    "num_synthetic", "synthetic_start_id", "synthetic_position",
+    "synthetic_mode", "synthetic_batch_size", "final_train_epochs",
+    "body_norm_reward", "cpu_motion_data", "subject_heights_file",
+    "pose_reward", "pose_lambda", "betas_file",
+)
+
+
+def curriculum_fingerprint(args):
+    """The subset of args that defines the curriculum's shape. Stored in
+    state.json so --resume can refuse to continue with mismatched flags."""
+    return {k: getattr(args, k) for k in _FINGERPRINT_KEYS}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -664,6 +686,30 @@ def main():
         exposure = st["exposure"]
         start_idx = st["next_substage"]
         prev_ckpt = st.get("last_ckpt")
+        # Refuse to resume with curriculum-shape-defining flags that differ from
+        # the original run -- that silently builds a different substage list and
+        # warm-starts across incompatible obs/arch. (Pre-fingerprint state.json
+        # can't be verified; warn loudly rather than strand an existing run.)
+        now_fp = curriculum_fingerprint(args)
+        saved_fp = st.get("config")
+        if saved_fp is None:
+            print("[curriculum] WARNING: state.json predates fingerprinting; cannot "
+                  "verify that resume flags match the original run. Double-check "
+                  "--schedule/--order/--network/--betas-file/--synthetic-* by hand.",
+                  flush=True)
+        else:
+            diffs = {k: (saved_fp.get(k), now_fp[k]) for k in now_fp
+                     if saved_fp.get(k) != now_fp[k]}
+            if diffs:
+                lines = "\n".join(f"    --{k.replace('_', '-')}: "
+                                  f"original={o!r}  now={n!r}"
+                                  for k, (o, n) in sorted(diffs.items()))
+                sys.exit(
+                    f"[curriculum] ERROR: --resume flags differ from the original "
+                    f"run '{args.run_name}' in curriculum-defining ways:\n{lines}\n"
+                    f"  Resuming would splice next_substage={start_idx} from the old "
+                    f"run into a DIFFERENT curriculum. Re-run with the original "
+                    f"flags, or start a fresh --run-name.")
         print(f"[curriculum] resuming at substage {start_idx}; last_ckpt={prev_ckpt}", flush=True)
 
     def rel(p):
@@ -806,7 +852,8 @@ def main():
             update_exposure(exposure, active, weights, epochs_run)
         prev_ckpt = str(ckpt)
         state_path.write_text(json.dumps(
-            {"next_substage": idx + 1, "exposure": exposure, "last_ckpt": prev_ckpt}, indent=2))
+            {"next_substage": idx + 1, "exposure": exposure, "last_ckpt": prev_ckpt,
+             "config": curriculum_fingerprint(args)}, indent=2))
         print(f"[curriculum] substage {idx + 1} done: {epochs_run} epochs, ckpt {rel(ckpt)}", flush=True)
 
     print("[curriculum] all substages complete." if not args.dry_run
