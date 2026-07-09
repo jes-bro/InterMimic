@@ -8,23 +8,27 @@ against intermimic.py _load_motion):
     obj_pos     = [:, 318:321]       -> object centroid xyz
     contact_obj = round([:, 330])    -> 1 while the hand(s) hold the object
 
-For every clip we render a FILMSTRIP png: N keyframes evenly sampled across time,
-each showing the body skeleton (blue) + the object (square: green=no contact,
-red=in contact). No Isaac Gym, no GPU, no display -- pure matplotlib, so it scans
-thousands of clips quickly. Output is grouped into per-object subfolders, plus a
-labels_template.csv (one row per clip, an empty `activity` column to fill in) and
-an index.html contact sheet.
+Two output modes (both show the body skeleton (blue) + object square: green=no
+contact, red=in contact; no Isaac Gym, no GPU, no display -- pure matplotlib):
+  --mode video (default) -- one animated clip each (gif, the most foolproof way
+       to read the action). ~0.6 MB and a few seconds per clip.
+  --mode filmstrip       -- a static strip of N keyframes; fast to scan but a
+       fast/ambiguous motion can be hard to read.
+Output is grouped into per-object subfolders, plus a labels_template.csv (one
+row per clip, an empty `activity` column to fill in) and an index.html that
+embeds every clip (video players for mp4, inline for gif/png).
 
 Usage (from repo root):
-    # smoke test on the bundled 51 clips
+    # smoke test on the bundled clips (video/gif)
     python scripts/visualize_motions.py --motion-dir InterAct/OMOMO --out-dir viz_motions
 
-    # the full 4421-clip dataset on the laptop
-    python scripts/visualize_motions.py --motion-dir ~/new_one/OMOMO_new --out-dir viz_motions_full
-
-    # test a subset first: only chairs+tables, every 5th clip
+    # the full 4421-clip dataset -- START WITH A SUBSET (video of all is hours):
     python scripts/visualize_motions.py --motion-dir ~/new_one/OMOMO_new \
-        --objects woodchair largetable --stride 5
+        --objects woodchair --out-dir viz_woodchair          # one object at a time
+
+    # halve render time/size with a coarser frame rate, or use static filmstrips
+    python scripts/visualize_motions.py --motion-dir ~/new_one/OMOMO_new --video-stride 2
+    python scripts/visualize_motions.py --motion-dir ~/new_one/OMOMO_new --mode filmstrip
 """
 import argparse
 import csv
@@ -77,51 +81,85 @@ def load_clip(path):
     return body, obj, contact
 
 
-def render_filmstrip(body, obj, contact, title, out_png, n_frames, up_axis):
-    """Write an n_frames-wide filmstrip png. up_axis picks which coordinate is
-    vertical so the person stands upright (z-up verified correct for this data)."""
-    T = body.shape[0]
-    frame_idx = np.linspace(0, T - 1, n_frames).astype(int)
+# Reorder axes so `up_axis` maps to matplotlib's vertical (z). z-up is verified
+# correct for this Isaac-Gym-converted data.
+_AXIS_ORDER = {"x": (1, 2, 0), "y": (2, 0, 1), "z": (0, 1, 2)}
 
-    # Shared axis box across all frames so motion is visible as the skeleton
-    # moves within a fixed volume (per-frame autoscale would hide translation).
+
+def _fixed_box(body, obj):
+    """Shared axis center+radius across the WHOLE clip so translation is visible
+    (per-frame autoscale would hide the person/object moving through space)."""
     allpts = np.concatenate([body.reshape(-1, 3), obj], axis=0)
     lo, hi = allpts.min(0), allpts.max(0)
-    center = (lo + hi) / 2.0
-    radius = float((hi - lo).max()) / 2.0 + 0.1
+    return (lo + hi) / 2.0, float((hi - lo).max()) / 2.0 + 0.1
 
-    # Reorder axes so `up_axis` is plotted on Z (matplotlib's vertical).
-    order = {"x": (1, 2, 0), "y": (2, 0, 1), "z": (0, 1, 2)}[up_axis]
 
+def _draw_pose(ax, j, o, in_contact, order, center, radius, title):
+    """Draw ONE frame into ax: skeleton bones + body/hand joints + object square.
+    Shared by the filmstrip and the video so both render identically."""
     def xyz(p):
         return p[..., order[0]], p[..., order[1]], p[..., order[2]]
+    for child, parent in enumerate(SMPLX_BODY_PARENTS):
+        if parent >= 0:
+            seg = np.stack([j[child], j[parent]], axis=0)
+            ax.plot(*xyz(seg), color="steelblue", lw=1.4)
+    ax.scatter(*xyz(j[:22]), s=7, color="navy")
+    ax.scatter(*xyz(j[22:]), s=1.5, color="skyblue")           # hands
+    ax.scatter(*[[v] for v in xyz(o)], s=80, marker="s",       # object centroid
+               color=("red" if in_contact else "seagreen"),
+               edgecolors="k", linewidths=0.4)
+    c = center[list(order)]
+    ax.set_xlim(c[0] - radius, c[0] + radius)
+    ax.set_ylim(c[1] - radius, c[1] + radius)
+    ax.set_zlim(c[2] - radius, c[2] + radius)
+    ax.set_axis_off()
+    ax.view_init(elev=12, azim=-72)
+    if title:
+        ax.set_title(title, fontsize=8)
 
+
+def render_filmstrip(body, obj, contact, title, out_png, n_frames, up_axis):
+    """Write an n_frames-wide keyframe filmstrip png (fast, scannable)."""
+    order = _AXIS_ORDER[up_axis]
+    center, radius = _fixed_box(body, obj)
+    frame_idx = np.linspace(0, body.shape[0] - 1, n_frames).astype(int)
     fig = plt.figure(figsize=(2.6 * n_frames, 3.0))
     for i, fi in enumerate(frame_idx):
         ax = fig.add_subplot(1, n_frames, i + 1, projection="3d")
-        j = body[fi]
-        for child, parent in enumerate(SMPLX_BODY_PARENTS):
-            if parent >= 0:
-                seg = np.stack([j[child], j[parent]], axis=0)
-                ax.plot(*xyz(seg), color="steelblue", lw=1.2)
-        bx, by, bz = xyz(j[:22])
-        ax.scatter(bx, by, bz, s=6, color="navy")
-        hx, hy, hz = xyz(j[22:])
-        ax.scatter(hx, hy, hz, s=1.5, color="skyblue")  # hands
-        ox, oy, oz = xyz(obj[fi])
-        ax.scatter([ox], [oy], [oz], s=70, marker="s",
-                   color=("red" if contact[fi] > 0 else "seagreen"),
-                   edgecolors="k", linewidths=0.4)
-        c = center[list(order)]
-        ax.set_xlim(c[0] - radius, c[0] + radius)
-        ax.set_ylim(c[1] - radius, c[1] + radius)
-        ax.set_zlim(c[2] - radius, c[2] + radius)
-        ax.set_title(f"t={fi}", fontsize=7)
-        ax.set_axis_off()
-        ax.view_init(elev=12, azim=-72)
+        _draw_pose(ax, body[fi], obj[fi], contact[fi] > 0, order, center, radius, f"t={fi}")
     fig.suptitle(title, fontsize=10)
     fig.savefig(out_png, dpi=80, bbox_inches="tight")
     plt.close(fig)
+
+
+def render_video(body, obj, contact, title, out_path, up_axis, fps, frame_stride, fmt):
+    """Write an animated clip (mp4 or gif) -- the most foolproof way to read the
+    action. frame_stride subsamples frames to trade smoothness for render time."""
+    import matplotlib.animation as animation
+    order = _AXIS_ORDER[up_axis]
+    center, radius = _fixed_box(body, obj)
+    frames = list(range(0, body.shape[0], max(1, frame_stride)))
+    fig = plt.figure(figsize=(4.5, 4.5))
+    ax = fig.add_subplot(111, projection="3d")
+
+    def update(fi):
+        ax.cla()
+        _draw_pose(ax, body[fi], obj[fi], contact[fi] > 0, order, center, radius,
+                   f"{title}  t={fi}")
+
+    anim = animation.FuncAnimation(fig, update, frames=frames, interval=1000.0 / fps)
+    try:
+        if fmt == "mp4":
+            # yuv420p + even dims so the mp4 plays in browsers / QuickTime.
+            # NB: needs a SOFTWARE h264 encoder (libx264); some ffmpeg builds
+            # ship only hardware encoders and will fail here -> use --format gif.
+            writer = animation.FFMpegWriter(fps=fps, bitrate=1500,
+                                            extra_args=["-pix_fmt", "yuv420p"])
+        else:
+            writer = animation.PillowWriter(fps=fps)
+        anim.save(out_path, writer=writer, dpi=90)
+    finally:
+        plt.close(fig)
 
 
 def main():
@@ -131,6 +169,16 @@ def main():
                     help="dir of *.pt clips (e.g. InterAct/OMOMO or ~/new_one/OMOMO_new)")
     ap.add_argument("--out-dir", default="viz_motions",
                     help="where filmstrips / csv / index.html are written")
+    ap.add_argument("--mode", choices=["video", "filmstrip"], default="video",
+                    help="video = one animated clip each (most foolproof); "
+                         "filmstrip = a static keyframe strip (fast to scan)")
+    ap.add_argument("--format", choices=["mp4", "gif"], default="gif",
+                    help="video container. gif (default) is foolproof -- plays in "
+                         "any browser/viewer, only needs Pillow. mp4 is smaller but "
+                         "needs a SOFTWARE h264 encoder (libx264); not on every box.")
+    ap.add_argument("--fps", type=int, default=20, help="playback fps for video mode")
+    ap.add_argument("--video-stride", type=int, default=1,
+                    help="render every Nth frame in video mode (2-3 = faster/smaller)")
     ap.add_argument("--frames", type=int, default=6, help="keyframes per filmstrip")
     ap.add_argument("--objects", nargs="+", default=None,
                     help="only these object names (default: all)")
@@ -175,14 +223,19 @@ def main():
         body, objp, contact = loaded
         obj_dir = out_dir / obj
         obj_dir.mkdir(exist_ok=True)
-        png = obj_dir / (Path(p).stem + ".png")
-        render_filmstrip(body, objp, contact, Path(p).stem, str(png),
-                         args.frames, args.up_axis)
+        if args.mode == "video":
+            out_file = obj_dir / (Path(p).stem + "." + args.format)
+            render_video(body, objp, contact, Path(p).stem, str(out_file),
+                         args.up_axis, args.fps, args.video_stride, args.format)
+        else:
+            out_file = obj_dir / (Path(p).stem + ".png")
+            render_filmstrip(body, objp, contact, Path(p).stem, str(out_file),
+                             args.frames, args.up_axis)
         contact_frac = float((contact > 0).mean())
         rows.append({"clip": Path(p).stem, "subject": sub, "object": obj,
                      "seq": seq, "n_frames": body.shape[0],
                      "contact_frac": round(contact_frac, 3), "activity": ""})
-        by_object.setdefault(obj, []).append(png.relative_to(out_dir))
+        by_object.setdefault(obj, []).append(out_file.relative_to(out_dir))
         if n % 50 == 0 or n == len(clips):
             print(f"[viz]   {n}/{len(clips)} rendered")
 
@@ -205,8 +258,12 @@ def main():
     for obj in sorted(by_object):
         html.append(f"<h2>{obj} ({len(by_object[obj])})</h2>")
         for rel in sorted(by_object[obj]):
-            html.append(f"<div class='clip'><b>{rel.stem}</b>"
-                        f"<img src='{rel}' loading='lazy'></div>")
+            if rel.suffix == ".mp4":
+                media = (f"<video src='{rel}' controls loop muted preload='none' "
+                         f"style='max-width:520px'></video>")
+            else:  # gif or png -> plain img
+                media = f"<img src='{rel}' loading='lazy'>"
+            html.append(f"<div class='clip'><b>{rel.stem}</b><br>{media}</div>")
     html.append("</body></html>")
     (out_dir / "index.html").write_text("\n".join(html))
 
