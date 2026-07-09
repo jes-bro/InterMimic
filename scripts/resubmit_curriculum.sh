@@ -1,55 +1,63 @@
-#!/bin/bash
+#!/bin/sh
 # Resubmit curriculum runs that are NOT currently running, reproducing each
 # run's ORIGINAL config from its recorded '[curriculum] invocation:' log line
-# (so nothing is reconstructed by hand). Each continues via
-# curriculum_work/<run>/state.json + --resume.
+# (nothing reconstructed by hand). Each continues via curriculum_work/<run>/
+# state.json + --resume.
 #
-# It scans curriculum-*.out (newest first) so it picks up each run's LATEST
-# invocation, dedupes by --run-name, skips runs already in squeue, and submits
-# the rest through slurm_curriculum_resume.sh.
+# PLAIN login-node script (no #SBATCH / no GPU): it inspects state and sbatch'es
+# the curriculum GPU job (slurm_curriculum_resume.sh). Scans curriculum-*.out
+# newest-first, so it uses each run's LATEST invocation; dedupes by --run-name;
+# skips runs already in squeue; and prints run name, why, source log, and the
+# exact invocation for each. POSIX sh.
 #
-# DRY RUN by default. Set CONFIRM=1 to actually sbatch.
-#   sh scripts/resubmit_curriculum.sh            # preview (shows each run's args)
-#   CONFIRM=1 sh scripts/resubmit_curriculum.sh  # submit the missing ones
-#
-# Run from the repo root (it cd's there itself). Needs the curriculum-*.out logs
-# present in the repo root (that's where slurm writes them by default).
+# DRY RUN by default. Set CONFIRM=1 to sbatch.  Skip runs with EXCLUDE="a b".
+#   sh scripts/resubmit_curriculum.sh | tee resubmit_curriculum_$(date +%F_%H%M).log
+#   CONFIRM=1 EXCLUDE="ist_all_xf" sh scripts/resubmit_curriculum.sh
 set -u
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
-running=$(squeue -u "$USER" -h -o "%j" 2>/dev/null)
-declare -A seen
+seen=" "
 found=0
-
-# newest logs first -> first invocation seen per run-name is the latest one
 for log in $(ls -t curriculum-*.out 2>/dev/null); do
     line=$(grep -m1 'invocation: scripts/curriculum_runner.py' "$log") || continue
     args=${line#*invocation: scripts/curriculum_runner.py }
     run=$(printf '%s\n' "$args" | grep -oE -- '--run-name [^ ]+' | awk '{print $2}')
     [ -z "$run" ] && continue
-    [ -n "${seen[$run]:-}" ] && continue
-    seen[$run]=1
-    # EXCLUDE="run1 run2" to skip specific runs (e.g. redundant/cancelled ones)
-    case " ${EXCLUDE:-} " in *" $run "*) echo "EXCLUDED      c-$run  -- skip"; continue ;; esac
-    found=$((found + 1))
+    case "$seen" in *" $run "*) continue ;; esac   # already handled (latest wins)
+    seen="$seen$run "
 
-    if printf '%s\n' "$running" | grep -qx "c-$run"; then
-        echo "RUNNING       c-$run  -- skip"
+    printf '\n== c-%s ==\n' "$run"
+    printf '   run        : %s\n' "$run"
+    printf '   from log   : %s\n' "$log"
+
+    case " ${EXCLUDE:-} " in *" $run "*)
+        printf '   status     : EXCLUDED -> skip\n'; continue ;;
+    esac
+
+    rinfo=$(squeue -u "$USER" -h -n "c-$run" -o "%i|%T|%M" 2>/dev/null | head -1)
+    if [ -n "$rinfo" ]; then
+        printf '   status     : %s (job %s, elapsed %s) -> skip\n' \
+            "$(echo "$rinfo" | cut -d'|' -f2)" "$(echo "$rinfo" | cut -d'|' -f1)" "$(echo "$rinfo" | cut -d'|' -f3)"
         continue
     fi
-    case "$args" in *--resume*) ;; *) args="$args --resume" ;; esac   # ensure resume
+    found=$((found + 1))
+    case "$args" in *--resume*) ;; *) args="$args --resume" ;; esac
+    printf '   status     : NOT running -> RESUME (state.json continues from last stage)\n'
+    printf '   invocation : scripts/curriculum_runner.py %s\n' "$args"
 
     if [ "${CONFIRM:-0}" = "1" ]; then
-        export CURRICULUM_ARGS="$args"
+        CURRICULUM_ARGS="$args"; export CURRICULUM_ARGS
         jid=$(sbatch --parsable --export=ALL slurm_curriculum_resume.sh)
-        echo "SUBMITTED     c-$run  -> job $jid   (from $log)"
+        printf '   action     : SUBMITTED -> job %s\n' "$jid"
     else
-        echo "WOULD SUBMIT  c-$run   (from $log)"
-        echo "      args: $args"
+        printf '   action     : WOULD SUBMIT  (CONFIRM=1 to run)\n'
     fi
 done
 
-if [ "$found" -eq 0 ]; then
-    echo "No '[curriculum] invocation:' lines found in curriculum-*.out."
-    echo "Are you in the repo root, and are the logs there? (ls curriculum-*.out)"
+printf '\n-----\n'
+if [ "$found" -eq 0 ] && [ "$seen" = " " ]; then
+    printf "No '[curriculum] invocation:' lines found in curriculum-*.out.\n"
+    printf "Are you in the repo root, and are the logs there? (ls curriculum-*.out)\n"
+else
+    printf '%d run(s) to resubmit%s.\n' "$found" "$([ "${CONFIRM:-0}" = 1 ] && echo ' (submitted)' || echo ' (dry-run; CONFIRM=1 to submit)')"
 fi
