@@ -130,7 +130,11 @@ def load_cfg(args):
 
     if args.checkpoint != "Base":
         cfg_train["params"]["load_path"] = args.checkpoint
-        
+        # H2 fix: --checkpoint previously only fed the rl_games PLAYER (test path).
+        # TRAINING reads config.resume_from, so a `--checkpoint X` warm-start of a
+        # training run silently did NOTHING (trained from scratch). Wire it through.
+        cfg_train["params"]["config"]["resume_from"] = args.checkpoint
+
     if args.llc_checkpoint != "":
         cfg_train["params"]["config"]["llc_checkpoint"] = args.llc_checkpoint
 

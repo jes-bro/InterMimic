@@ -175,14 +175,17 @@ class InterMimicAgent(common_agent.CommonAgent):
     
     def train(self):
         if self.resume_from != 'None':
-            try:
-                self.restore(self.resume_from)
-                print(f"[warm-start] Successfully restored from {self.resume_from}; "
-                      f"resuming at epoch {self.epoch_num}")
-            except Exception as e:
-                print(f"[warm-start] FAILED to restore from {self.resume_from}: "
-                      f"{type(e).__name__}: {e}")
-                print(f"[warm-start] Training will continue from scratch (epoch 0)")
+            # NO silent fallback: a requested warm-start that cannot load MUST fail
+            # the job, not quietly train from scratch (which wastes days of GPU and
+            # produces a silently-wrong result). If resume_from is set, it must load.
+            if not os.path.isfile(self.resume_from):
+                raise FileNotFoundError(
+                    f"[warm-start] resume_from='{self.resume_from}' does not exist "
+                    f"(cwd={os.getcwd()}). Refusing to silently train from scratch. "
+                    f"Fix the path or set resume_from: 'None' for a fresh run.")
+            self.restore(self.resume_from)   # any restore error propagates and kills the job -- intended
+            print(f"[warm-start] Successfully restored from {self.resume_from}; "
+                  f"resuming at epoch {self.epoch_num}", flush=True)
 
         self.init_tensors()
         self.last_mean_rewards = -100500
