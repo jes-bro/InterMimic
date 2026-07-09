@@ -18,8 +18,6 @@ cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 CFG=isaacgym/src/intermimic/data/cfg
 XF_BASE="$CFG/omomo_test_multibody_xf.yaml"
 MLP_BASE="$CFG/omomo_test_multibody.yaml"
-XF_TRAIN="$CFG/train/rlg/omomo_teacher_src9_xf.yaml"   # generic transformer net (eval only)
-MLP_TRAIN="$CFG/train/rlg/omomo_multibody.yaml"
 TEST_TGT="sub10 sub16"
 MARK=eval_results/.watched; mkdir -p "$MARK"
 
@@ -57,11 +55,24 @@ for d in $(ls -dt checkpoints/smplx_teacher_*/ checkpoints/smplx_curriculum_*/ 2
     marker="$MARK/${exp}__${id}.done"
     [ -f "$marker" ] && continue
 
-    [ -f "$envc" ] || { echo "skip $runkey: config not found ($envc)"; continue; }
+    [ -f "$envc" ] || { echo "SKIP $runkey: config not found ($envc)"; continue; }
     nobs=$(numobs_of "$envc"); betas=$(betas_of "$envc"); tsrc=$(subs_of "$envc")
-    if [ "$nobs" = "6524" ]; then BASE="$XF_BASE"; TRAIN="$XF_TRAIN"; archname=transformer
-    else BASE="$MLP_BASE"; TRAIN="$MLP_TRAIN"; archname=MLP; fi
-    [ -f "$trainc" ] && TRAIN="$trainc"    # prefer the run's own train yaml
+
+    # STRICT -- no fallbacks. Require an exactly-known arch, the run's OWN train yaml,
+    # and its actual betas file. If any is missing/unexpected, SKIP loudly rather than
+    # guess (a mismatched net/betas would load but produce silently-wrong numbers).
+    case "$nobs" in
+      3230) BASE="$MLP_BASE"; archname=MLP ;;
+      6524) BASE="$XF_BASE";  archname=transformer ;;
+      *) echo "SKIP $runkey: unexpected numObs='${nobs:-none}' in $envc (want 3230 MLP or 6524 transformer)"; continue ;;
+    esac
+    if [ ! -f "$trainc" ]; then
+        echo "SKIP $runkey: run's train yaml not found ($trainc) -- refusing to guess the network"; continue
+    fi
+    TRAIN="$trainc"
+    if [ -z "$betas" ]; then
+        echo "SKIP $runkey: no betas_file in $envc -- refusing to guess betas"; continue
+    fi
 
     if [ "$kind" = teacher ]; then BODIES="$TEST_TGT sub13"; else BODIES="$TEST_TGT"; fi
     SOURCES="$tsrc$TEST_TGT"
