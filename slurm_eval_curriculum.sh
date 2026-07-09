@@ -37,12 +37,25 @@ conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
-CHECKPOINT="${CHECKPOINT:-checkpoints/smplx_curriculum_ist_meas_s06a_sub1_identity/nn/mimic_00007700.pth}"
+# REQUIRED (no silent defaults): a stale hardcoded checkpoint/OUT would eval
+# the WRONG run and mis-attribute the CSV; a missing BETAS_FILE would fall back
+# to the base yaml's GENDERED betas (omomo_betas.npz) and silently corrupt the
+# 32 beta obs dims for any neutral/aug run. Fail loudly instead.
+require() {   # require VAR "hint"
+    eval "_v=\${$1:-}"
+    if [ -z "$_v" ]; then
+        echo "[eval] ERROR: $1 is required (no default). $2" >&2
+        exit 2
+    fi
+}
+require CHECKPOINT "e.g. CHECKPOINT=checkpoints/<run>/nn/mimic_XXXX.pth"
+require OUT        "e.g. OUT=eval_results/<run>__<ckpt>__heldout.csv"
+require BETAS_FILE "must match the run's training betas (scripts/omomo_betas.npz gendered, _neutral, or _neutral_aug); set BETAS_FILE=none only if the run trained with no betas"
+
 BODIES="${BODIES:-sub1 sub2 sub3 sub5 sub9 sub17}"     # the 6 folded-in subjects
 SOURCES="${SOURCES:-sub1 sub2 sub3 sub5 sub9 sub17}"
 NUM_ENVS="${NUM_ENVS:-1024}"
 TIMEOUT="${TIMEOUT:-900}"
-OUT="${OUT:-eval_results/curriculum_ist_meas_7700_indist.csv}"
 # The base test config restricts to dataObjects ['largetable','woodchair'] (a
 # student-eval leftover) -- the curriculum trained on ALL objects, so by default
 # we drop that restriction. Set ALL_OBJECTS=0 to keep the base config's filter.
@@ -54,8 +67,14 @@ ALL_OBJ=""
 # checkpoint's training betas (neutral vs gendered vs neutral_aug).
 BASE_YAML="${BASE_YAML:-isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml}"
 TRAIN_YAML="${TRAIN_YAML:-isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml}"
+# BETAS_FILE is required above. "none" is the explicit opt-out (run trained with
+# no betas -> use the base yaml as-is, no override); anything else must be a real
+# file (checked below) and overrides the base yaml's betas_file.
 BETAS_ARG=""
-[ -n "${BETAS_FILE:-}" ] && BETAS_ARG="--betas-file $BETAS_FILE"
+if [ "$BETAS_FILE" != "none" ]; then
+    [ -f "$BETAS_FILE" ] || { echo "[eval] ERROR: BETAS_FILE not found: $BETAS_FILE (use BETAS_FILE=none only for no-betas runs)" >&2; exit 2; }
+    BETAS_ARG="--betas-file $BETAS_FILE"
+fi
 
 # Rename the job so `squeue` shows which eval this is (the output CSV stem).
 scontrol update JobId="$SLURM_JOB_ID" JobName="ev-$(basename "${OUT%.csv}")" 2>/dev/null || true

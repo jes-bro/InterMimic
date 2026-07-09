@@ -32,9 +32,11 @@ METRIC_PATTERNS = {
 }
 
 
-def make_temp_yaml(base_yaml_path, subject_id):
+def make_temp_yaml(base_yaml_path, subject_id, all_objects=False, betas_file=None):
     """Write a temp yaml that's a copy of base_yaml with subjectBodies and
-    dataSub both set to [subject_id]. Returns the temp file path."""
+    dataSub both set to [subject_id]. If all_objects, drop any dataObjects
+    restriction; if betas_file, override betas_file (must match the checkpoint's
+    training betas -- the base yaml default is GENDERED). Returns the temp path."""
     base_text = Path(base_yaml_path).read_text()
 
     # Both lines have specific patterns we can swap. Use single-subject
@@ -50,6 +52,19 @@ def make_temp_yaml(base_yaml_path, subject_id):
         rf"\1 {single}",
         new_text, flags=re.MULTILINE,
     )
+    if all_objects:
+        # [] => env treats it as "no restriction" and loads all objects.
+        new_text = re.sub(
+            r"^(\s*dataObjects:).*$",
+            r"\1 []",
+            new_text, flags=re.MULTILINE,
+        )
+    if betas_file:
+        new_text = re.sub(
+            r"^(\s*betas_file:).*$",
+            rf"\1 {betas_file}",
+            new_text, flags=re.MULTILINE,
+        )
 
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=f"_{subject_id}.yaml", delete=False
@@ -76,7 +91,8 @@ def parse_metrics(stdout):
     return out
 
 
-def run_eval(subject_id, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec):
+def run_eval(subject_id, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec,
+             all_objects=False, betas_file=None):
     """Invoke intermimic.run --test for one subject, return parsed metrics.
 
     If the subprocess doesn't terminate within timeout_sec, it gets killed
@@ -84,7 +100,7 @@ def run_eval(subject_id, base_yaml, train_yaml, checkpoint, num_envs, repo_root,
     print before the kill. Cleanup waits a few seconds for GPU memory to
     drain before the next subject starts.
     """
-    tmp_yaml = make_temp_yaml(base_yaml, subject_id)
+    tmp_yaml = make_temp_yaml(base_yaml, subject_id, all_objects=all_objects, betas_file=betas_file)
     cmd = [
         "python", "-u", "-m", "intermimic.run",
         "--task", "InterMimic",
@@ -171,6 +187,13 @@ def main():
         default=str(Path(__file__).resolve().parents[1]),
         help="InterMimic repo root (sets cwd + PYTHONPATH)",
     )
+    p.add_argument("--all-objects", action="store_true",
+                   help="drop the base config's dataObjects restriction so eval "
+                        "covers every object (use for all-object runs)")
+    p.add_argument("--betas-file", default=None,
+                   help="override betas_file in the base yaml to match the "
+                        "checkpoint's training betas (the base default is GENDERED; "
+                        "pass the run's neutral/aug betas for neutral/aug runs)")
     args = p.parse_args()
 
     fields = ["subject", "avg_steps", "human_pose_error",
@@ -185,6 +208,7 @@ def main():
                 sub, args.base_yaml, args.train_yaml,
                 args.checkpoint, args.num_envs, args.repo_root,
                 args.timeout_per_subject,
+                all_objects=args.all_objects, betas_file=args.betas_file,
             )
             row = {"subject": sub, "exit_code": rc, "timed_out": timed_out}
             if metrics is not None:
