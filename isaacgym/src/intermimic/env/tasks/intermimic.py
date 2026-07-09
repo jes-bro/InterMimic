@@ -1961,6 +1961,13 @@ class InterMimic(Humanoid_SMPLX):
                 name = base[:-3] if base.endswith('.pt') else base
                 path = os.path.join(out_dir, name + '.mp4')
                 length = int(self.max_episode_length[m])
+                # Skip clips already rendered so a timeout / re-run RESUMES instead
+                # of restarting from scratch. (A partial/corrupt tail file is rare
+                # since writer.close() is the last step; delete it to re-render.)
+                if os.path.isfile(path) and os.path.getsize(path) > 0:
+                    print(f"[render] {m - int(lo) + 1}/{hi - int(lo)}  {name}  "
+                          f"exists, skipping", flush=True)
+                    continue
                 self._force_clip_id = m
                 writer = imageio.get_writer(path, fps=fps, codec='libx264',
                                             quality=8, macro_block_size=None)

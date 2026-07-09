@@ -13,10 +13,16 @@
 #   OBJECT=woodchair OUT=clip_videos sh scripts/render_clips.sh
 # Output: <OUT>/<object>/<clip>.mp4  (e.g. clip_videos/woodchair/sub2_woodchair_000.mp4)
 set -eu
-cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$REPO"
 
 OBJECT="${OBJECT:?set OBJECT=<name>, e.g. OBJECT=woodchair}"
-OUT="${OUT:-clip_videos}/$OBJECT"
+# OUT base defaults to <repo>/clip_videos, but SET OUT=/abs/scratch/dir on the
+# cluster -- 4421 mp4s are several GB, don't dump them in the repo/quota'd FS.
+# Resolve to an ABSOLUTE path so it's deterministic no matter the process CWD.
+OUT_BASE="${OUT:-$REPO/clip_videos}"
+case "$OUT_BASE" in /*) : ;; *) OUT_BASE="$REPO/$OUT_BASE" ;; esac
+OUT="$OUT_BASE/$OBJECT"
 NUM_ENVS="${NUM_ENVS:-1}"       # only env 0 is captured; keep it at 1
 FPS="${FPS:-30}"
 BASE=isaacgym/src/intermimic/data/cfg/omomo_render.yaml
