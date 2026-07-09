@@ -117,9 +117,15 @@ def main():
             print(f"  FAIL  {name}: {e}")
             failures.append(name)
 
-    # 1. every committed config passes validation (no false positive)
+    # 1. every committed config + any LOCAL generated config passes validation.
+    #    The curriculum_work glob is empty in a fresh checkout but on the cluster
+    #    it holds the real generated substage configs -- run this test THERE to
+    #    validate hand-edited / generated configs that never hit git.
     cfgs = sorted(glob.glob(os.path.join(CFG_DIR, "omomo*.yaml")))
-    print(f"[1] {len(cfgs)} committed configs vs _validate_env_config:")
+    generated = sorted(glob.glob(os.path.join(REPO, "curriculum_work/*/cfgs/env_*.yaml")))
+    cfgs += generated
+    print(f"[1] {len(cfgs)} configs vs _validate_env_config "
+          f"({len(generated)} local/generated):")
     for f in cfgs:
         env = (yaml.safe_load(open(f)) or {}).get("env", {})
         name = os.path.basename(f)
