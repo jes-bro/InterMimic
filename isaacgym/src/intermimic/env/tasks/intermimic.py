@@ -1848,7 +1848,14 @@ class InterMimic(Humanoid_SMPLX):
 
         t = time
         if t == 0:
-            self.data_id = to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in range(self.num_envs)], device=self.device, dtype=torch.long)
+            # render_all_clips forces every env onto ONE specific clip so we can
+            # export a deterministic per-clip video; the normal replay picks a
+            # random clip per env (matched to that env's object).
+            if getattr(self, '_force_clip_id', None) is not None:
+                self.data_id = torch.full((self.num_envs,), int(self._force_clip_id),
+                                          device=self.device, dtype=torch.long)
+            else:
+                self.data_id = to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in range(self.num_envs)], device=self.device, dtype=torch.long)
         env_ids = to_torch([i for i in range(self.num_envs)], device=self.device, dtype=torch.long)
         t = to_torch(
                 [
@@ -1918,7 +1925,9 @@ class InterMimic(Humanoid_SMPLX):
         self.render(t=t)
         self.gym.simulate(self.sim)
         # --- capture frame ---
-        if hasattr(self, '_video_writer'):
+        # Skipped while render_all_clips is driving (it captures per-clip to mp4
+        # itself); otherwise this dumps the env-0 replay to replay_frames/*.png.
+        if hasattr(self, '_video_writer') and not getattr(self, '_render_clips_active', False):
             self.gym.step_graphics(self.sim)
             self.gym.render_all_camera_sensors(self.sim)
             img = self.gym.get_camera_image(self.sim, self.envs[0], self._video_cam, gymapi.IMAGE_COLOR)
@@ -1927,6 +1936,48 @@ class InterMimic(Humanoid_SMPLX):
         # end of mod part
 
         return
+
+    def render_all_clips(self, out_dir, lo=0, hi=None, fps=30):
+        """Export ONE replay mp4 per motion clip in [lo, hi) in a single launch.
+
+        For each clip it forces env 0 onto that clip (via _force_clip_id), steps
+        through the clip's full length with play_dataset_step, and encodes env 0's
+        camera to out_dir/<clipname>.mp4. Because each env's OBJECT MESH is fixed
+        at creation (env e -> object e % num_objects), env 0 only renders the
+        right object when the run is filtered to a single object -- so the driver
+        launches this once per object (num_envs=1, dataObjects=[obj]).
+        """
+        import imageio
+        if not hasattr(self, '_video_cam'):
+            raise RuntimeError(
+                "render_all_clips needs the play_dataset camera -- launch with "
+                "--play_dataset and WITHOUT RECORD_VIDEO set.")
+        hi = self.num_motions if hi is None else min(int(hi), self.num_motions)
+        os.makedirs(out_dir, exist_ok=True)
+        self._render_clips_active = True   # suppress the per-step replay_frames dump
+        try:
+            for m in range(int(lo), hi):
+                base = os.path.basename(self.motion_file[m])
+                name = base[:-3] if base.endswith('.pt') else base
+                path = os.path.join(out_dir, name + '.mp4')
+                length = int(self.max_episode_length[m])
+                self._force_clip_id = m
+                writer = imageio.get_writer(path, fps=fps, codec='libx264',
+                                            quality=8, macro_block_size=None)
+                for t in range(length):
+                    self.play_dataset_step(t)
+                    self.gym.step_graphics(self.sim)
+                    self.gym.render_all_camera_sensors(self.sim)
+                    img = self.gym.get_camera_image(self.sim, self.envs[0],
+                                                    self._video_cam, gymapi.IMAGE_COLOR)
+                    img = img.reshape(self._video_height, self._video_width, 4)[..., :3]
+                    writer.append_data(img)
+                writer.close()
+                print(f"[render] {m - int(lo) + 1}/{hi - int(lo)}  {name}  "
+                      f"{length} frames -> {path}", flush=True)
+        finally:
+            self._force_clip_id = None
+            self._render_clips_active = False
     
 
     def render(self, sync_frame_time=False, t=0):

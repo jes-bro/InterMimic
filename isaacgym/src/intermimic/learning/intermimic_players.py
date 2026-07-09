@@ -134,6 +134,17 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
             done_indices = []
 
             if self.env.task.play_dataset:
+                # Per-clip video export: if RENDER_CLIPS_OUT is set, render one
+                # mp4 per clip and stop (a whole-object batch in one launch).
+                _render_out = os.environ.get("RENDER_CLIPS_OUT")
+                if _render_out:
+                    self.env.task.render_all_clips(
+                        _render_out,
+                        lo=int(os.environ.get("RENDER_CLIPS_LO", 0)),
+                        hi=(int(os.environ["RENDER_CLIPS_HI"])
+                            if os.environ.get("RENDER_CLIPS_HI") else None),
+                        fps=int(os.environ.get("RENDER_CLIPS_FPS", 30)))
+                    return
                 # play dataset
                 _done_recording = False
                 while not _done_recording:
