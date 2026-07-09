@@ -11,8 +11,10 @@
 # exact invocation for each. POSIX sh.
 #
 # DRY RUN by default. Set CONFIRM=1 to sbatch.  Skip runs with EXCLUDE="a b".
+# NEUTRAL_ONLY=1 resubmits only neutral-beta runs (skips gendered-beta ones).
 #   sh scripts/resubmit_curriculum.sh | tee resubmit_curriculum_$(date +%F_%H%M).log
-#   CONFIRM=1 EXCLUDE="ist_all_xf" sh scripts/resubmit_curriculum.sh
+#   NEUTRAL_ONLY=1 sh scripts/resubmit_curriculum.sh                     # preview neutral-only
+#   CONFIRM=1 NEUTRAL_ONLY=1 EXCLUDE="ist_all_xf" sh scripts/resubmit_curriculum.sh
 set -u
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
@@ -33,6 +35,17 @@ for log in $(ls -t curriculum-*.out 2>/dev/null); do
     case " ${EXCLUDE:-} " in *" $run "*)
         printf '   status     : EXCLUDED -> skip\n'; continue ;;
     esac
+
+    # NEUTRAL_ONLY=1: only resubmit neutral-beta runs (gendered betas break
+    # cross-gender conditioning). Gendered = --betas-file scripts/omomo_betas.npz;
+    # neutral = omomo_betas_neutral[_aug].npz.
+    if [ "${NEUTRAL_ONLY:-0}" = "1" ]; then
+        bf=$(printf '%s\n' "$args" | grep -oE -- '--betas-file [^ ]+' | awk '{print $2}')
+        case "$bf" in
+            *neutral*) : ;;
+            *) printf '   status     : SKIP gendered betas (%s) [NEUTRAL_ONLY=1]\n' "${bf:-default(gendered)}"; continue ;;
+        esac
+    fi
 
     rinfo=$(squeue -u "$USER" -h -n "c-$run" -o "%i|%T|%M" 2>/dev/null | head -1)
     if [ -n "$rinfo" ]; then
