@@ -88,7 +88,48 @@ class InterMimic(Humanoid_SMPLX):
         Random = 2
         Hybrid = 3
 
+    # Every key the task recognizes under cfg['env'] (union of all committed configs
+    # + every cfg['env'] access in the task code). A key NOT here is almost certainly
+    # a TYPO (e.g. 'subjectBody', 'bodyNormalisedReward') that would otherwise be
+    # silently ignored -> the run quietly does the wrong thing (feature off, etc.).
+    KNOWN_ENV_KEYS = frozenset({
+        'asset', 'ballSize', 'betas_file', 'bodyNormalizedReward', 'contactBodies',
+        'contactIndex', 'controlFrequencyInv', 'cpuMotionData', 'dataFPS',
+        'dataFramesScale', 'dataObjects', 'dataSub', 'enableDebugVis',
+        'enableEarlyTermination', 'enableEvaluation', 'envSpacing', 'episodeLength',
+        'excludeCombos', 'hybridInitProb', 'initRootHeight', 'initVel', 'isFlagrun',
+        'keyBodies', 'keyIndex', 'localRootObs', 'maskDeadEnvs', 'maxClipsPerObject',
+        'moreRigid', 'motion_file', 'motion_file_retarget', 'numActions', 'numDoF',
+        'numDoFHand', 'numDoFWrist', 'numEnvs', 'numObs', 'numObsRetarget',
+        'numObservations', 'numStates', 'objectDensity', 'pairSampleCountsFile',
+        'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
+        'projtype', 'rewardTerms', 'rewardWeights', 'robotType', 'rolloutLength',
+        'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
+        'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
+        'teacherPolicyCFG', 'terminationHeight', 'useTransformerObs',
+    })
+
+    def _validate_env_config(self, env_cfg):
+        """Fail loudly on an unrecognized (typo'd) env or reward-term key rather than
+        silently ignoring it and running the wrong experiment (no-fallback policy)."""
+        unknown = sorted(k for k in env_cfg if k not in self.KNOWN_ENV_KEYS)
+        if unknown:
+            raise ValueError(
+                f"[intermimic] unrecognized env config key(s): {unknown}. Likely a "
+                f"TYPO -- a misspelled key is silently ignored and the run does the "
+                f"wrong thing. If a key is genuinely new, add it to "
+                f"InterMimic.KNOWN_ENV_KEYS.")
+        rt = env_cfg.get('rewardTerms') or {}
+        bad = sorted(k for k in rt if k != 'pose')
+        if bad:
+            raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} (only 'pose').")
+        badp = sorted(k for k in (rt.get('pose') or {}) if k not in ('enable', 'lambda'))
+        if badp:
+            raise ValueError(f"[intermimic] unknown rewardTerms.pose key(s) {badp} "
+                             f"(only 'enable', 'lambda').")
+
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
+        self._validate_env_config(cfg["env"])
         state_init = cfg["env"]["stateInit"]
         self._state_init = InterMimic.StateInit[state_init]
         self._hybrid_init_prob = cfg["env"]["hybridInitProb"]
@@ -257,6 +298,18 @@ class InterMimic(Humanoid_SMPLX):
         
         self.hoi_data = self._load_motion(self.motion_file, topk=self.psi)
 
+        # Body-dependent features REQUIRE per-subject bodies. If subjectBodies is
+        # missing/misspelled, self.subject_bodies is None and these silently no-op
+        # (canonical betas, no body-norm, no pair weights) -- fail loudly instead.
+        if getattr(self, 'subject_bodies', None) is None:
+            for _k in ('betas_file', 'bodyNormalizedReward',
+                       'subjectPairWeightsFile', 'subjectHeightsFile'):
+                if cfg['env'].get(_k):
+                    raise ValueError(
+                        f"[intermimic] '{_k}' is configured but 'subjectBodies' is "
+                        f"absent/empty (misspelled?). This feature needs per-subject "
+                        f"bodies; refusing to silently run single-body and ignore it.")
+
         # Per-env target_betas always reflects the body in sim (chunk 1's
         # _env_subject_idx). When subjectBodies is set, look up each body's
         # betas from the npz; when absent, all envs run canonical (β=0).
@@ -338,7 +391,15 @@ class InterMimic(Humanoid_SMPLX):
                            dtype=torch.float, device=self.device)
             for bi, b in enumerate(body_subject_nums):
                 for mi, s in enumerate(src_nums):
-                    W[bi, mi] = float(pair_w.get(f"b{b}_s{s}", 1.0))
+                    _key = f"b{b}_s{s}"
+                    if _key not in pair_w:
+                        raise KeyError(
+                            f"[intermimic] pair weight '{_key}' missing from "
+                            f"{pair_weights_file}. curriculum_runner writes 0.0 for "
+                            f"masked pairs, so a missing key means the weights file is "
+                            f"incomplete/mismatched -- refusing to default to full "
+                            f"sampling (1.0), which would leak a held-out pair.")
+                    W[bi, mi] = float(pair_w[_key])
             self._pair_weight_per_body = W
             # Keep the number maps around for the realized-sample counter below.
             self._body_subject_nums = body_subject_nums      # body row idx -> subject num
