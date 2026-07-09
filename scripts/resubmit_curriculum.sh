@@ -12,13 +12,16 @@
 #
 # DRY RUN by default. Set CONFIRM=1 to sbatch.  Skip runs with EXCLUDE="a b".
 # NEUTRAL_ONLY=1 resubmits only neutral-beta runs (skips gendered-beta ones).
+# DEDUP_CONFIG=1 skips runs whose config (args minus --run-name) matches an
+#   already-selected run -- i.e. redundant duplicate experiments.
 #   sh scripts/resubmit_curriculum.sh | tee resubmit_curriculum_$(date +%F_%H%M).log
-#   NEUTRAL_ONLY=1 sh scripts/resubmit_curriculum.sh                     # preview neutral-only
-#   CONFIRM=1 NEUTRAL_ONLY=1 EXCLUDE="ist_all_xf" sh scripts/resubmit_curriculum.sh
+#   NEUTRAL_ONLY=1 DEDUP_CONFIG=1 sh scripts/resubmit_curriculum.sh       # preview
+#   CONFIRM=1 NEUTRAL_ONLY=1 DEDUP_CONFIG=1 sh scripts/resubmit_curriculum.sh
 set -u
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
-seen=" "
+seen=" "        # run-names already handled
+seen_sigs=""    # config signatures already seen (for DEDUP_CONFIG)
 found=0
 for log in $(ls -t curriculum-*.out 2>/dev/null); do
     line=$(grep -m1 'invocation: scripts/curriculum_runner.py' "$log") || continue
@@ -47,6 +50,19 @@ for log in $(ls -t curriculum-*.out 2>/dev/null); do
         esac
     fi
 
+    # DEDUP_CONFIG=1: two different run-names with the SAME config (args minus the
+    # run-name / --resume) are redundant experiments -> submit one, skip the rest.
+    if [ "${DEDUP_CONFIG:-0}" = "1" ]; then
+        sig=$(printf '%s' "$args" | sed -E 's/--run-name +[^ ]*//; s/--resume//; s/ +/ /g' | md5sum | cut -d' ' -f1)
+        case "$seen_sigs" in
+            *" $sig="*)
+                owner=$(printf '%s' "$seen_sigs" | grep -oE " $sig=[^ ]+" | head -1 | cut -d= -f2)
+                printf '   status     : DUPLICATE config of c-%s -> skip [DEDUP_CONFIG=1]\n' "$owner"
+                continue ;;
+        esac
+        seen_sigs="$seen_sigs $sig=$run"
+    fi
+
     rinfo=$(squeue -u "$USER" -h -n "c-$run" -o "%i|%T|%M" 2>/dev/null | head -1)
     if [ -n "$rinfo" ]; then
         printf '   status     : %s (job %s, elapsed %s) -> skip\n' \
@@ -55,7 +71,11 @@ for log in $(ls -t curriculum-*.out 2>/dev/null); do
     fi
     found=$((found + 1))
     case "$args" in *--resume*) ;; *) args="$args --resume" ;; esac
-    printf '   status     : NOT running -> RESUME (state.json continues from last stage)\n'
+    if [ -f "curriculum_work/$run/state.json" ]; then
+        printf '   status     : NOT running -> RESUME (curriculum_work/%s/state.json present)\n' "$run"
+    else
+        printf '   status     : NOT running -> RESUME but NO state.json (curriculum_work/%s) -> STARTS FRESH at stage 1\n' "$run"
+    fi
     printf '   invocation : scripts/curriculum_runner.py %s\n' "$args"
 
     if [ "${CONFIRM:-0}" = "1" ]; then
