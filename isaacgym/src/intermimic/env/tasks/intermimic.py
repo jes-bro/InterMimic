@@ -216,6 +216,24 @@ class InterMimic(Humanoid_SMPLX):
                     counts[key] += 1
             parsed = capped
 
+        # Fail loudly on an empty / partially-matched dataset. A mistyped
+        # dataSub number or wrong motion dir otherwise yields zero (or fewer)
+        # clips silently -> training/eval runs on nothing and produces garbage.
+        if not parsed:
+            raise ValueError(
+                f"[intermimic] no motion files matched dataSub={sorted(data_sub_nums)} "
+                f"objects={data_objects} under '{self.motion_file}'. Check the "
+                f"motion_file dir and dataSub numbers (misspelled?).")
+        # The filter above keeps entries whose target subject is in dataSub, so
+        # mirror that field here: every requested dataSub subject must appear.
+        matched = {p[2] for p in parsed}
+        missing = sorted(set(data_sub_nums) - matched)
+        if missing:
+            raise ValueError(
+                f"[intermimic] dataSub subject(s) {missing} matched ZERO motion "
+                f"files under '{self.motion_file}' (objects={data_objects}). "
+                f"Refusing to silently train/eval on a subset of the requested set.")
+
         self.motion_file = [p[0] for p in parsed]
         source_subject_nums = [p[1] for p in parsed]
         target_subject_nums = [p[2] for p in parsed]

@@ -257,6 +257,19 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
             if self._normalize_amp_input:
                 checkpoint = torch_ext.load_checkpoint(fn)
                 self._amp_input_mean_std.load_state_dict(checkpoint['amp_input_mean_std'])
+        else:
+            # fn == 'Base' means NO checkpoint was loaded: the policy net keeps
+            # its random init. Any rollout/eval metrics are then meaningless but
+            # look real. Warn loudly (stderr) so this can't pass unnoticed -- the
+            # only legitimate no-checkpoint case is --play_dataset mocap replay,
+            # where the policy isn't used.
+            import sys as _sys
+            print("\n" + "!" * 70 +
+                  "\n[player] WARNING: no checkpoint restored (checkpoint='Base').\n"
+                  "[player] The policy is running on RANDOM initial weights.\n"
+                  "[player] Any success-rate / pose-error metrics are MEANINGLESS\n"
+                  "[player] unless this is a --play_dataset mocap replay.\n" +
+                  "!" * 70 + "\n", file=_sys.stderr, flush=True)
         return
     
     def _build_net(self, config):

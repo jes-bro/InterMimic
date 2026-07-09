@@ -56,8 +56,15 @@ def decode_config(path):
     def has_active(key):  # key present as a real (non-comment) yaml line
         return re.search(rf"^\s*{key}:\s*\S", t, re.MULTILINE) is not None
 
-    bf = (re.search(r"betas_file:\s*(\S+)", t) or [None, ""])[1]
-    betas = "Neutral+Aug" if "neutral_aug" in bf else "Neutral" if "neutral" in bf else "Gendered"
+    # Only an ACTIVE (non-commented) betas_file line counts. An absent line means
+    # the run trained with NO betas (canonical beta=0) -- that is NOT the same as
+    # "Gendered", so don't mislabel it.
+    bfm = re.search(r"^\s*betas_file:\s*(\S+)", t, re.MULTILINE)
+    bf = bfm.group(1) if bfm else ""
+    betas = ("None" if not bf
+             else "Neutral+Aug" if "neutral_aug" in bf
+             else "Neutral" if "neutral" in bf
+             else "Gendered")
     nobs = (re.search(r"numObs:\s*(\d+)", t) or [None, None])[1]
     arch = ("Transformer" if (nobs == "6524" or re.search(r"useTransformerObs:\s*true", t))
             else "MLP" if nobs == "3230" else (nobs or "?"))
