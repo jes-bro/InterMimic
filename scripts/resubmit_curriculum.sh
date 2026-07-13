@@ -11,6 +11,8 @@
 # exact invocation for each. POSIX sh.
 #
 # DRY RUN by default. Set CONFIRM=1 to sbatch.  Skip runs with EXCLUDE="a b".
+# ONLY="a b" resubmits ONLY those run names (inverse of EXCLUDE) -- use it to
+#   restart a specific set of failed runs.
 # NEUTRAL_ONLY=1 resubmits only neutral-beta runs (skips gendered-beta ones).
 # DEDUP_CONFIG=1 skips runs whose config (args minus --run-name) matches an
 #   already-selected run -- i.e. redundant duplicate experiments.
@@ -38,6 +40,16 @@ for log in $(ls -t curriculum-*.out 2>/dev/null); do
     case " ${EXCLUDE:-} " in *" $run "*)
         printf '   status     : EXCLUDED -> skip\n'; continue ;;
     esac
+
+    # ONLY="a b c": resubmit exactly these run names and nothing else. Inverse of
+    # EXCLUDE -- use it to restart a known-failed subset instead of every run that
+    # happens to not be in squeue.
+    if [ -n "${ONLY:-}" ]; then
+        case " $ONLY " in
+            *" $run "*) : ;;
+            *) printf '   status     : not in ONLY list -> skip\n'; continue ;;
+        esac
+    fi
 
     # NEUTRAL_ONLY=1: only resubmit neutral-beta runs (gendered betas break
     # cross-gender conditioning). Gendered = --betas-file scripts/omomo_betas.npz;
