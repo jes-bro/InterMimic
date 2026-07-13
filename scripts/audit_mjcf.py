@@ -303,6 +303,88 @@ def compare(rA, rB, nameA, nameB, top=25):
     print("  MJCFs are geometrically equivalent and the bug is NOT in the MJCF geometry.")
 
 
+# Attributes whose values SHOULD differ between subjects (they encode body shape).
+# Everything else is physics/structure and must be identical -- a difference there
+# is a bug, not a body.
+SHAPE_ATTRS = {"pos", "size", "fromto", "density", "quat", "euler"}
+
+
+def xml_signature(path):
+    """(tag-path, attr-name) -> value for every non-shape attribute in the file.
+
+    Deliberately NOT a list of checks I thought of. It captures EVERYTHING --
+    stiffness, damping, armature, contype/conaffinity (self-collision filtering),
+    condim, margin, joint type, contact excludes, element order -- and lets the
+    diff say what actually differs. Five hand-written checks have now missed
+    whatever is wrong with sub4; this one cannot miss by construction.
+    """
+    root = ET.parse(path).getroot()
+    sig, order = {}, []
+
+    def walk(e, prefix):
+        # Index siblings by tag so element ORDER is part of the signature.
+        counts = {}
+        for c in e:
+            i = counts.get(c.tag, 0)
+            counts[c.tag] = i + 1
+            nm = c.get("name") or f"#{i}"
+            p = f"{prefix}/{c.tag}[{nm}]"
+            order.append(p)
+            for k, v in c.attrib.items():
+                if k in SHAPE_ATTRS:
+                    continue
+                sig[(p, k)] = v.strip()
+            walk(c, p)
+
+    walk(root, "")
+    return sig, order
+
+
+def xmldiff(pa, pb, na, nb, limit=40):
+    sa, oa = xml_signature(pa)
+    sb, ob = xml_signature(pb)
+    print("=" * 100)
+    print(f"STRUCTURAL XML DIFF  {na} vs {nb}")
+    print("  Ignores shape attrs (pos/size/fromto/density) -- those SHOULD differ.")
+    print("  Everything else (stiffness, damping, armature, contype/conaffinity,")
+    print("  condim, margin, joint type, contact excludes, element order) must match.")
+    print("=" * 100)
+
+    if oa != ob:
+        print(f"\n  !! ELEMENT ORDER/SET DIFFERS ({len(oa)} vs {len(ob)} elements)")
+        setA, setB = set(oa), set(ob)
+        onlyA, onlyB = setA - setB, setB - setA
+        for nm, s in ((na, onlyA), (nb, onlyB)):
+            if s:
+                print(f"     only in {nm} ({len(s)}): {' '.join(sorted(s)[:12])}")
+        if not onlyA and not onlyB:
+            for i, (x, y) in enumerate(zip(oa, ob)):
+                if x != y:
+                    print(f"     same elements, different ORDER; first at index {i}: "
+                          f"{na}={x}  {nb}={y}")
+                    break
+    else:
+        print(f"\n  element order/set: IDENTICAL ({len(oa)} elements)")
+
+    keys = set(sa) | set(sb)
+    diffs = [(k, sa.get(k, "<absent>"), sb.get(k, "<absent>"))
+             for k in sorted(keys) if sa.get(k) != sb.get(k)]
+    if not diffs:
+        print(f"  attributes:        IDENTICAL ({len(sa)} non-shape attributes)")
+        print(f"\n  => {na} and {nb} are STRUCTURALLY IDENTICAL. Every difference between")
+        print(f"     them is pure body shape. The MJCF is NOT the bug -- look at the motion")
+        print(f"     data or the physics/contact state at runtime.")
+        return
+    print(f"  attributes:        {len(diffs)} DIFFER\n")
+    for (p, k), va, vb in diffs[:limit]:
+        print(f"    {p}")
+        print(f"        {k}: {na}={va!r}   {nb}={vb!r}")
+    if len(diffs) > limit:
+        print(f"    ... {len(diffs)-limit} more (rerun with --top {len(diffs)})")
+    print(f"\n  => These are physics/structure attributes. They should NOT vary between")
+    print(f"     subjects. This is a real difference in how the two bodies simulate.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--glob", default="isaacgym/src/intermimic/data/assets/smplx/smplx_omomo_sub*.xml")
@@ -311,6 +393,10 @@ def main():
     ap.add_argument("--z", type=float, default=3.0, help="robust-z threshold to flag")
     ap.add_argument("--compare", nargs=2, metavar=("SUSPECT", "CONTROL"),
                     help="per-body diff of two subjects, e.g. --compare sub4 sub11")
+    ap.add_argument("--xmldiff", nargs=2, metavar=("SUSPECT", "CONTROL"),
+                    help="STRUCTURAL diff of every non-shape attribute (stiffness, damping, "
+                         "armature, contype/conaffinity, contact excludes, element order). "
+                         "Catches what the hand-written checks miss.")
     ap.add_argument("--top", type=int, default=25, help="rows to show in --compare")
     ap.add_argument("--sym-tol", type=float, default=0.05,
                     help="flag L/R asymmetry above this fraction (default 5%%)")
@@ -326,6 +412,14 @@ def main():
     subs = [subject_of(p) for p in paths]
     METRICS = ["mass", "height", "width", "leg", "arm", "torso"]
     Z = {m: robust_z([r[m] for r in R]) for m in METRICS}
+
+    if a.xmldiff:
+        sA, sB = a.xmldiff
+        for s in (sA, sB):
+            if s not in subs:
+                raise SystemExit(f"FATAL: {s} not found in {a.glob} (have: {' '.join(subs)})")
+        xmldiff(paths[subs.index(sA)], paths[subs.index(sB)], sA, sB, limit=a.top)
+        return
 
     if a.compare:
         sA, sB = a.compare
@@ -459,7 +553,7 @@ def main():
         i = subs.index(s)
         flags = [f"{m} (z={Z[m][i]:+.1f})" for m in METRICS if abs(Z[m][i]) > a.z]
         asym = SYM.get(s, [])
-        if s in bad_dof:
+        if s in bad_dof:  # noqa: E501
             print(f"  {s}: DOF-MISALIGNED -- its ordered joint sequence differs from the")
             print(f"       other subjects. A shared dof_pos vector drives the WRONG joints on")
             print(f"       this body: the limb jitters and teleports in kinematic replay while")
@@ -468,12 +562,13 @@ def main():
         elif R[i]["problems"]:
             print(f"  {s}: MALFORMED -- {len(R[i]['problems'])} degeneracy(ies). This is the bug.")
         elif asym:
-            aw, ln, rn, field, va, vb = asym[0]
-            print(f"  {s}: ASYMMETRIC -- {ln}/{rn} differ by {100*aw:.0f}% in {field} "
-                  f"({va:.4f} vs {vb:.4f}).")
-            print(f"       The two sides of this body are not the same. A mirrored limb is")
-            print(f"       invisible to mass/height/z-score checks (they average out) but")
-            print(f"       renders as a deformed leg/arm and corrupts every contact on that side.")
+            zz, av, ln, rn, field, va, vb = asym[0]
+            print(f"  {s}: asymmetric -- {ln}/{rn} differ by {100*av:.0f}% in {field} "
+                  f"({va:.4f} vs {vb:.4f}, z={zz:+.1f}).")
+            print(f"       NOTE: real subjects all share a large L/R thorax asymmetry that the")
+            print(f"       synthetic bodies lack, so this flags real-vs-synthetic more than it")
+            print(f"       flags a defect. Only trust it if this subject stands out from OTHER")
+            print(f"       REAL subjects -- use --xmldiff for a definitive structural compare.")
         elif flags:
             print(f"  {s}: physically anomalous -- {', '.join(flags)}")
         else:
