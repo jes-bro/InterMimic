@@ -28,16 +28,19 @@ CFG=isaacgym/src/intermimic/data/cfg
 RUN="${1:?usage: sh scripts/eval_one.sh <run> [checkpoint]   e.g. src2_xf_aug}"
 CKPT_ARG="${2:-}"
 
-# Resolve run -> checkpoint dir + config paths (teacher runs).
-case "$RUN" in
-  smplx_teacher_*) exp="$RUN";              texp=${RUN#smplx_teacher_} ;;
-  *)               exp="smplx_teacher_$RUN"; texp="$RUN" ;;
-esac
+# Resolve run -> config paths. The config *name* (src9) and the checkpoint *dir*
+# (smplx_teacher_src9_neutral) don't always match, so DON'T guess the dir from the
+# run name -- read the authoritative full_experiment_name out of the train config,
+# same as the teacher slurm scripts do.
+texp="${RUN#smplx_teacher_}"
 envc="$CFG/omomo_teacher_${texp}.yaml"
 trainc="$CFG/train/rlg/omomo_teacher_${texp}.yaml"
-ckdir="checkpoints/$exp/nn"
 [ -f "$envc" ]   || { echo "ERROR: env config not found: $envc" >&2; exit 2; }
 [ -f "$trainc" ] || { echo "ERROR: train config not found: $trainc (needed for the network arch)" >&2; exit 2; }
+
+exp=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$trainc" | awk '{print $2}')
+[ -n "$exp" ] || { echo "ERROR: no full_experiment_name in $trainc" >&2; exit 2; }
+ckdir="checkpoints/$exp/nn"
 
 # checkpoint: explicit arg, else latest numbered snapshot in the run's nn/
 if [ -n "$CKPT_ARG" ]; then
@@ -46,7 +49,18 @@ else
   CKPT=$(ls -1 "$ckdir"/mimic_0*.pth 2>/dev/null | sort | tail -1)
   [ -z "$CKPT" ] && CKPT="$ckdir/mimic.pth"
 fi
-[ -f "$CKPT" ] || { echo "ERROR: checkpoint not found: $CKPT" >&2; exit 2; }
+if [ ! -f "$CKPT" ]; then
+  echo "ERROR: checkpoint not found: $CKPT" >&2
+  echo "       (run '$texp' -> experiment '$exp' -> dir $ckdir)" >&2
+  if [ -d "$ckdir" ]; then
+    echo "       files present in $ckdir:" >&2
+    ls -1 "$ckdir" >&2 2>/dev/null | sed 's/^/         /' >&2
+  else
+    echo "       $ckdir does not exist. Teacher checkpoint dirs that DO exist:" >&2
+    ls -1d checkpoints/smplx_teacher_*/ 2>/dev/null | sed 's/^/         /' >&2
+  fi
+  exit 2
+fi
 
 # Pull arch/betas/source/bodies from the run's OWN env config. python parses the
 # yaml (subjectBodies is a long list -- grep/sed would be fragile) and emits
