@@ -107,6 +107,9 @@ class InterMimic(Humanoid_SMPLX):
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
         'teacherPolicyCFG', 'terminationHeight', 'useTransformerObs',
+        # 'seed' is injected into cfg['env'] by rl_games' player on the --test
+        # path (NOT training), so it's a legitimate runtime key, not a typo.
+        'seed',
     })
 
     def _validate_env_config(self, env_cfg):
