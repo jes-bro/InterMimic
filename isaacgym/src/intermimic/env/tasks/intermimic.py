@@ -110,6 +110,10 @@ class InterMimic(Humanoid_SMPLX):
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
         # path (NOT training), so it's a legitimate runtime key, not a typo.
         'seed',
+        # objectAug (physics): per-env object scale/yaw/translate + mass correction.
+        # objectTermsEnable gates the stock object-match reward terms (ro*rig*rcg),
+        # which a perturbed object makes unachievable.
+        'objectAug', 'objectTermsEnable',
     })
 
     def _validate_env_config(self, env_cfg):
