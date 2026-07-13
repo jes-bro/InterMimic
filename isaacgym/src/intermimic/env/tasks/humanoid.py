@@ -542,6 +542,13 @@ class Humanoid_SMPLX(BaseTask):
             # a valid (garbage) action that gets discarded on reset.
             obs_buf[invalid_obs] = 0.0
 
+        # Stash the two sub-causes so callers can attribute a termination to
+        # "fell below terminationHeight" vs "NaN/Inf in obs" rather than just
+        # "terminated". Read by InterMimic's TERM_REASON=1 counter; two tensor
+        # refs, no compute.
+        self._last_body_fall = has_failed
+        self._last_invalid_obs = invalid_batches
+
         terminated = torch.where(torch.logical_or(invalid_batches, has_failed), torch.ones_like(reset_buf), terminated)
         reset = torch.where(torch.logical_or(progress_buf >= max_episode_length-1, progress_buf - start_times >= rollout_length-1), torch.ones_like(reset_buf), terminated)
         if not enable_early_termination:

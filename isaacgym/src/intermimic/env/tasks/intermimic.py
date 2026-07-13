@@ -333,6 +333,26 @@ class InterMimic(Humanoid_SMPLX):
                         f"absent/empty (misspelled?). This feature needs per-subject "
                         f"bodies; refusing to silently run single-body and ignore it.")
 
+        # ---- TERM_REASON=1: why do episodes END, broken down per body? ----------
+        # Success here == "survived to the end of the clip", so a low success rate
+        # is ALWAYS some episode ending early -- but four different things can end
+        # it (fell below terminationHeight / NaN obs / interaction divergence /
+        # contact divergence) and nothing distinguished them. A body that falls
+        # over and a body that drops the object need opposite fixes.
+        # Diagnostic only: counts are accumulated in compute_hoi_reset and printed
+        # periodically. Never touches reward, reset, or the policy.
+        self._term_reason = os.environ.get('TERM_REASON', '0') == '1'
+        self._term_reason_every = int(os.environ.get('TERM_REASON_EVERY', '2000'))
+        if self._term_reason:
+            self._term_labels = ['completed', 'fell', 'nan_obs', 'ig_diverge', 'contact_diverge']
+            n_bodies = len(self.subject_bodies) if getattr(self, 'subject_bodies', None) else 1
+            self._term_counts = torch.zeros((n_bodies, len(self._term_labels)),
+                                            dtype=torch.long, device=self.device)
+            self._term_episodes = torch.zeros(n_bodies, dtype=torch.long, device=self.device)
+            self._term_steps = 0
+            print(f"[term_reason] enabled -- reporting every {self._term_reason_every} steps "
+                  f"across {n_bodies} body(ies)")
+
         # Per-env target_betas always reflects the body in sim (chunk 1's
         # _env_subject_idx). When subjectBodies is set, look up each body's
         # betas from the npz; when absent, all envs run canonical (β=0).
@@ -1463,11 +1483,72 @@ class InterMimic(Humanoid_SMPLX):
 
         reset_ig *= (progress_buf > 1 + start_times)
         contact_reset *= (progress_buf > 1 + start_times)
-                
+
         terminated = torch.where(torch.logical_or(reset_ig, contact_reset), torch.ones_like(reset_buf), terminated)
         reset = torch.where(reset.bool(), torch.ones_like(reset_buf), terminated)
 
+        if getattr(self, '_term_reason', False):
+            self._accumulate_term_reasons(reset, terminated, reset_ig, contact_reset)
+
         return reset, terminated
+
+    def _accumulate_term_reasons(self, reset, terminated, reset_ig, contact_reset):
+        """Tally WHY each episode ended, per body. TERM_REASON=1 only.
+
+        Causes are counted INDEPENDENTLY, not as a partition: a single reset can
+        trip several at once (e.g. the humanoid falls and the object diverges in
+        the same step), and collapsing that into one 'primary' cause by an
+        arbitrary precedence would hide exactly the correlation we're hunting.
+        So the row can sum to more than the number of episodes -- that overlap is
+        signal, not a bug.
+        """
+        self._term_steps += 1
+        done = reset.bool()
+        if not done.any():
+            return
+
+        term = terminated.bool()
+        fell = self._last_body_fall.bool()      # stashed by compute_humanoid_reset
+        nan_ = self._last_invalid_obs.bool()
+
+        cols = [
+            done & ~term,                       # completed: ended with no terminal cause = success
+            done & term & fell,
+            done & term & nan_,
+            done & term & reset_ig.bool(),
+            done & term & contact_reset.bool(),
+        ]
+        idx = self._env_subject_idx
+        n_bodies = self._term_counts.shape[0]
+        # Episodes ended, per body -- the honest denominator. Tracked directly rather
+        # than reconstructed from the cause columns, which overlap and can't be summed.
+        self._term_episodes += torch.bincount(idx[done], minlength=n_bodies)
+        for c, mask in enumerate(cols):
+            if mask.any():
+                self._term_counts[:, c] += torch.bincount(idx[mask], minlength=n_bodies)
+
+        if self._term_steps % self._term_reason_every == 0:
+            self._print_term_reasons()
+
+    def _print_term_reasons(self):
+        counts = self._term_counts.cpu().numpy()
+        episodes = self._term_episodes.cpu().numpy()
+        names = self.subject_bodies if getattr(self, 'subject_bodies', None) else [self.robot_type]
+        print('=' * 92)
+        print(f'TERMINATION REASONS  (sim step {self._term_steps})')
+        print('  % is of episodes ENDED for that body. Causes overlap (one reset can trip')
+        print("  several), so a row may exceed 100%. 'completed' = survived the clip = success.")
+        hdr = f"{'body':>8s} {'episodes':>9s} " + ' '.join(f'{l:>17s}' for l in self._term_labels)
+        print(hdr)
+        print('-' * len(hdr))
+        for i, nm in enumerate(names):
+            n = int(episodes[i])
+            if n == 0:
+                print(f'{nm:>8s} {0:9d}   (no episodes ended yet)')
+                continue
+            cells = ' '.join(f'{int(v):7d} ({100.0 * v / n:5.1f}%)' for v in counts[i])
+            print(f'{nm:>8s} {n:9d} {cells}')
+        print('=' * 92, flush=True)
 
     # ---- Opt-in reward diagnostics (REWARD_BREAKDOWN=1) -----------------------
     # Periodically prints mean reward TERMS (rb=body, ro=object, rig=interaction,
