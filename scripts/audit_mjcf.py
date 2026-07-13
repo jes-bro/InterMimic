@@ -82,13 +82,20 @@ def parse_mjcf(path):
                 m = vol * dens
                 geoms.append({"body": name, "type": g.get("type"), "mass": m,
                               "density": dens, "r": r, "L": L})
-                # Degeneracy checks -- these are what a bad betas->MJCF fit produces.
+                # Degeneracy checks. NOTE: a clean bill of health here does NOT mean
+                # the body is fine -- these are only the failure modes we thought to
+                # look for. Use --compare to find the ones we didn't.
                 if not np.isfinite([vol, dens, m]).all():
                     problems.append(f"{name}: NaN/Inf (vol={vol} dens={dens})")
                 if r <= 0:
                     problems.append(f"{name}: non-positive radius {r}")
+                elif r < 1e-3:
+                    # Positive but tiny: passes a >0 check yet wrecks contact solving.
+                    problems.append(f"{name}: near-zero radius {r:.2e}")
                 if g.get("type") == CAPSULE and L <= 1e-6:
                     problems.append(f"{name}: zero-length capsule")
+                elif g.get("type") == CAPSULE and r > 0 and L / r > 40:
+                    problems.append(f"{name}: needle capsule (L/r = {L/r:.0f})")
                 if dens <= 0 or dens > 20000:
                     problems.append(f"{name}: implausible density {dens:.0f}")
                 # geom hull points, in global frame
@@ -143,12 +150,80 @@ def subject_of(path):
     return m.group(1) if m else os.path.basename(path)
 
 
+def compare(rA, rB, nameA, nameB, top=25):
+    """Side-by-side per-body diff of two MJCFs, worst relative difference first.
+
+    The degeneracy checks above can only catch failure modes we anticipated. When a
+    body is known-broken but audits clean, the checks are the problem, not the body.
+    This dumps what ACTUALLY differs from a healthy control so the bug can be seen
+    rather than guessed at.
+    """
+    print("=" * 100)
+    print(f"COMPARE  {nameA} (suspect)  vs  {nameB} (control)   -- worst relative difference first")
+    print("=" * 100)
+
+    # Per-body mass and geometry, keyed by body name.
+    def per_body(r):
+        d = {}
+        for g in r["geoms"]:
+            e = d.setdefault(g["body"], {"mass": 0.0, "r": 0.0, "L": 0.0, "dens": 0.0, "n": 0})
+            e["mass"] += g["mass"]
+            e["r"] = max(e["r"], g["r"])
+            e["L"] = max(e["L"], g["L"])
+            e["dens"] = max(e["dens"], g["density"])
+            e["n"] += 1
+        return d
+
+    A, B = per_body(rA), per_body(rB)
+    onlyA, onlyB = set(A) - set(B), set(B) - set(A)
+    if onlyA or onlyB:
+        print(f"  !! body-name mismatch: only in {nameA}: {sorted(onlyA)} | "
+              f"only in {nameB}: {sorted(onlyB)}\n")
+
+    rows = []
+    for nm in sorted(set(A) & set(B)):
+        a, b = A[nm], B[nm]
+        # Relative difference on each field; rank by the worst one on that body.
+        rel = {}
+        for k in ("mass", "r", "L", "dens"):
+            denom = max(abs(b[k]), 1e-9)
+            rel[k] = (a[k] - b[k]) / denom
+        worst = max(abs(v) for v in rel.values())
+        rows.append((worst, nm, a, b, rel))
+    rows.sort(reverse=True)
+
+    hdr = (f"{'body':>14s} {'mass_A':>8s} {'mass_B':>8s} {'d%':>7s} "
+           f"{'r_A':>7s} {'r_B':>7s} {'d%':>7s} {'L_A':>7s} {'L_B':>7s} {'d%':>7s} "
+           f"{'dens_A':>9s} {'dens_B':>9s} {'d%':>7s}")
+    print(hdr)
+    print("-" * len(hdr))
+    for worst, nm, a, b, rel in rows[:top]:
+        flag = "  <<<" if worst > 0.5 else ""
+        print(f"{nm:>14s} {a['mass']:8.2f} {b['mass']:8.2f} {100*rel['mass']:+7.1f} "
+              f"{a['r']:7.4f} {b['r']:7.4f} {100*rel['r']:+7.1f} "
+              f"{a['L']:7.4f} {b['L']:7.4f} {100*rel['L']:+7.1f} "
+              f"{a['dens']:9.1f} {b['dens']:9.1f} {100*rel['dens']:+7.1f}{flag}")
+    if len(rows) > top:
+        print(f"  ... {len(rows) - top} more bodies within tolerance (rerun with --top {len(rows)})")
+
+    print()
+    print(f"  totals:  mass {rA['mass']:.1f} vs {rB['mass']:.1f} kg "
+          f"({100*(rA['mass']-rB['mass'])/max(rB['mass'],1e-9):+.1f}%)   "
+          f"height {rA['height']:.3f} vs {rB['height']:.3f} m   "
+          f"leg {rA['leg']:.3f} vs {rB['leg']:.3f}   arm {rA['arm']:.3f} vs {rB['arm']:.3f}")
+    print("  Rows marked <<< differ by >50% on some field. If nothing is marked, the two")
+    print("  MJCFs are geometrically equivalent and the bug is NOT in the MJCF geometry.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--glob", default="isaacgym/src/intermimic/data/assets/smplx/smplx_omomo_sub*.xml")
     ap.add_argument("--highlight", nargs="*", default=["sub4", "sub16"],
                     help="subjects to call out explicitly in the report")
     ap.add_argument("--z", type=float, default=3.0, help="robust-z threshold to flag")
+    ap.add_argument("--compare", nargs=2, metavar=("SUSPECT", "CONTROL"),
+                    help="per-body diff of two subjects, e.g. --compare sub4 sub11")
+    ap.add_argument("--top", type=int, default=25, help="rows to show in --compare")
     a = ap.parse_args()
 
     paths = sorted(globmod.glob(a.glob), key=lambda p: int(re.search(r"sub(\d+)", p).group(1))
@@ -161,6 +236,14 @@ def main():
     subs = [subject_of(p) for p in paths]
     METRICS = ["mass", "height", "width", "leg", "arm", "torso"]
     Z = {m: robust_z([r[m] for r in R]) for m in METRICS}
+
+    if a.compare:
+        sA, sB = a.compare
+        for s in (sA, sB):
+            if s not in subs:
+                raise SystemExit(f"FATAL: {s} not found in {a.glob} (have: {' '.join(subs)})")
+        compare(R[subs.index(sA)], R[subs.index(sB)], sA, sB, top=a.top)
+        return
 
     # --- topology must be IDENTICAL across bodies: the shared policy emits one
     # action vector for all of them (humanoid.py asserts this at load).

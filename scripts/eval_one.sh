@@ -102,7 +102,11 @@ else                               BASE="$CFG/omomo_test_multibody.yaml"; fi
 
 SOURCES="${SOURCES:-$SRC_DEFAULT}"
 HELDOUT="${HELDOUT:-sub10 sub16 sub13}"
-BODIES="$REAL_BODIES $HELDOUT $SYN_PICK"
+# BODIES="sub11 sub16" evaluates ONLY those bodies (e.g. one suspect + one control).
+# Honor it -- this used to be an unconditional assignment that silently clobbered
+# the caller's override and evaluated all 21 bodies anyway.
+BODIES_DEFAULT="$REAL_BODIES $HELDOUT $SYN_PICK"
+BODIES="${BODIES:-$BODIES_DEFAULT}"
 
 id=$(basename "$CKPT" .pth)
 OUT="${OUT:-eval_results/${exp}__${id}__indist+heldout+syn.csv}"
@@ -111,9 +115,13 @@ echo "== eval_one: $exp =="
 echo "   arch/betas : $ARCH (numObs=$NOBS) / $BETAS"
 echo "   checkpoint : $CKPT"
 echo "   sources    : $SOURCES"
-echo "   in-dist    : $REAL_BODIES"
-echo "   held-out   : $HELDOUT"
-echo "   synthetic  : ${SYN_PICK:-<none>}  (of $N_SYN_AVAIL available; N_SYNTHETIC=$N_SYNTHETIC)"
+if [ "$BODIES" = "$BODIES_DEFAULT" ]; then
+  echo "   in-dist    : $REAL_BODIES"
+  echo "   held-out   : $HELDOUT"
+  echo "   synthetic  : ${SYN_PICK:-<none>}  (of $N_SYN_AVAIL available; N_SYNTHETIC=$N_SYNTHETIC)"
+else
+  echo "   BODIES     : $BODIES   <-- caller override (default set NOT used)"
+fi
 echo "   base/train : $(basename "$BASE") | $(basename "$trainc")"
 echo "   -> csv     : $OUT"
 
