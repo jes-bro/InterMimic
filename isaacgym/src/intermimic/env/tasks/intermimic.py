@@ -110,6 +110,10 @@ class InterMimic(Humanoid_SMPLX):
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
         # path (NOT training), so it's a legitimate runtime key, not a typo.
         'seed',
+        # objectAug: perturbs the object (scale / translate / yaw) to test whether
+        # the interaction survives it. Read at __init__ below; slurm_kinematic_objtest.sh
+        # injects it into the generated cfg.
+        'objectPerturb',
     })
 
     def _validate_env_config(self, env_cfg):
