@@ -116,8 +116,22 @@ def parse_mjcf(path):
         """Summed offsets along a named body chain (arm/leg length)."""
         return float(sum(bodies[n]["offset"] for n in names if n in bodies))
 
+    # ORDERED joint signature. The policy/motion share ONE dof_pos vector across all
+    # bodies: dof_pos[i] drives the i-th joint in the sim's traversal order. So the
+    # ordered (name, axis, range) sequence must be IDENTICAL across subjects. Same
+    # joint COUNT with a different ORDER or AXIS silently applies each value to the
+    # wrong joint -- which in a kinematic replay renders as a jagged, teleporting
+    # limb while every mass/height/symmetry check stays clean.
+    jseq = []
+    for j in root.iter("joint"):
+        jseq.append((j.get("name", "?"),
+                     j.get("axis", "?").strip(),
+                     j.get("range", "?").strip()))
+
     return {
         "path": path,
+        "jseq": jseq,
+        "bseq": list(bodies.keys()),
         "n_body": len(bodies),
         "n_geom": len(geoms),
         "n_joint": len(root.findall(".//joint")),
@@ -132,6 +146,80 @@ def parse_mjcf(path):
         "bodies": bodies,
         "geoms": geoms,
     }
+
+
+FIELDS = ("mass", "r", "L", "offset")
+
+
+def asym_map(r):
+    """Signed L-vs-R asymmetry for every (limb pair, field) in one subject.
+
+    Every other check here is external (subject vs subject, subject vs population),
+    so a limb wrong on ONE side is invisible to them -- the totals average out. A
+    "flamingo leg" is exactly that. A human MJCF must be near-symmetric.
+
+    Compares MAGNITUDES (the L/R geoms are mirrored in y, so signed coords
+    legitimately differ).
+    """
+    per = {}
+    for g in r["geoms"]:
+        e = per.setdefault(g["body"], {"mass": 0.0, "r": 0.0, "L": 0.0})
+        e["mass"] += g["mass"]
+        e["r"] = max(e["r"], g["r"])
+        e["L"] = max(e["L"], g["L"])
+    for nm, b in r["bodies"].items():
+        per.setdefault(nm, {"mass": 0.0, "r": 0.0, "L": 0.0})["offset"] = b["offset"]
+
+    out, missing = {}, []
+    for nm in per:
+        if not nm.startswith("L_"):
+            continue
+        mate = "R_" + nm[2:]
+        if mate not in per:
+            missing.append(nm)
+            continue
+        for k in FIELDS:
+            va, vb = per[nm].get(k, 0.0), per[mate].get(k, 0.0)
+            denom = max(abs(va), abs(vb), 1e-9)
+            if denom < 1e-6:
+                continue
+            out[(nm, mate, k)] = ((va - vb) / denom, va, vb)
+    return out, missing
+
+
+def symmetry_outliers(asyms, floor=0.10, zthr=3.0):
+    """Which subjects are asymmetric ANOMALOUSLY, vs the population?
+
+    SMPL-X's own template is slightly asymmetric (thumbs, thorax, shoulder offset),
+    and every subject inherits it -- so a flat threshold flags all 17 and says
+    nothing. What matters is a subject whose asymmetry at a given joint pair is
+    out of line with what every OTHER subject shows there. Shared template
+    asymmetry cancels; a uniquely broken limb stands out.
+
+    Flags only when BOTH: |asym| exceeds `floor` in absolute terms, AND its robust
+    z against the other subjects exceeds `zthr`.
+    """
+    keys = set()
+    for m, _ in asyms.values():
+        keys |= set(m)
+    hits = {s: [] for s in asyms}
+    for key in keys:
+        vals, subs_with = [], []
+        for s, (m, _) in asyms.items():
+            if key in m:
+                vals.append(m[key][0])
+                subs_with.append(s)
+        if len(vals) < 4:
+            continue
+        z = robust_z(vals)
+        for s, zz, v in zip(subs_with, z, vals):
+            if abs(v) > floor and abs(zz) > zthr:
+                ln, rn, field = key
+                _, va, vb = asyms[s][0][key]
+                hits[s].append((abs(zz), abs(v), ln, rn, field, va, vb))
+    for s in hits:
+        hits[s].sort(reverse=True)
+    return hits
 
 
 def robust_z(v):
@@ -224,6 +312,8 @@ def main():
     ap.add_argument("--compare", nargs=2, metavar=("SUSPECT", "CONTROL"),
                     help="per-body diff of two subjects, e.g. --compare sub4 sub11")
     ap.add_argument("--top", type=int, default=25, help="rows to show in --compare")
+    ap.add_argument("--sym-tol", type=float, default=0.05,
+                    help="flag L/R asymmetry above this fraction (default 5%%)")
     a = ap.parse_args()
 
     paths = sorted(globmod.glob(a.glob), key=lambda p: int(re.search(r"sub(\d+)", p).group(1))
@@ -280,6 +370,72 @@ def main():
 
     print()
     print("=" * 96)
+    print("DOF ALIGNMENT  (ordered joint name/axis/range sequence -- must be IDENTICAL)")
+    print("  One dof_pos vector drives every body: dof_pos[i] -> the i-th joint. If the")
+    print("  ORDER or AXIS differs, values land on the WRONG joint -- which renders as a")
+    print("  jagged, teleporting limb even though counts, mass, and symmetry all pass.")
+    print("=" * 96)
+    from collections import Counter as _C
+    ref_key, _ = _C(tuple(r["jseq"]) for r in R).most_common(1)[0]
+    ref = list(ref_key)
+    n_ref = sum(1 for r in R if tuple(r["jseq"]) == ref_key)
+    print(f"  reference = the majority sequence ({n_ref}/{len(R)} subjects agree), "
+          f"{len(ref)} joints")
+    bad_dof = []
+    for s, r in zip(subs, R):
+        seq = r["jseq"]
+        if tuple(seq) == ref_key:
+            continue
+        bad_dof.append(s)
+        print(f"\n  {s}: joint sequence DIFFERS from the reference")
+        if len(seq) != len(ref):
+            print(f"      length {len(seq)} vs reference {len(ref)}")
+        for i in range(min(len(seq), len(ref))):
+            if seq[i] != ref[i]:
+                print(f"      FIRST DIVERGENCE at dof index {i}:")
+                print(f"        this subject : name={seq[i][0]!r} axis={seq[i][1]!r} range={seq[i][2]!r}")
+                print(f"        reference    : name={ref[i][0]!r} axis={ref[i][1]!r} range={ref[i][2]!r}")
+                print(f"      -> from dof {i} on, motion values drive the wrong joint on this body.")
+                # How many, and which bodies are affected downstream?
+                diff = [k for k in range(min(len(seq), len(ref))) if seq[k] != ref[k]]
+                affected = sorted({seq[k][0].rsplit('_', 1)[0] for k in diff})
+                print(f"      -> {len(diff)} of {len(ref)} dofs misaligned, touching: {' '.join(affected)}")
+                break
+    if not bad_dof:
+        print("  OK -- every subject shares the exact same ordered joint sequence.")
+        print("  (So a jagged/teleporting limb is NOT a dof-misalignment problem.)")
+    else:
+        print(f"\n  DOF-MISALIGNED SUBJECTS: {' '.join(bad_dof)}")
+        print("  These bodies CANNOT be driven by a shared dof_pos vector or a shared policy.")
+
+    print()
+    print("=" * 96)
+    print(f"LEFT/RIGHT SYMMETRY  (asymmetry > {100*a.sym_tol:.0f}% of the larger side)")
+    print("  A limb wrong on ONE side is invisible to every check above -- the totals")
+    print("  average out. This is the only check that sees a 'flamingo leg'.")
+    print("=" * 96)
+    # SMPL-X's own template is slightly asymmetric (thumbs, thorax, shoulder) and
+    # every subject inherits it -- so flag only asymmetry that is anomalous vs the
+    # OTHER subjects at that same joint pair, not vs perfect symmetry.
+    asyms = {s: asym_map(r) for s, r in zip(subs, R)}
+    SYM = symmetry_outliers(asyms, floor=a.sym_tol, zthr=a.z)
+    any_asym = False
+    for s in subs:
+        if not SYM[s]:
+            continue
+        any_asym = True
+        print(f"\n  {s}: {len(SYM[s])} anomalous asymmetry(ies)")
+        for zz, av, ln, rn, field, va, vb in SYM[s][:6]:
+            print(f"      {field:>7s}  {ln:>11s} {va:9.4f}  vs  {rn:>11s} {vb:9.4f}   "
+                  f"{100*av:6.1f}% APART  (z={zz:+.1f} vs other subjects)")
+    if not any_asym:
+        print("  none -- no subject's L/R asymmetry is out of line with the population.")
+        print("  (Shared SMPL-X template asymmetry is expected and correctly ignored.)")
+    else:
+        print(f"\n  ASYMMETRIC SUBJECTS: {' '.join(s for s in subs if SYM[s])}")
+
+    print()
+    print("=" * 96)
     print("DEGENERACIES  (NaN, non-positive radius, zero-length capsule, absurd density)")
     print("=" * 96)
     any_bad = False
@@ -302,12 +458,26 @@ def main():
             continue
         i = subs.index(s)
         flags = [f"{m} (z={Z[m][i]:+.1f})" for m in METRICS if abs(Z[m][i]) > a.z]
-        if R[i]["problems"]:
+        asym = SYM.get(s, [])
+        if s in bad_dof:
+            print(f"  {s}: DOF-MISALIGNED -- its ordered joint sequence differs from the")
+            print(f"       other subjects. A shared dof_pos vector drives the WRONG joints on")
+            print(f"       this body: the limb jitters and teleports in kinematic replay while")
+            print(f"       mass/height/symmetry all look normal. THIS IS THE BUG. Regenerate")
+            print(f"       this MJCF; no policy can drive it correctly.")
+        elif R[i]["problems"]:
             print(f"  {s}: MALFORMED -- {len(R[i]['problems'])} degeneracy(ies). This is the bug.")
+        elif asym:
+            aw, ln, rn, field, va, vb = asym[0]
+            print(f"  {s}: ASYMMETRIC -- {ln}/{rn} differ by {100*aw:.0f}% in {field} "
+                  f"({va:.4f} vs {vb:.4f}).")
+            print(f"       The two sides of this body are not the same. A mirrored limb is")
+            print(f"       invisible to mass/height/z-score checks (they average out) but")
+            print(f"       renders as a deformed leg/arm and corrupts every contact on that side.")
         elif flags:
             print(f"  {s}: physically anomalous -- {', '.join(flags)}")
         else:
-            print(f"  {s}: MJCF is clean and unremarkable (no degeneracies, no |z|>{a.z} outliers).")
+            print(f"  {s}: MJCF is clean, symmetric, and unremarkable.")
             print(f"       -> the body geometry does NOT explain its failure. Look at the")
             print(f"          termination reason instead (TERM_REASON=1).")
 
