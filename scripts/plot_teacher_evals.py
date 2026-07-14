@@ -24,7 +24,8 @@ from matplotlib.patches import Patch
 
 # --- Design tokens (validated categorical palette; see dataviz/references/palette.md).
 # Slot order is the CVD-safety mechanism -- worst adjacent dE 47.2, well over the 12 floor.
-SERIES = ["#2a78d6", "#1baf7a", "#eda100"]          # blue, aqua, yellow
+SERIES = ["#2a78d6", "#1baf7a", "#eda100", "#008300",
+          "#4a3aa7", "#e34948"]                     # blue, aqua, yellow, green, violet, red
 SURFACE = "#fcfcfb"
 INK, INK2, INK3 = "#0b0b0b", "#52514e", "#8a8880"
 # Sequential blue ramp (magnitude), light -> dark. One hue, never a rainbow.
@@ -215,8 +216,12 @@ def fig_summary(runs, out):
     hp = group_means(runs, "human_pose_error")
     op = group_means(runs, "object_pose_error")
 
-    fig = plt.figure(figsize=(15, 8.4), facecolor=SURFACE)
-    gs = fig.add_gridspec(2, 1, height_ratios=[1.15, 1], hspace=0.42)
+    # The table is 3 rows per run + header, so its height must scale with the run
+    # count -- a fixed figsize made a 4-run table collide with its own title.
+    n_rows = 3 * len(names) + 1
+    table_h = 0.42 * n_rows
+    fig = plt.figure(figsize=(15, 5.0 + table_h), facecolor=SURFACE)
+    gs = fig.add_gridspec(2, 1, height_ratios=[4.2, table_h], hspace=0.55)
 
     # -- top: group-mean success, the headline comparison
     ax = fig.add_subplot(gs[0])
