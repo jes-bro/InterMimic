@@ -63,6 +63,9 @@ def validate_env_config(env_cfg):
                 ("enable", "numVariants", "anisoMin", "anisoMax"))
     if bg:
         raise ValueError(f"unknown objectAug.geom key(s) {bg}")
+    bc = sorted(k for k in (env_cfg.get("objectConditioning") or {}) if k != "enable")
+    if bc:
+        raise ValueError(f"unknown objectConditioning key(s) {bc}")
 
 
 def body_feature_guard(env_cfg, has_subject_bodies):
@@ -196,6 +199,9 @@ def main():
     check("objectAug.geom.nVariants typo raises",
           lambda: expect_raise(lambda: validate_env_config(
               {"objectAug": {"geom": {"nVariants": 8}}})))
+    check("objectConditioning typo raises",
+          lambda: expect_raise(lambda: validate_env_config(
+              {"objectConditioning": {"enabled": True}})))
     check("body-feature w/o subjectBodies raises",
           lambda: expect_raise(lambda: body_feature_guard({"betas_file": "x"}, False)))
     check("empty dataset raises",

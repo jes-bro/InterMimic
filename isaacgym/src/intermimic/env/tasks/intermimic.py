@@ -113,7 +113,7 @@ class InterMimic(Humanoid_SMPLX):
         # objectAug (physics): per-env object scale/yaw/translate + mass correction.
         # objectTermsEnable gates the stock object-match reward terms (ro*rig*rcg),
         # which a perturbed object makes unachievable.
-        'objectAug', 'objectTermsEnable',
+        'objectAug', 'objectTermsEnable', 'objectConditioning',
     })
 
     def _validate_env_config(self, env_cfg):
@@ -153,6 +153,10 @@ class InterMimic(Humanoid_SMPLX):
         if bg:
             raise ValueError(f"[intermimic] unknown objectAug.geom key(s) {bg} (only 'enable', "
                              f"'numVariants', 'anisoMin', 'anisoMax').")
+        # objectConditioning (privileged per-env object descriptor in obs) sub-keys.
+        bc = sorted(k for k in (env_cfg.get('objectConditioning') or {}) if k != 'enable')
+        if bc:
+            raise ValueError(f"[intermimic] unknown objectConditioning key(s) {bc} (only 'enable').")
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self._validate_env_config(cfg["env"])
@@ -396,6 +400,41 @@ class InterMimic(Humanoid_SMPLX):
         self._obj_pts_scale = (self._oa_scale.view(-1, 1, 1)
                                * self._geom_aniso_per_env.view(-1, 1, 3)).to(self._init_device)
 
+        # --- OBJECT CONDITIONING (privileged, teacher-only): append a per-env STATIC
+        # object descriptor to the policy obs so the teacher KNOWS each object's
+        # size/shape/mass/identity instead of having to infer it from dynamics. Folded
+        # into every obs token exactly like the betas conditioning. Descriptor =
+        #   mass (1) + per-axis total scale aug*(sx,sy,sz) (3) + category one-hot (K).
+        # A category one-hot passed through the net's first linear layer IS a learned
+        # per-category embedding (mathematically identical to nn.Embedding), so this
+        # needs NO network change. Uses a FIXED global object vocabulary so the obs
+        # width is source-independent. Teachers may use privileged info (student
+        # distills later), so conditioning on ground-truth object props is intended.
+        _oc = cfg['env'].get('objectConditioning', {}) or {}
+        self._obj_cond = bool(_oc.get('enable', False))
+        if self._obj_cond:
+            _voc_dir = resolve_data_path("assets", "objects", "objects")
+            self._obj_vocab = sorted(d for d in os.listdir(str(_voc_dir))
+                                     if os.path.isdir(os.path.join(str(_voc_dir), d)))
+            _vidx = {n: i for i, n in enumerate(self._obj_vocab)}
+            _env_obj_name = [self.object_name[e % _nobj] for e in range(_ne)]
+            _miss = sorted(set(_env_obj_name) - set(self._obj_vocab))
+            if _miss:
+                raise ValueError(f"[objectConditioning] objects {_miss} absent from the "
+                                 f"asset vocabulary {self._obj_vocab}; cannot one-hot them.")
+            self._env_obj_cat = torch.tensor([_vidx[n] for n in _env_obj_name],
+                                             dtype=torch.long, device=self._init_device)
+            # per-axis total object scale (uniform objectAug * anisotropic geom); (E,3).
+            self._env_obj_scale3 = (self._oa_scale.view(-1, 1)
+                                    * self._geom_aniso_per_env).to(self._init_device)
+            # per-env mass is read from the sim in _build_target (needs the actor); 1 = placeholder.
+            self._env_obj_mass = torch.ones(_ne, device=self._init_device)
+            self._obj_cond_width = 1 + 3 + len(self._obj_vocab)
+            print(f"[objectConditioning] ON: mass(1)+scale3(3)+onehot({len(self._obj_vocab)}) "
+                  f"=> +{self._obj_cond_width}/token over vocab {self._obj_vocab}", flush=True)
+        else:
+            self._obj_cond_width = 0
+
         # Reward-term toggles. hold ported from objectaug-experiment; pose already exists.
         _rt = cfg['env'].get('rewardTerms', {}) or {}
         _hold = _rt.get('hold', {}) or {}
@@ -466,6 +505,22 @@ class InterMimic(Humanoid_SMPLX):
             else:
                 self._env_target_betas = torch.zeros((self.num_envs, 16), dtype=torch.float, device=self.device)
                 print(f"[intermimic] built _env_target_betas (canonical β=0) for {self.num_envs} envs", flush=True)
+
+        # Assemble the static per-env object-conditioning vector now that per-env mass
+        # has been read during env creation (_build_target). Layout matches
+        # _obj_cond_width: [mass(1), per-axis scale(3), category one-hot(K)].
+        self._obj_cond_vec = None
+        if self._obj_cond:
+            onehot = torch.zeros((self.num_envs, len(self._obj_vocab)), device=self.device)
+            onehot[torch.arange(self.num_envs, device=self.device),
+                   self._env_obj_cat.to(self.device)] = 1.0
+            self._obj_cond_vec = torch.cat([
+                self._env_obj_mass.to(self.device).view(-1, 1),
+                self._env_obj_scale3.to(self.device),
+                onehot], dim=-1)
+            print(f"[objectConditioning] built _obj_cond_vec {tuple(self._obj_cond_vec.shape)} "
+                  f"(mass range [{self._env_obj_mass.min():.3f},{self._env_obj_mass.max():.3f}])",
+                  flush=True)
 
         # Body-size-normalized reward (feature flag). When enabled, pose-error
         # terms in compute_humanoid_reward get divided by per-env body height
@@ -1049,6 +1104,11 @@ class InterMimic(Humanoid_SMPLX):
                 self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
                                                          recomputeInertia=False)
 
+        # Stash this env's final (post-correction) object mass for object conditioning.
+        if getattr(self, '_obj_cond', False):
+            mp = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            self._env_obj_mass[env_id] = float(sum(p.mass for p in mp))
+
         if self._oa_debug and env_id < 8:
             dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
             ax, ay, az = self._geom_aniso_per_env[env_id].tolist()
@@ -1475,44 +1535,78 @@ class InterMimic(Humanoid_SMPLX):
         ref_ig = ref_ig.view(env_ids.shape[0], -1)
         return ig_all, ig, ref_ig
         
+    def _env_cond(self, idx):
+        """Per-env STATIC conditioning folded into every obs token: body betas
+        (source+target, 32) then the object descriptor (mass+scale+category one-hot).
+        `idx` is an env-id index tensor (or None for all envs). Returns None when no
+        conditioning is enabled."""
+        parts = []
+        if self._use_betas_obs:
+            sb = self.source_betas[self.data_id] if idx is None else self.source_betas[self.data_id[idx]]
+            tb = self._env_target_betas if idx is None else self._env_target_betas[idx]
+            parts.append(torch.cat([sb, tb], dim=-1))
+        if self._obj_cond:
+            parts.append(self._obj_cond_vec if idx is None else self._obj_cond_vec[idx])
+        if not parts:
+            return None
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=-1)
+
     def _compute_observations(self, env_ids=None):
         # Horizons stacked into obs_buf: MLP uses 2 (delta_t 1, 16); the
         # transformer policy uses 4 (0, 1, 4, 16) so it can attend over them.
         horizons = [0, 1, 4, 16] if self._use_transformer_obs else [1, 16]
         if (env_ids is None):
             self._curr_ref_obs[:] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
-            # (source_betas, target_betas) — 32 dims. source_betas[data_id]: from
-            # the motion file; _env_target_betas: the env's actual body in sim.
-            betas = torch.cat([self.source_betas[self.data_id], self._env_target_betas], dim=-1) \
-                if self._use_betas_obs else None
-            self.obs_buf[:] = self._stack_obs_horizons(None, horizons, betas)
+            cond = self._env_cond(None)
+            stacked = self._stack_obs_horizons(None, horizons, cond)
+            self._assert_obs_width(stacked.shape[-1])
+            self.obs_buf[:] = stacked
         else:
             self._curr_ref_obs[env_ids] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
-            betas = torch.cat([self.source_betas[self.data_id[env_ids]],
-                               self._env_target_betas[env_ids]], dim=-1) \
-                if self._use_betas_obs else None
-            self.obs_buf[env_ids] = self._stack_obs_horizons(env_ids, horizons, betas)
+            cond = self._env_cond(env_ids)
+            stacked = self._stack_obs_horizons(env_ids, horizons, cond)
+            self._assert_obs_width(stacked.shape[-1])
+            self.obs_buf[env_ids] = stacked
 
-    def _stack_obs_horizons(self, env_ids, horizons, betas):
+    def _assert_obs_width(self, got):
+        """No-silent-fallback guard: the assembled obs width MUST match cfg numObs
+        (which sizes the policy network). A mismatch means the conditioning widths and
+        numObs are out of sync -- fail loudly with the arithmetic instead of letting
+        rl_games throw an opaque shape error (or, worse, silently misalign)."""
+        if getattr(self, '_obs_width_ok', False):
+            return
+        want = self.obs_buf.shape[-1]
+        if got != want:
+            nh = 4 if self._use_transformer_obs else 2
+            raise ValueError(
+                f"[intermimic] obs width {got} != cfg numObs {want}. With "
+                f"{nh} horizons, betas={'32' if self._use_betas_obs else '0'}, "
+                f"objectConditioning={self._obj_cond_width}, set numObs to match "
+                f"(transformer: nh*(base+betas+objcond); base token=1599).")
+        self._obs_width_ok = True
+
+    def _stack_obs_horizons(self, env_ids, horizons, cond):
         """Build the stacked policy obs over `horizons` (delta_t values).
 
-        MLP (2 horizons 1,16): [obs@1, obs@16, betas?] -- betas appended ONCE,
-        byte-identical to the original teacher obs.
-        Transformer (4 horizons 0,1,4,16): each horizon is one token with betas
-        folded IN, so the net's view(batch, 4, -1) recovers clean per-token
-        features (4 * (1599+32) = 6524, or 4*1599 = 6396 without betas).
+        `cond` is the per-env STATIC conditioning (betas + object descriptor, or None).
+
+        MLP (2 horizons 1,16): [obs@1, obs@16, cond?] -- cond appended ONCE,
+        byte-identical to the original teacher obs when cond is None.
+        Transformer (4 horizons 0,1,4,16): each horizon is one token with cond
+        folded IN, so the net's view(batch, 4, -1) recovers clean per-token features
+        (e.g. 4 * (1599+32) = 6524 with betas only, +objcond per token when on).
         """
         if self._use_transformer_obs:
             toks = []
             for dt in horizons:
                 o = self._compute_observations_iter(self.hoi_data, env_ids, dt)
-                if betas is not None:
-                    o = torch.cat([o, betas], dim=-1)   # fold betas into each token
+                if cond is not None:
+                    o = torch.cat([o, cond], dim=-1)   # fold conditioning into each token
                 toks.append(o)
             return torch.cat(toks, dim=-1)
         obs_terms = [self._compute_observations_iter(self.hoi_data, env_ids, dt) for dt in horizons]
-        if betas is not None:
-            obs_terms.append(betas)
+        if cond is not None:
+            obs_terms.append(cond)
         return torch.cat(obs_terms, dim=-1)
 
         return
