@@ -105,15 +105,38 @@ def build_capsules(gym, sim, bodies, spacing):
     return env, gymapi.Vec3(max(4.0, span*0.65), 0.0, 1.2), gymapi.Vec3(0.0, 0.0, 0.9)
 
 
-def build_meshes(gym, sim, subjects, spacing, models, betas):
-    """SMPL-X surface meshes as static triangle meshes, row along +X (bodies face
-    -Y). Camera in front on -Y. Returns (env, cam_pos, cam_target)."""
+def _mesh_source(mesh_npz, models, betas):
+    """Return (mesh_fn(subject)->(v,f), gender_dict, subject_list).
+
+    Prefer a prebaked npz (no SMPL-X models needed on this box) if given; else
+    compute from the models. The npz is produced on a machine that HAS the models
+    (scripts/smplx_mesh.py bakes it) and copied over -- see --mesh-npz."""
+    if mesh_npz:
+        if not os.path.isfile(mesh_npz):
+            raise SystemExit(f"FATAL: --mesh-npz {mesh_npz} not found")
+        d = np.load(mesh_npz, allow_pickle=True)
+        faces = d["_faces"].astype(np.uint32)
+        gender = dict(x.split(":") for x in d["_genders"])
+        subs = [str(s) for s in d["_subjects"]]
+
+        def fn(s):
+            if s not in d.files:
+                raise SystemExit(f"FATAL: {s} not in {mesh_npz} (have: {' '.join(subs)})")
+            return d[s].astype(np.float32), faces
+        return fn, gender, subs
+
     Shaper = _load_shaper()
     sh = Shaper(models, betas)
+    return (lambda s: sh.mesh(s)), sh.gender, sh.subjects()
+
+
+def build_meshes(gym, sim, subjects, spacing, mesh_fn, gender):
+    """SMPL-X surface meshes as static triangle meshes, row along +X (bodies face
+    -Y). Camera in front on -Y. Returns (env, cam_pos, cam_target)."""
     n = len(subjects)
     span = (n - 1) * spacing
     for i, s in enumerate(subjects):
-        v, f = sh.mesh(s)                           # Z-up, feet on ground, centred
+        v, f = mesh_fn(s)                            # Z-up, feet on ground, centred
         tm = gymapi.TriangleMeshParams()
         tm.nb_vertices = v.shape[0]
         tm.nb_triangles = f.shape[0]
@@ -122,7 +145,7 @@ def build_meshes(gym, sim, subjects, spacing, models, betas):
                               v.flatten(order="C"),
                               f.flatten(order="C").astype(np.uint32),
                               tm)
-        print(f"  {s:7s} gender={sh.gender[s]:7s} h={v[:,2].max():.3f}m", flush=True)
+        print(f"  {s:7s} gender={gender.get(s,'?'):7s} h={v[:,2].max():.3f}m", flush=True)
     # A camera still needs an env; keep it empty.
     env = gym.create_env(sim, gymapi.Vec3(-span/2-2, -4, 0),
                          gymapi.Vec3(span/2+2, 4, 3), 1)
@@ -142,6 +165,9 @@ def main():
     ap.add_argument("--models", default=os.environ.get(
         "SMPLX_MODELS", "~/Downloads/models/smplx"))
     ap.add_argument("--betas", default="scripts/omomo_betas.npz")
+    ap.add_argument("--mesh-npz", default=os.environ.get("MESH_NPZ") or None,
+                    help="prebaked meshes (from smplx_mesh bake); avoids needing "
+                         "SMPL-X models on this machine")
     ap.add_argument("--width", type=int, default=2400)
     ap.add_argument("--height", type=int, default=900)
     a = ap.parse_args()
@@ -151,10 +177,11 @@ def main():
     sim = make_sim(gym)
 
     if a.mesh:
-        Shaper = _load_shaper()
-        subs = a.subjects or Shaper(a.models, a.betas).subjects()
-        print(f"[gallery] MESH: {len(subs)} bodies: {' '.join(subs)}", flush=True)
-        env, cam_p, cam_t = build_meshes(gym, sim, subs, spacing, a.models, a.betas)
+        mesh_fn, gender, all_subs = _mesh_source(a.mesh_npz, a.models, a.betas)
+        subs = a.subjects or all_subs
+        src = a.mesh_npz if a.mesh_npz else f"models @ {a.models}"
+        print(f"[gallery] MESH ({src}): {len(subs)} bodies: {' '.join(subs)}", flush=True)
+        env, cam_p, cam_t = build_meshes(gym, sim, subs, spacing, mesh_fn, gender)
     else:
         bodies = discover_mjcf(a.subjects)
         print(f"[gallery] CAPSULE: {len(bodies)} bodies: "
