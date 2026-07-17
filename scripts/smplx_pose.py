@@ -106,12 +106,14 @@ class SMPLXPoser:
         g = gender.upper()
         if g not in self._cache:
             m = np.load(os.path.join(self.models_dir, f"SMPLX_{g}.npz"), allow_pickle=True)
+            parents = m["kintree_table"][0].astype(np.int64).copy()
+            parents[0] = -1
             self._cache[g] = dict(
                 v_template=m["v_template"].astype(np.float64),
                 shapedirs=m["shapedirs"].astype(np.float64)[:, :, :N_BETAS],
                 J_reg=m["J_regressor"].astype(np.float64),
                 weights=m["weights"].astype(np.float64),
-                faces=m["f"].astype(np.uint32))
+                parents=parents, faces=m["f"].astype(np.uint32))
         return self._cache[g]
 
     def _shape(self, subject):
@@ -143,10 +145,21 @@ class SMPLXPoser:
         """Global-transform LBS: (R[52,3,3], p[52,3]) global -> posed verts (V,3) Z-up."""
         v0, J0, M = self._shape(subject)
         G = np.tile(np.eye(4), (55, 1, 1))
-        G[:, :3, 3] = J0                                       # jaw/eyes stay at rest
+        G[:, :3, 3] = J0
         for k, jid in enumerate(self.b2s):
             G[jid, :3, :3] = R_glob[k]
             G[jid, :3, 3] = p_glob[k]
+        # jaw + eyes are NOT in the MJCF; propagate them from their (moved) parent
+        # with identity local rotation, else the face skin tears away from the
+        # head (was the main cause of a mangled render).
+        parents = M["parents"]
+        known = set(self.b2s)
+        for j in range(55):
+            if j in known:
+                continue
+            pa = parents[j]
+            G[j, :3, :3] = G[pa, :3, :3]
+            G[j, :3, 3] = G[pa, :3, 3] + G[pa, :3, :3] @ (J0[j] - J0[pa])
         Gp = G.copy()
         for j in range(55):                                    # G'_j = G_j @ inv(rest_j)
             Gp[j, :3, 3] = G[j, :3, 3] - G[j, :3, :3] @ J0[j]
@@ -191,6 +204,18 @@ def selftest():
           f"mean {np.mean(errs)*100:.2f} cm  frames {[round(e*100,1) for e in errs]}")
     print("  < ~6cm => pose transfer correct (residual = generic-MJCF vs subject-SMPL shape)")
     assert np.mean(errs) < 0.08, "pose transfer regressed"
+
+    # Surface integrity: joints can be right while the SKIN is mangled (jaw/eyes
+    # tearing off the head). Edge lengths must be preserved (LBS is near-rigid).
+    v0, _, _ = p._shape("sub2")
+    e = np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+    er = np.linalg.norm(v0[e[:, 0]] - v0[e[:, 1]], axis=1)
+    ep = np.linalg.norm(v[e[:, 0]] - v[e[:, 1]], axis=1)
+    ratio = ep / (er + 1e-9)
+    n10 = int((ratio > 10).sum())
+    print(f"[selftest] surface: edge-length ratio median {np.median(ratio):.3f}, "
+          f"max {ratio.max():.1f}, edges >10x: {n10}")
+    assert n10 == 0 and ratio.max() < 15, "SURFACE MANGLED (LBS explosion)"
     print(f"  verts={len(v)} faces={len(f)}  OK")
 
 
