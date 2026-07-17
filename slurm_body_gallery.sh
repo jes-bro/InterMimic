@@ -11,10 +11,12 @@
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=END,FAIL
 
-# Render every per-subject SMPL-X body side by side in ONE Isaac Gym env.
-#   sbatch slurm_body_gallery.sh
-#   SUBJECTS="sub4 sub10 sub13 sub16" OUT=gallery_suspects.png sbatch slurm_body_gallery.sh
-# Output PNG lands in the repo root (or wherever OUT points).
+# Render every per-subject body side by side in ONE Isaac Gym env.
+#   sbatch slurm_body_gallery.sh                                   # capsule MJCFs
+#   MESH=1 sbatch slurm_body_gallery.sh                            # SMPL-X surfaces
+#   MESH=1 SUBJECTS="sub4 sub10 sub13 sub16" OUT=g.png sbatch slurm_body_gallery.sh
+# --mesh needs the SMPL-X models: set SMPLX_MODELS=/path/to/models/smplx (must hold
+# SMPLX_MALE.npz / SMPLX_FEMALE.npz). Output PNG lands in the repo root (or OUT).
 
 source ~/.bashrc
 conda deactivate
@@ -22,6 +24,8 @@ conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
-SUBJECTS="${SUBJECTS:-}" OUT="${OUT:-body_gallery.png}" \
+SUBJECTS="${SUBJECTS:-}" \
   python3 -u scripts/render_body_gallery.py \
-    ${SUBJECTS:+--subjects $SUBJECTS} --out "${OUT:-body_gallery.png}"
+    ${MESH:+--mesh} \
+    ${SUBJECTS:+--subjects $SUBJECTS} \
+    --out "${OUT:-body_gallery.png}"

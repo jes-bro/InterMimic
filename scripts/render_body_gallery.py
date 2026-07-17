@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""Spawn every per-subject SMPL-X body in ONE Isaac Gym env, side by side, and
-render a single image. Diagnostic: proves subjectBodies actually swaps the MJCF,
-and makes the proportional differences (height/limb length/girth) visible that a
-moving replay hides.
+"""Spawn every per-subject body in ONE Isaac Gym env, side by side, render one image.
 
-All actors live in a SINGLE env, spaced along +Y, standing in rest pose (dof=0).
-Gravity is off so nothing falls -- it's a static portrait, not a sim. One wide
-camera frames the whole row and writes one PNG.
+Two modes:
+  (default) CAPSULE -- the MJCF bodies actually simulated (spheres + capsules).
+  --mesh    SURFACE -- the real shaped SMPL-X surface mesh per subject, loaded
+            into the sim as static triangle meshes.
 
-Runs on the cluster (needs Isaac Gym + a GPU + the per-subject MJCFs, which only
-exist there). From the repo root, in the intermimic-gym env:
+Diagnostic: proves subjectBodies swaps the body, and makes proportional
+differences (height/limb/girth) visible that a moving replay hides. Rest pose =>
+only SHAPE varies. Gravity off; it's a static portrait, not a sim.
 
-  python3 scripts/render_body_gallery.py
-  python3 scripts/render_body_gallery.py --subjects sub4 sub10 sub13 sub16 --out gallery_suspects.png
-  SUBJECTS="sub2 sub16" python3 scripts/render_body_gallery.py     # env-var form
+Runs on the cluster (Isaac Gym + GPU). CAPSULE mode needs the per-subject MJCFs;
+--mesh mode needs the SMPL-X models (SMPLX_MODELS or ~/Downloads/models/smplx)
+and scripts/omomo_betas.npz. From the repo root, intermimic-gym env:
+
+  python3 scripts/render_body_gallery.py                       # capsules, all subjects
+  python3 scripts/render_body_gallery.py --mesh                # SMPL-X surfaces
+  python3 scripts/render_body_gallery.py --mesh --subjects sub4 sub10 sub13 sub16 --out g.png
 """
 import argparse
 import glob
+import importlib.util
 import os
 import re
 
@@ -27,10 +31,10 @@ import numpy as np
 
 
 ASSET_DIR = "isaacgym/src/intermimic/data/assets/smplx"
-CHAR_H = 0.89          # root height for a standing SMPL-X (matches humanoid.py:340)
+CHAR_H = 0.89
 
 
-def discover(subjects):
+def discover_mjcf(subjects):
     if subjects:
         paths = [os.path.join(ASSET_DIR, f"smplx_omomo_{s}.xml") for s in subjects]
         missing = [p for p in paths if not os.path.isfile(p)]
@@ -40,95 +44,129 @@ def discover(subjects):
     paths = sorted(glob.glob(os.path.join(ASSET_DIR, "smplx_omomo_sub*.xml")),
                    key=lambda p: int(re.search(r"sub(\d+)", p).group(1)))
     if not paths:
-        raise SystemExit(f"FATAL: no smplx_omomo_sub*.xml under {ASSET_DIR}/ -- "
-                         f"these are generated on the cluster; none found here.")
+        raise SystemExit(f"FATAL: no smplx_omomo_sub*.xml under {ASSET_DIR}/")
     subs = [re.search(r"(sub\d+)", os.path.basename(p)).group(1) for p in paths]
     return list(zip(subs, paths))
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--subjects", nargs="*",
-                    default=(os.environ.get("SUBJECTS", "").split() or None))
-    ap.add_argument("--out", default=os.environ.get("OUT", "body_gallery.png"))
-    ap.add_argument("--spacing", type=float, default=0.7,
-                    help="metres between adjacent bodies along +Y")
-    ap.add_argument("--width", type=int, default=2400)
-    ap.add_argument("--height", type=int, default=900)
-    a = ap.parse_args()
+def _load_shaper():
+    """Import scripts/smplx_mesh by path (a ROS 'scripts' pkg can shadow it)."""
+    spec = importlib.util.spec_from_file_location(
+        "smplx_mesh", os.path.join(os.path.dirname(__file__), "smplx_mesh.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m.SMPLXShaper
 
-    bodies = discover(a.subjects)
-    n = len(bodies)
-    print(f"[gallery] {n} bodies: {' '.join(s for s, _ in bodies)}", flush=True)
 
-    gym = gymapi.acquire_gym()
-
-    # --- sim: Z-up, gravity OFF so the rest pose holds without falling ---
+def make_sim(gym):
     sp = gymapi.SimParams()
     sp.dt = 1.0 / 60.0
     sp.substeps = 1
     sp.up_axis = gymapi.UP_AXIS_Z
-    sp.gravity = gymapi.Vec3(0.0, 0.0, 0.0)
+    sp.gravity = gymapi.Vec3(0.0, 0.0, 0.0)     # freeze the rest pose
     sp.use_gpu_pipeline = False
     sp.physx.solver_type = 1
     sp.physx.num_position_iterations = 4
     sp.physx.num_velocity_iterations = 0
     sp.physx.num_threads = 4
     sp.physx.use_gpu = True
-
     sim = gym.create_sim(0, 0, gymapi.SIM_PHYSX, sp)
     if sim is None:
-        raise SystemExit("FATAL: create_sim failed (no GPU / no graphics device?)")
-
+        raise SystemExit("FATAL: create_sim failed (no GPU / graphics device?)")
     plane = gymapi.PlaneParams()
     plane.normal = gymapi.Vec3(0.0, 0.0, 1.0)
     gym.add_ground(sim, plane)
+    return sim
 
-    # --- load every MJCF (same options as humanoid.py so bodies match the sim) ---
+
+def build_capsules(gym, sim, bodies, spacing):
+    """MJCF actors in one env, row along +Y; camera down +X. Returns (env, cam_pos)."""
     ao = gymapi.AssetOptions()
     ao.angular_damping = 0.01
     ao.max_angular_velocity = 100.0
     ao.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-    assets = []
-    for s, p in bodies:
+    n = len(bodies)
+    span = (n - 1) * spacing
+    env = gym.create_env(sim, gymapi.Vec3(-2, -span/2-2, 0),
+                         gymapi.Vec3(2, span/2+2, 3), 1)
+    for i, (s, p) in enumerate(bodies):
         asset = gym.load_asset(sim, os.path.dirname(p), os.path.basename(p), ao)
         if asset is None:
             raise SystemExit(f"FATAL: failed to load {p}")
-        assets.append(asset)
-
-    # --- ONE env; all bodies spawned in a row along +Y, centred on 0 ---
-    span = (n - 1) * a.spacing
-    lower = gymapi.Vec3(-2.0, -span / 2 - 2.0, 0.0)
-    upper = gymapi.Vec3(2.0, span / 2 + 2.0, 3.0)
-    env = gym.create_env(sim, lower, upper, 1)
-
-    up_idx = 2  # Z
-    for i, ((s, _), asset) in enumerate(zip(bodies, assets)):
         pose = gymapi.Transform()
-        y = -span / 2 + i * a.spacing
-        base = get_axis_params(CHAR_H, up_idx)          # (x, y, z) with z=CHAR_H
-        pose.p = gymapi.Vec3(base[0], base[1] + y, base[2])
-        pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
+        base = get_axis_params(CHAR_H, 2)
+        pose.p = gymapi.Vec3(base[0], base[1] - span/2 + i*spacing, base[2])
+        pose.r = gymapi.Quat(0, 0, 0, 1)
         h = gym.create_actor(env, asset, pose, s, 0, 1, 0)
-        # tint every other body so adjacent ones are easy to tell apart
         col = (gymapi.Vec3(0.80, 0.55, 0.32) if i % 2 == 0
                else gymapi.Vec3(0.36, 0.56, 0.78))
         for j in range(gym.get_actor_rigid_body_count(env, h)):
             gym.set_rigid_body_color(env, h, j, gymapi.MESH_VISUAL, col)
+    return env, gymapi.Vec3(max(4.0, span*0.65), 0.0, 1.2), gymapi.Vec3(0.0, 0.0, 0.9)
 
-    # --- wide camera looking down the row from +X ---
+
+def build_meshes(gym, sim, subjects, spacing, models, betas):
+    """SMPL-X surface meshes as static triangle meshes, row along +X (bodies face
+    -Y). Camera in front on -Y. Returns (env, cam_pos, cam_target)."""
+    Shaper = _load_shaper()
+    sh = Shaper(models, betas)
+    n = len(subjects)
+    span = (n - 1) * spacing
+    for i, s in enumerate(subjects):
+        v, f = sh.mesh(s)                           # Z-up, feet on ground, centred
+        tm = gymapi.TriangleMeshParams()
+        tm.nb_vertices = v.shape[0]
+        tm.nb_triangles = f.shape[0]
+        tm.transform.p = gymapi.Vec3(-span/2 + i*spacing, 0.0, 0.0)  # spread on X
+        gym.add_triangle_mesh(sim,
+                              v.flatten(order="C"),
+                              f.flatten(order="C").astype(np.uint32),
+                              tm)
+        print(f"  {s:7s} gender={sh.gender[s]:7s} h={v[:,2].max():.3f}m", flush=True)
+    # A camera still needs an env; keep it empty.
+    env = gym.create_env(sim, gymapi.Vec3(-span/2-2, -4, 0),
+                         gymapi.Vec3(span/2+2, 4, 3), 1)
+    dist = max(3.5, span * 0.75)
+    return env, gymapi.Vec3(0.0, -dist, 1.15), gymapi.Vec3(0.0, 0.0, 0.95)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--subjects", nargs="*",
+                    default=(os.environ.get("SUBJECTS", "").split() or None))
+    ap.add_argument("--mesh", action="store_true",
+                    help="render SMPL-X SURFACE meshes instead of the capsule MJCFs")
+    ap.add_argument("--out", default=os.environ.get("OUT", "body_gallery.png"))
+    ap.add_argument("--spacing", type=float, default=None,
+                    help="metres between bodies (default: 0.7 capsule, 1.1 mesh)")
+    ap.add_argument("--models", default=os.environ.get(
+        "SMPLX_MODELS", "~/Downloads/models/smplx"))
+    ap.add_argument("--betas", default="scripts/omomo_betas.npz")
+    ap.add_argument("--width", type=int, default=2400)
+    ap.add_argument("--height", type=int, default=900)
+    a = ap.parse_args()
+
+    spacing = a.spacing if a.spacing is not None else (1.1 if a.mesh else 0.7)
+    gym = gymapi.acquire_gym()
+    sim = make_sim(gym)
+
+    if a.mesh:
+        Shaper = _load_shaper()
+        subs = a.subjects or Shaper(a.models, a.betas).subjects()
+        print(f"[gallery] MESH: {len(subs)} bodies: {' '.join(subs)}", flush=True)
+        env, cam_p, cam_t = build_meshes(gym, sim, subs, spacing, a.models, a.betas)
+    else:
+        bodies = discover_mjcf(a.subjects)
+        print(f"[gallery] CAPSULE: {len(bodies)} bodies: "
+              f"{' '.join(s for s, _ in bodies)}", flush=True)
+        env, cam_p, cam_t = build_capsules(gym, sim, bodies, spacing)
+
     cp = gymapi.CameraProperties()
     cp.width, cp.height = a.width, a.height
     cam = gym.create_camera_sensor(env, cp)
-    # Far enough back on X to see the whole span; centred on the row.
-    dist = max(4.0, span * 0.65)
-    gym.set_camera_location(cam, env,
-                            gymapi.Vec3(dist, 0.0, 1.2),
-                            gymapi.Vec3(0.0, 0.0, 0.9))
+    gym.set_camera_location(cam, env, cam_p, cam_t)
 
     gym.prepare_sim(sim)
-    # No gravity + no actions => one step just settles the render transforms;
-    # the bodies do not move from their rest pose.
     gym.simulate(sim)
     gym.fetch_results(sim, True)
     gym.step_graphics(sim)
@@ -140,8 +178,7 @@ def main():
     import imageio
     out = os.path.abspath(a.out)
     imageio.imwrite(out, img)
-    print(f"[gallery] wrote {out}  ({n} bodies, +Y spacing {a.spacing} m)", flush=True)
-
+    print(f"[gallery] wrote {out}", flush=True)
     gym.destroy_sim(sim)
 
 
