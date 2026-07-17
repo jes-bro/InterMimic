@@ -1832,33 +1832,41 @@ class InterMimic(Humanoid_SMPLX):
     def _compute_hold_reward(self, key_pos, obj_points):
         """Term 2: relaxed contact / 'hold' factor (opt-in objectAug companion).
 
-        Ported from objectaug-experiment. LAYERED (not a replacement for rcg/ro/rig):
-        encourages keeping the object held without the source clip's EXACT contact
-        pattern -- useful when objectAug perturbs the object so the exact pattern is
-        unreachable. Two soft sub-factors in (0,1]:
-          r_prox   : hands (wrist key bodies) near the (scaled, posed) object surface.
-          r_contact: the hands the SOURCE used for contact are in contact now
-                     (promotion-only, kept in [0.5,1] so it shapes, not starves).
+        Ported from objectaug-experiment, then gated on the REFERENCE grip. The
+        'keep a grip' pressure is applied to a hand ONLY on frames where the source
+        clip has that hand in contact with the object. When the reference isn't
+        holding with a hand -- object in free-flight, at rest on a surface, or the
+        hand simply idle -- that hand's factor is a neutral 1. Otherwise the
+        proximity term would wrongly drag the wrists onto the object during the very
+        frames the source released it (the release/no-contact frames matter for
+        manipulation quality). This is NOT a replacement for rcg/ro/rig; it layers.
+
+        Per hand, when the reference holds with it, two soft sub-factors in (0,1]:
+          proximity : wrist near the (scaled, posed) object surface, exp(-lambda*d).
+          contact   : that hand is in contact now, floored to [0.5,1] so it shapes
+                      rather than starves.
         Weight = rewardTerms.hold.lambda.
         """
         if not hasattr(self, '_hand_key_ids'):
+            # order preserved -> [L_Wrist, R_Wrist], aligned with the (left, right)
+            # hand-link id groups in the loop below.
             self._hand_key_ids = [i for i, n in enumerate(self.key_bodies)
                                   if n in ('L_Wrist', 'R_Wrist')]
-        hand_pos = key_pos[:, self._hand_key_ids, :]                 # (E, H, 3)
-        min_d = torch.cdist(hand_pos, obj_points).min(dim=-1)[0]     # (E, H)
-        r_prox = torch.exp(-self._hold_lambda * min_d.mean(dim=-1))
+        hand_pos = key_pos[:, self._hand_key_ids, :]                 # (E, 2, 3)
+        min_d = torch.cdist(hand_pos, obj_points).min(dim=-1)[0]     # (E, 2) per wrist
+        r_prox = torch.exp(-self._hold_lambda * min_d)               # (E, 2) per wrist
 
         contact_thres = 0.1
         ref_contact = self.extract_data_component('contact_human', obs=self._curr_ref_obs)
         live_contact = self.extract_data_component('contact_human', obs=self._curr_obs)
-        sides = []
-        for ids in (list(range(17, 33)), list(range(36, 52))):      # left, right hand links
-            ref_any = (ref_contact[:, ids] > contact_thres).any(dim=-1).float()
+        factors = []
+        for h, ids in enumerate((list(range(17, 33)), list(range(36, 52)))):  # left, right hand links
+            ref_any = (ref_contact[:, ids] > contact_thres).any(dim=-1).float()   # ref holds w/ this hand
             live_any = (live_contact[:, ids] > contact_thres).any(dim=-1).float()
-            sides.append(ref_any * live_any + (1.0 - ref_any))      # source-used-it -> reward contact; else 1
-        mean_side = torch.stack(sides, dim=-1).mean(dim=-1)         # [0,1]
-        r_contact = 0.5 + 0.5 * mean_side                          # [0.5,1]
-        return r_prox * r_contact
+            shaped = r_prox[:, h] * (0.5 + 0.5 * live_any)          # grip shaping in (0,1]
+            # only shape when the reference holds with this hand; else neutral 1.
+            factors.append(ref_any * shaped + (1.0 - ref_any))
+        return torch.stack(factors, dim=-1).mean(dim=-1)           # (E,) in (0,1]
 
     def compute_humanoid_reward(self, w):
         # body pos reward
