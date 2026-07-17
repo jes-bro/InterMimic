@@ -106,6 +106,37 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
             print(f"[player] recording video to {_record_path} (cap {_max_video_frames} frames, "
                   f"env[{_record_env_idx}] cam pos {_cam_pos} -> {_cam_target})")
 
+        # --- DUMP_TRAJ: record the humanoid's per-frame GLOBAL body state so the
+        # SMPL-X SURFACE can be posed offline to reproduce exactly what the policy
+        # did in sim (scripts/smplx_pose.py pose_from_bodies + a renderer). Saves
+        # body_rot/body_pos (52 bodies) + object pose to an npz, then exits. Env0.
+        _dump_path = os.environ.get("DUMP_TRAJ")
+        _dump_max = int(os.environ.get("DUMP_FRAMES", os.environ.get("MAX_VIDEO_FRAMES", "1000")))
+        _traj = {"body_rot": [], "body_pos": [], "obj_pos": [], "obj_rot": []} if _dump_path else None
+        if _traj is not None:
+            _t = self.env.task
+            _sb = getattr(_t, "subject_bodies", None)
+            _traj_subject = (_sb[int(_t._env_subject_idx[0])] if _sb else str(getattr(_t, "robot_type", "unknown")))
+            print(f"[player] DUMP_TRAJ -> {_dump_path} (subject={_traj_subject}, cap {_dump_max} frames)", flush=True)
+
+        def _dump_step():
+            t = self.env.task
+            _traj["body_rot"].append(t._rigid_body_rot[0].detach().cpu().numpy().copy())
+            _traj["body_pos"].append(t._rigid_body_pos[0].detach().cpu().numpy().copy())
+            _traj["obj_pos"].append(t._target_states[0, 0:3].detach().cpu().numpy().copy())
+            _traj["obj_rot"].append(t._target_states[0, 3:7].detach().cpu().numpy().copy())
+
+        def _dump_save():
+            import numpy as _np
+            _np.savez_compressed(
+                _dump_path,
+                body_rot=_np.asarray(_traj["body_rot"], dtype=_np.float32),
+                body_pos=_np.asarray(_traj["body_pos"], dtype=_np.float32),
+                obj_pos=_np.asarray(_traj["obj_pos"], dtype=_np.float32),
+                obj_rot=_np.asarray(_traj["obj_rot"], dtype=_np.float32),
+                subject=_traj_subject)
+            print(f"[player] DUMP_TRAJ wrote {len(_traj['body_rot'])} frames -> {_dump_path}", flush=True)
+
         op_agent = getattr(self.env, "create_agent", None)
         if op_agent:
             agent_inited = True
@@ -190,6 +221,13 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                     steps += 1
 
                     self._post_step(info)
+
+                    if _traj is not None:
+                        _dump_step()
+                        if len(_traj["body_rot"]) >= _dump_max:
+                            _dump_save()
+                            import sys
+                            sys.exit(0)
 
                     if _writer is not None:
                         task = self.env.task
