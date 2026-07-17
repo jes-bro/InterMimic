@@ -143,10 +143,16 @@ class InterMimic(Humanoid_SMPLX):
         # the no-perturbation default and quietly run stock objects -> validate loudly.
         oa = env_cfg.get('objectAug') or {}
         bado = sorted(k for k in oa if k not in
-                      ('enable', 'scaleMin', 'scaleMax', 'yawRad', 'translateM', 'massExp'))
+                      ('enable', 'scaleMin', 'scaleMax', 'yawRad', 'translateM', 'massExp', 'geom'))
         if bado:
             raise ValueError(f"[intermimic] unknown objectAug key(s) {bado} (only 'enable', "
-                             f"'scaleMin', 'scaleMax', 'yawRad', 'translateM', 'massExp').")
+                             f"'scaleMin', 'scaleMax', 'yawRad', 'translateM', 'massExp', 'geom').")
+        # objectAug.geom (anisotropic geometry variants) sub-keys.
+        bg = sorted(k for k in (oa.get('geom') or {}) if k not in
+                    ('enable', 'numVariants', 'anisoMin', 'anisoMax'))
+        if bg:
+            raise ValueError(f"[intermimic] unknown objectAug.geom key(s) {bg} (only 'enable', "
+                             f"'numVariants', 'anisoMin', 'anisoMax').")
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self._validate_env_config(cfg["env"])
@@ -349,6 +355,47 @@ class InterMimic(Humanoid_SMPLX):
         else:
             self._oa_yaw = 0.0; self._oa_translate = 0.0; self._oa_mass_exp = 3.0
             self._oa_scale = torch.ones(_ne, device=self._init_device)
+
+        # --- GEOMETRY augmentation (anisotropic): per-env non-uniform object
+        # proportions for shape robustness. Isaac Gym's set_actor_scale is uniform-
+        # only and collision geometry is baked at prepare_sim, so distinct shapes
+        # need distinct ASSETS: each object category gets `numVariants` pre-baked
+        # variant URDFs with a per-axis scale (built in _load_target_asset), and each
+        # env is pinned to one (object, variant). Composes with the uniform objectAug
+        # scale above. Requires objectAug on. OFF => 1 variant, aniso=1 => identical
+        # to the objectAug-only path. The stock object-match terms don't survive a
+        # geometry change, so pair this with objectTermsEnable:false + rewardTerms.hold.
+        _geom = (oa.get('geom', {}) or {}) if self._object_aug else {}
+        self._geom_aug = bool(_geom.get('enable', False))
+        _nobj = len(self.object_name)
+        if self._geom_aug:
+            self._geom_nvar = max(1, int(_geom.get('numVariants', 8)))
+            _amin = float(_geom.get('anisoMin', 0.80)); _amax = float(_geom.get('anisoMax', 1.20))
+            _gg = torch.Generator().manual_seed(6789)   # fixed seed: reproducible variants
+            # per (object, variant) anisotropic scale triple (sx,sy,sz). Variant 0 is
+            # the UNPERTURBED shape (all ones) so each object's true geometry stays in
+            # the mix and the policy always sees some nominal shapes.
+            self._geom_aniso = (torch.rand(_nobj, self._geom_nvar, 3, generator=_gg)
+                                * (_amax - _amin) + _amin)
+            if self._geom_nvar >= 1:
+                self._geom_aniso[:, 0, :] = 1.0
+            # per-env variant index (seeded), then per-env aniso = aniso[obj, variant].
+            self._env_variant = torch.randint(0, self._geom_nvar, (_ne,), generator=_gg)
+            _objidx = torch.arange(_ne) % _nobj
+            self._geom_aniso_per_env = self._geom_aniso[_objidx, self._env_variant].to(self._init_device)
+            print(f"[objectAug.geom] ON: {self._geom_nvar} variants/object, aniso "
+                  f"U({_amin},{_amax}) per axis, {_nobj} objects => "
+                  f"{_nobj * self._geom_nvar} assets to bake", flush=True)
+        else:
+            self._geom_nvar = 1
+            self._env_variant = torch.zeros(_ne, dtype=torch.long)
+            self._geom_aniso_per_env = torch.ones(_ne, 3, device=self._init_device)
+        # Combined per-env object-point scale = uniform objectAug scale * anisotropic
+        # geom. Applied wherever the surface point cloud is transformed (policy obs +
+        # hold reward + obj reward). When both off it's all-ones (a no-op).
+        self._obj_pts_scale = (self._oa_scale.view(-1, 1, 1)
+                               * self._geom_aniso_per_env.view(-1, 1, 3)).to(self._init_device)
+
         # Reward-term toggles. hold ported from objectaug-experiment; pose already exists.
         _rt = cfg['env'].get('rewardTerms', {}) or {}
         _hold = _rt.get('hold', {}) or {}
@@ -877,6 +924,25 @@ class InterMimic(Humanoid_SMPLX):
         self._build_target(env_id, env_ptr)
         return   
 
+    def _write_geom_variant_urdf(self, asset_root, object_name, k, scale_xyz):
+        """Write a geometry-variant URDF for object k with an anisotropic mesh scale.
+
+        The base URDFs all carry `scale="1.0 1.0 1.0"` on their visual + collision
+        <mesh> elements; we clone the URDF verbatim and swap that for the per-axis
+        triple, pointing at the SAME .obj (so the big mesh is never duplicated and the
+        relative mesh path still resolves against asset_root). VHACD re-decomposes the
+        scaled shape at load. Returns the variant URDF's path relative to asset_root.
+        """
+        sx, sy, sz = scale_xyz
+        with open(os.path.join(asset_root, object_name + ".urdf")) as f:
+            txt = f.read()
+        new = txt.replace('scale="1.0 1.0 1.0"', f'scale="{sx:.6f} {sy:.6f} {sz:.6f}"')
+        # deterministic name; regenerated each run, so gitignored (assets/objects/.gitignore).
+        rel = f"{object_name}.geomv{k}.urdf"
+        with open(os.path.join(asset_root, rel), 'w') as f:
+            f.write(new)
+        return rel
+
     def _load_target_asset(self): # smplx
         asset_root = resolve_data_path("assets", "objects")
         self._target_asset = []
@@ -888,7 +954,7 @@ class InterMimic(Humanoid_SMPLX):
             obj_file = resolve_data_path("assets", "objects", "objects", object_name, object_name + ".obj")
             max_convex_hulls = 64
             density = self.object_density
-        
+
             asset_options = gymapi.AssetOptions()
             asset_options.angular_damping = 0.01
             asset_options.linear_damping = 0.01
@@ -901,7 +967,21 @@ class InterMimic(Humanoid_SMPLX):
             asset_options.vhacd_params.resolution = 300000
 
 
-            self._target_asset.append(self.gym.load_asset(self.sim, str(asset_root), asset_file, asset_options))
+            if self._geom_aug:
+                # bake one asset per geometry variant (anisotropic-scaled URDF, same
+                # .obj). Nested: self._target_asset[obj] = [v0_asset, v1_asset, ...].
+                variant_assets = []
+                for k in range(self._geom_nvar):
+                    sx, sy, sz = self._geom_aniso[i, k].tolist()
+                    rel = self._write_geom_variant_urdf(str(asset_root), object_name, k, (sx, sy, sz))
+                    variant_assets.append(self.gym.load_asset(self.sim, str(asset_root), rel, asset_options))
+                self._target_asset.append(variant_assets)
+                if self._oa_debug:
+                    print(f"[geomchk] {object_name}: baked {self._geom_nvar} variant assets "
+                          f"(v0=identity, aniso e.g. {self._geom_aniso[i, min(1, self._geom_nvar-1)].tolist()})",
+                          flush=True)
+            else:
+                self._target_asset.append(self.gym.load_asset(self.sim, str(asset_root), asset_file, asset_options))
 
             mesh_obj = trimesh.load(str(obj_file), force='mesh')
             obj_verts = mesh_obj.vertices
@@ -924,8 +1004,14 @@ class InterMimic(Humanoid_SMPLX):
         segmentation_id = 0
 
         default_pose = gymapi.Transform()
-        
-        target_handle = self.gym.create_actor(env_ptr, self._target_asset[env_id % len(self.object_name)], default_pose, self.object_name[env_id % len(self.object_name)], col_group, col_filter, segmentation_id)
+
+        obj_idx = env_id % len(self.object_name)
+        if self._geom_aug:
+            # this env's pre-baked geometry variant (anisotropic-scaled asset).
+            obj_asset = self._target_asset[obj_idx][int(self._env_variant[env_id])]
+        else:
+            obj_asset = self._target_asset[obj_idx]
+        target_handle = self.gym.create_actor(env_ptr, obj_asset, default_pose, self.object_name[obj_idx], col_group, col_filter, segmentation_id)
 
         props = self.gym.get_actor_rigid_shape_properties(env_ptr, target_handle)
         for p_idx in range(len(props)):
@@ -942,25 +1028,34 @@ class InterMimic(Humanoid_SMPLX):
         self._target_handles.append(target_handle)
         aug = float(self._oa_scale[env_id])                      # 1.0 when objectAug off
         self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size * aug)
-        # set_actor_scale grows mass by aug**3 (solid assumption). Correct it so mass
-        # tracks scale**massExp (2=shell, 3=solid): multiply mass/inertia by
-        # aug**(massExp-3). massExp=3 => factor 1 (no correction).
-        if self._object_aug and aug != 1.0 and self._oa_mass_exp != 3.0:
-            corr = aug ** (self._oa_mass_exp - 3.0)
-            props = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
-            for bp in props:
-                bp.mass *= corr
-                bp.inertia.x.x *= corr; bp.inertia.x.y *= corr; bp.inertia.x.z *= corr
-                bp.inertia.y.x *= corr; bp.inertia.y.y *= corr; bp.inertia.y.z *= corr
-                bp.inertia.z.x *= corr; bp.inertia.z.y *= corr; bp.inertia.z.z *= corr
-            self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
-                                                     recomputeInertia=False)
+        # Mass tracking (uniform scale AND anisotropic geometry variant, unified). The
+        # variant URDF already scales collision volume by sx*sy*sz (mass grows by that
+        # at fixed density) and set_actor_scale adds a uniform aug**3. So the raw mass
+        # factor vs the base solid object is V = (sx*sy*sz)*aug**3. We want mass ~
+        # V**(massExp/3) (massExp=3 solid => leave as-is; 2 => shell-ish, mass ~ area),
+        # so multiply mass+inertia by V**(massExp/3 - 1). Reduces to the old uniform
+        # formula aug**(massExp-3) when the geom aniso is (1,1,1).
+        if self._object_aug:
+            ax, ay, az = self._geom_aniso_per_env[env_id].tolist()   # (1,1,1) when geom off
+            V = (ax * ay * az) * (aug ** 3)
+            corr = V ** (self._oa_mass_exp / 3.0 - 1.0)
+            if abs(corr - 1.0) > 1e-9:
+                props = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+                for bp in props:
+                    bp.mass *= corr
+                    bp.inertia.x.x *= corr; bp.inertia.x.y *= corr; bp.inertia.x.z *= corr
+                    bp.inertia.y.x *= corr; bp.inertia.y.y *= corr; bp.inertia.y.z *= corr
+                    bp.inertia.z.x *= corr; bp.inertia.z.y *= corr; bp.inertia.z.z *= corr
+                self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
+                                                         recomputeInertia=False)
 
         if self._oa_debug and env_id < 8:
             dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            ax, ay, az = self._geom_aniso_per_env[env_id].tolist()
             print(f"[masschk] env{env_id} obj={self.object_name[env_id % len(self.object_name)]} "
-                  f"aug={aug:.3f} total_mass={sum(p.mass for p in dbg):.4f} "
-                  f"(expect mass ~ nominal * aug^{self._oa_mass_exp:.1f})", flush=True)
+                  f"aug={aug:.3f} aniso=({ax:.2f},{ay:.2f},{az:.2f}) "
+                  f"total_mass={sum(p.mass for p in dbg):.4f} "
+                  f"(expect ~ nominal * ((sx*sy*sz)*aug^3)^{self._oa_mass_exp / 3.0:.2f})", flush=True)
 
         return
 
@@ -1432,7 +1527,7 @@ class InterMimic(Humanoid_SMPLX):
                                                         self._dof_obs_size, self._target_states,
                                                         self._tar_contact_forces,
                                                         self._contact_forces,
-                                                        self.object_points[self.object_id[self.data_id]] * self._oa_scale.view(-1, 1, 1),
+                                                        self.object_points[self.object_id[self.data_id]] * self._obj_pts_scale,
                                                         self._rigid_body_rot,
                                                         self._rigid_body_vel,
                                                         self._rigid_body_ang_vel
@@ -1940,7 +2035,7 @@ class InterMimic(Humanoid_SMPLX):
 
         local_obj_rot = quat_mul(heading_rot, obj_rot)
 
-        object_points = self.object_points[self.object_id[self.data_id]] * self._oa_scale.view(-1, 1, 1)
+        object_points = self.object_points[self.object_id[self.data_id]] * self._obj_pts_scale
         obj_rot_extend = obj_rot.unsqueeze(1).repeat(1, object_points.shape[1], 1).view(-1, 4)
         object_points_extend = object_points.view(-1, 3)
         obj_points = torch_utils.quat_rotate(obj_rot_extend, object_points_extend).view(obj_rot.shape[0], object_points.shape[1], 3) + obj_pos.unsqueeze(1)

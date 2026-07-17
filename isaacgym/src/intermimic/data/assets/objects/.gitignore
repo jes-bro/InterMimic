@@ -1,0 +1,2 @@
+# runtime-generated anisotropic geometry-variant URDFs (regenerated each run)
+*.geomv*.urdf

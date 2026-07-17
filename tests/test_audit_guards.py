@@ -56,9 +56,13 @@ def validate_env_config(env_cfg):
             raise ValueError(f"unknown rewardTerms.{term} key(s) {badp}")
     oa = env_cfg.get("objectAug") or {}
     bado = sorted(k for k in oa if k not in
-                  ("enable", "scaleMin", "scaleMax", "yawRad", "translateM", "massExp"))
+                  ("enable", "scaleMin", "scaleMax", "yawRad", "translateM", "massExp", "geom"))
     if bado:
         raise ValueError(f"unknown objectAug key(s) {bado}")
+    bg = sorted(k for k in (oa.get("geom") or {}) if k not in
+                ("enable", "numVariants", "anisoMin", "anisoMax"))
+    if bg:
+        raise ValueError(f"unknown objectAug.geom key(s) {bg}")
 
 
 def body_feature_guard(env_cfg, has_subject_bodies):
@@ -189,6 +193,9 @@ def main():
     check("objectAug.scaleMn typo raises",
           lambda: expect_raise(lambda: validate_env_config(
               {"objectAug": {"scaleMn": 0.9}})))
+    check("objectAug.geom.nVariants typo raises",
+          lambda: expect_raise(lambda: validate_env_config(
+              {"objectAug": {"geom": {"nVariants": 8}}})))
     check("body-feature w/o subjectBodies raises",
           lambda: expect_raise(lambda: body_feature_guard({"betas_file": "x"}, False)))
     check("empty dataset raises",
