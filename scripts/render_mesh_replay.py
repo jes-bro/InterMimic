@@ -36,24 +36,30 @@ def _poser(models, betas):
     return m.SMPLXPoser(models_dir=models, betas_path=betas)
 
 
-def frames_from_dump(P, path):
+def _ik_frames(P, subject, target_joints, obj_pos, warm):
+    """Retarget: fit a native SMPL-X pose to the target joints per frame, then
+    forward the clean surface. Fixes the arm twist that MJCF-frame skinning has."""
+    print(f"[mesh-replay] IK retargeting {len(target_joints)} frames "
+          f"(subject={subject})...", flush=True)
+    poses, trans = P.fit_sequence(subject, target_joints, iters_warm=warm, verbose=False)
+    for t in range(len(target_joints)):
+        v, f = P.verts_from_pose(subject, poses[t], trans[t])
+        yield v, f, obj_pos[t]
+
+
+def frames_from_dump(P, path, warm, stride):
     d = np.load(path, allow_pickle=True)
     subject = str(d["subject"])
     if subject not in P.betas.files:
         raise SystemExit(f"FATAL: dump subject {subject!r} has no betas entry")
-    n = len(d["body_rot"])
-    obj = d["obj_pos"]
-    for t in range(n):
-        v, f = P.pose_from_bodies(subject, d["body_rot"][t], d["body_pos"][t])
-        yield v, f, obj[t]
+    return _ik_frames(P, subject, d["body_pos"][::stride], d["obj_pos"][::stride], warm)
 
 
-def frames_from_clip(P, path, subject):
+def frames_from_clip(P, path, subject, warm, stride):
     import torch
     x = torch.load(path, map_location="cpu", weights_only=False).detach().numpy()
-    for t in range(len(x)):
-        v, f = P.pose_from_dof(subject, x[t, 9:162], x[t, 0:3], x[t, 3:7])
-        yield v, f, x[t, 318:321]                    # obj_pos in the raw layout
+    tgt = x[::stride, 162:318].reshape(-1, 52, 3)
+    return _ik_frames(P, subject, tgt, x[::stride, 318:321], warm)
 
 
 def shade(v, f, light=np.array([0.3, -0.6, 0.8])):
@@ -76,6 +82,8 @@ def main():
     ap.add_argument("--models", default=None)
     ap.add_argument("--betas", default="scripts/omomo_betas.npz")
     ap.add_argument("--stride", type=int, default=1, help="render every Nth frame")
+    ap.add_argument("--ik-iters", type=int, default=100,
+                    help="IK warm-start iterations per frame (higher = tighter fit)")
     ap.add_argument("--elev", type=float, default=12.0)
     ap.add_argument("--azim", type=float, default=55.0)
     a = ap.parse_args()
@@ -86,12 +94,11 @@ def main():
         raise SystemExit("FATAL: --clip needs --subject (which body to shape)")
 
     P = _poser(a.models, a.betas)
-    gen = (frames_from_dump(P, a.dump) if a.dump
-           else frames_from_clip(P, a.clip, a.subject))
+    gen = (frames_from_dump(P, a.dump, a.ik_iters, a.stride) if a.dump
+           else frames_from_clip(P, a.clip, a.subject, a.ik_iters, a.stride))
 
-    # Prepass: collect frames (subsampled) + a stable bounding box so the camera
-    # doesn't jitter frame to frame.
-    frames = [fr for i, fr in enumerate(gen) if i % a.stride == 0]
+    # Stride is applied BEFORE the IK fit (in the generators), so don't re-subsample.
+    frames = list(gen)
     if not frames:
         raise SystemExit("FATAL: no frames produced")
     allv = np.concatenate([v for v, _, _ in frames], 0)

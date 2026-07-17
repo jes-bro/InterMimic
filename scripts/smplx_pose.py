@@ -111,6 +111,7 @@ class SMPLXPoser:
             self._cache[g] = dict(
                 v_template=m["v_template"].astype(np.float64),
                 shapedirs=m["shapedirs"].astype(np.float64)[:, :, :N_BETAS],
+                posedirs=m["posedirs"].astype(np.float64),
                 J_reg=m["J_regressor"].astype(np.float64),
                 weights=m["weights"].astype(np.float64),
                 parents=parents, faces=m["f"].astype(np.uint32))
@@ -179,6 +180,110 @@ class SMPLXPoser:
         return self.skin(subject, R, np.asarray(body_pos)), \
             self._model(self.gender[subject])["faces"]
 
+    # ---- IK RETARGET: fit a NATIVE SMPL-X pose to target joints -----------
+    # The MJCF and SMPL-X rest poses differ ~90deg at the arms (arms-down vs
+    # T-pose), so driving SMPL-X with MJCF-frame rotations twists the surface.
+    # Instead, fit SMPL-X's own pose params to the target joint POSITIONS
+    # (body_pos, available in every clip and every DUMP_TRAJ). The result is a
+    # native SMPL pose -> clean surface AND correct pose. This is the retarget.
+
+    def _torch_model(self, gender):
+        import torch
+        key = ("torch", gender.upper())
+        if key not in self._cache:
+            M = self._model(gender)
+            self._cache[key] = dict(
+                v_template=torch.tensor(M["v_template"]),
+                shapedirs=torch.tensor(M["shapedirs"]),
+                J_reg=torch.tensor(M["J_reg"]),
+                parents=torch.tensor(M["parents"]),
+                Q=torch.tensor(Q_ZUP))
+        return self._cache[key]
+
+    @staticmethod
+    def _rodrigues(aa):
+        import torch
+        th = aa.norm(dim=1, keepdim=True).clamp(min=1e-8)
+        x, y, z = (aa / th).unbind(1)
+        c, s = torch.cos(th)[:, 0], torch.sin(th)[:, 0]
+        C = 1 - c
+        return torch.stack([
+            torch.stack([c+x*x*C, x*y*C-z*s, x*z*C+y*s], 1),
+            torch.stack([y*x*C+z*s, c+y*y*C, y*z*C-x*s], 1),
+            torch.stack([z*x*C-y*s, z*y*C+x*s, c+z*z*C], 1)], 1)
+
+    def _fk_joints_torch(self, subject, pose_aa, trans):
+        import torch
+        tm = self._torch_model(self.gender[subject])
+        beta = torch.tensor(self.betas[subject].astype(np.float64)[:N_BETAS])
+        J0 = tm["J_reg"] @ (tm["v_template"] + tm["shapedirs"] @ beta)   # (55,3) Y-up
+        R = self._rodrigues(pose_aa)
+        parents = tm["parents"]
+        G = [None] * 55
+        g0 = torch.eye(4, dtype=torch.float64); g0[:3, :3] = R[0]; g0[:3, 3] = J0[0]
+        G[0] = g0
+        for j in range(1, 55):
+            T = torch.eye(4, dtype=torch.float64)
+            T[:3, :3] = R[j]; T[:3, 3] = J0[j] - J0[parents[j]]
+            G[j] = G[parents[j]] @ T
+        Jp = torch.stack([g[:3, 3] for g in G])                         # Y-up
+        return (tm["Q"] @ Jp.T).T + trans                              # Z-up + trans
+
+    def fit_sequence(self, subject, target_joints, iters_first=150, iters_warm=80,
+                     lr=0.05, smooth=0.02, verbose=False):
+        """Fit native SMPL-X pose to target joint positions per frame.
+
+        target_joints: (T,52,3) Z-up (clip body_pos or DUMP_TRAJ body_pos), ordered
+        like the MJCF body order. Warm-starts each frame from the previous for speed;
+        `smooth` regularizes toward it so the fit can't drift into an awkward pose
+        that matches the joints but mangles the surface. Returns (pose_aa[T,55,3],
+        trans[T,3])."""
+        import torch
+        b2s = torch.tensor(self.b2s)
+        T = len(target_joints)
+        poses = np.zeros((T, 55, 3)); transl = np.zeros((T, 3))
+        prev = torch.zeros(55, 3, dtype=torch.float64)
+        for t in range(T):
+            tgt = torch.tensor(np.asarray(target_joints[t], dtype=np.float64))
+            pose = prev.clone().requires_grad_(True)
+            trans = torch.tensor(tgt.mean(0).detach().numpy(), requires_grad=True)
+            opt = torch.optim.Adam([pose, trans], lr=lr)
+            n = iters_first if t == 0 else iters_warm
+            for _ in range(n):
+                opt.zero_grad()
+                J = self._fk_joints_torch(subject, pose, trans)[b2s]
+                loss = ((J - tgt) ** 2).sum(1).mean()
+                if t > 0:                              # stay near the previous frame
+                    loss = loss + smooth * ((pose - prev) ** 2).sum()
+                loss.backward(); opt.step()
+            poses[t] = pose.detach().numpy(); transl[t] = trans.detach().numpy()
+            prev = pose.detach()
+            if verbose:
+                print(f"  frame {t+1}/{T}: RMSE {float(loss)**0.5*100:.2f}cm", flush=True)
+        return poses, transl
+
+    def verts_from_pose(self, subject, pose_aa, trans):
+        """Native SMPL-X forward (shape + pose blendshapes + LBS) -> verts (V,3)
+        Z-up, faces. Clean surface -- it's the model's own pose space."""
+        M = self._model(self.gender[subject])
+        beta = self.betas[subject].astype(np.float64)[:N_BETAS]
+        v = M["v_template"] + M["shapedirs"] @ beta
+        J = M["J_reg"] @ v
+        R = np.stack([expmap(a) for a in np.asarray(pose_aa)])          # (55,3,3)
+        v = v + M["posedirs"] @ (R[1:] - np.eye(3)).reshape(-1)         # pose blendshapes
+        parents = M["parents"]
+        G = np.zeros((55, 4, 4)); G[0, :3, :3] = R[0]; G[0, :3, 3] = J[0]; G[0, 3, 3] = 1
+        for j in range(1, 55):
+            Tm = np.eye(4); Tm[:3, :3] = R[j]; Tm[:3, 3] = J[j] - J[parents[j]]
+            G[j] = G[parents[j]] @ Tm
+        Gp = G.copy()
+        for j in range(55):
+            Gp[j, :3, 3] = G[j, :3, 3] - G[j, :3, :3] @ J[j]
+        Tv = np.einsum("vj,jab->vab", M["weights"], Gp)
+        vh = np.concatenate([v, np.ones((len(v), 1))], 1)
+        v_y = np.einsum("vab,vb->va", Tv, vh)[:, :3]
+        return (Q_ZUP @ v_y.T).T + np.asarray(trans), M["faces"]
+
 
 def selftest():
     import glob
@@ -217,6 +322,21 @@ def selftest():
           f"max {ratio.max():.1f}, edges >10x: {n10}")
     assert n10 == 0 and ratio.max() < 15, "SURFACE MANGLED (LBS explosion)"
     print(f"  verts={len(v)} faces={len(f)}  OK")
+
+    # IK retarget: fit native SMPL-X pose to body_pos, forward the clean surface.
+    # This is the fix for the ~90deg arm rest-pose mismatch. Check BOTH the joint
+    # fit and the surface (a native pose can't candy-wrapper like MJCF-frame skin).
+    tgt = x[:60:6, 162:318].reshape(-1, 52, 3)         # realistic stride (~render)
+    poses, trans = p.fit_sequence("sub2", tgt)
+    jfit, emax = [], []
+    for i in range(len(tgt)):
+        vi, fi = p.verts_from_pose("sub2", poses[i], trans[i])
+        r = np.linalg.norm(vi[e[:, 0]] - vi[e[:, 1]], axis=1) / (er + 1e-9)
+        jfit.append(rigid((M["J_reg"] @ vi)[p.b2s], tgt[i])); emax.append(r.max())
+    print(f"[selftest] IK retarget: joint fit mean {np.mean(jfit)*100:.2f} cm, "
+          f"surface edge max {max(emax):.1f}")
+    assert np.mean(jfit) < 0.06 and max(emax) < 8, "IK retarget regressed"
+    print("  OK -- correct pose + clean surface (the arm-twist fix)")
 
 
 def main():
