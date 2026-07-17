@@ -3,7 +3,7 @@
 never on the real configs our training/eval jobs actually use.
 
 Runs WITHOUT Isaac Gym (pure config/logic), so it can run anywhere. Covers:
-  1. _validate_env_config (env-key whitelist + rewardTerms/pose) against every
+  1. _validate_env_config (env-key whitelist + rewardTerms/pose+hold + objectAug) against every
      committed omomo*.yaml AND the curriculum ENV_TMPL rendered with features
      on/off (the generated configs my first pass never saw).
   2. the body-feature-requires-subjectBodies guard: no real config trips it.
@@ -47,12 +47,18 @@ def validate_env_config(env_cfg):
     if unknown:
         raise ValueError(f"unrecognized env config key(s): {unknown}")
     rt = env_cfg.get("rewardTerms") or {}
-    bad = sorted(k for k in rt if k != "pose")
+    bad = sorted(k for k in rt if k not in ("pose", "hold"))
     if bad:
         raise ValueError(f"unknown rewardTerms key(s) {bad}")
-    badp = sorted(k for k in (rt.get("pose") or {}) if k not in ("enable", "lambda"))
-    if badp:
-        raise ValueError(f"unknown rewardTerms.pose key(s) {badp}")
+    for term in ("pose", "hold"):
+        badp = sorted(k for k in (rt.get(term) or {}) if k not in ("enable", "lambda"))
+        if badp:
+            raise ValueError(f"unknown rewardTerms.{term} key(s) {badp}")
+    oa = env_cfg.get("objectAug") or {}
+    bado = sorted(k for k in oa if k not in
+                  ("enable", "scaleMin", "scaleMax", "yawRad", "translateM", "massExp"))
+    if bado:
+        raise ValueError(f"unknown objectAug key(s) {bado}")
 
 
 def body_feature_guard(env_cfg, has_subject_bodies):
@@ -177,6 +183,12 @@ def main():
     check("pose.lamda typo raises",
           lambda: expect_raise(lambda: validate_env_config(
               {"rewardTerms": {"pose": {"lamda": 0.02}}})))
+    check("rewardTerms.held typo raises",
+          lambda: expect_raise(lambda: validate_env_config(
+              {"rewardTerms": {"held": {"enable": True}}})))
+    check("objectAug.scaleMn typo raises",
+          lambda: expect_raise(lambda: validate_env_config(
+              {"objectAug": {"scaleMn": 0.9}})))
     check("body-feature w/o subjectBodies raises",
           lambda: expect_raise(lambda: body_feature_guard({"betas_file": "x"}, False)))
     check("empty dataset raises",

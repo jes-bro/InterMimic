@@ -110,6 +110,10 @@ class InterMimic(Humanoid_SMPLX):
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
         # path (NOT training), so it's a legitimate runtime key, not a typo.
         'seed',
+        # objectAug (physics): per-env object scale/yaw/translate + mass correction.
+        # objectTermsEnable gates the stock object-match reward terms (ro*rig*rcg),
+        # which a perturbed object makes unachievable.
+        'objectAug', 'objectTermsEnable',
     })
 
     def _validate_env_config(self, env_cfg):
@@ -123,13 +127,26 @@ class InterMimic(Humanoid_SMPLX):
                 f"wrong thing. If a key is genuinely new, add it to "
                 f"InterMimic.KNOWN_ENV_KEYS.")
         rt = env_cfg.get('rewardTerms') or {}
-        bad = sorted(k for k in rt if k != 'pose')
+        # 'pose' (relative joint-angle) and 'hold' (objectAug relaxed-contact) are the
+        # two opt-in reward terms; each takes only {enable, lambda}. A key outside this
+        # set is almost certainly a typo that would silently disable the term.
+        bad = sorted(k for k in rt if k not in ('pose', 'hold'))
         if bad:
-            raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} (only 'pose').")
-        badp = sorted(k for k in (rt.get('pose') or {}) if k not in ('enable', 'lambda'))
-        if badp:
-            raise ValueError(f"[intermimic] unknown rewardTerms.pose key(s) {badp} "
-                             f"(only 'enable', 'lambda').")
+            raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} "
+                             f"(only 'pose', 'hold').")
+        for _term in ('pose', 'hold'):
+            badp = sorted(k for k in (rt.get(_term) or {}) if k not in ('enable', 'lambda'))
+            if badp:
+                raise ValueError(f"[intermimic] unknown rewardTerms.{_term} key(s) {badp} "
+                                 f"(only 'enable', 'lambda').")
+        # objectAug sub-keys: a typo here (e.g. 'scaleMn') would silently fall back to
+        # the no-perturbation default and quietly run stock objects -> validate loudly.
+        oa = env_cfg.get('objectAug') or {}
+        bado = sorted(k for k in oa if k not in
+                      ('enable', 'scaleMin', 'scaleMax', 'yawRad', 'translateM', 'massExp'))
+        if bado:
+            raise ValueError(f"[intermimic] unknown objectAug key(s) {bado} (only 'enable', "
+                             f"'scaleMin', 'scaleMax', 'yawRad', 'translateM', 'massExp').")
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self._validate_env_config(cfg["env"])
@@ -311,6 +328,39 @@ class InterMimic(Humanoid_SMPLX):
             self._betas_lookup = None
             self.source_betas = torch.zeros((self.num_motions, 16),
                                             dtype=torch.float, device=self._init_device)
+
+        # --- PHYSICS objectAug (training): per-env object scale + per-episode yaw/
+        # translate + reward-term toggles. Ported from objectaug-experiment. OFF =>
+        # scale=1, gates no-op => byte-identical to stock. NOTE: per-object realistic
+        # ranges, object CONDITIONING (obs change), and the curriculum schedule are
+        # deliberate FOLLOW-UPS -- this is the core physics-perturbation port only.
+        oa = cfg['env'].get('objectAug', None)
+        self._object_aug = bool(oa) and bool(oa.get('enable', False))
+        _ne = int(cfg['env']['numEnvs'])
+        if self._object_aug:
+            _slo = float(oa.get('scaleMin', 1.0)); _shi = float(oa.get('scaleMax', 1.0))
+            self._oa_yaw = float(oa.get('yawRad', 0.0))
+            self._oa_translate = float(oa.get('translateM', 0.0))
+            self._oa_mass_exp = float(oa.get('massExp', 2.0))   # mass ~ scale**massExp (2 shell, 3 solid)
+            _g = torch.Generator().manual_seed(12345)           # fixed seed: reproducible per-env scale
+            self._oa_scale = (torch.rand(_ne, generator=_g) * (_shi - _slo) + _slo).to(self._init_device)
+            print(f"[objectAug] ON: scale U({_slo},{_shi}) yaw+/-{self._oa_yaw:.3f}rad "
+                  f"translate+/-{self._oa_translate}m massExp={self._oa_mass_exp}", flush=True)
+        else:
+            self._oa_yaw = 0.0; self._oa_translate = 0.0; self._oa_mass_exp = 3.0
+            self._oa_scale = torch.ones(_ne, device=self._init_device)
+        # Reward-term toggles. hold ported from objectaug-experiment; pose already exists.
+        _rt = cfg['env'].get('rewardTerms', {}) or {}
+        _hold = _rt.get('hold', {}) or {}
+        self._hold_term_enable = bool(_hold.get('enable', False))
+        self._hold_lambda = float(_hold.get('lambda', 5.0))
+        # Stock object-match terms (ro*rig*rcg). ON by default => stock reward. Toggle OFF
+        # for objectAug runs where the perturbed object makes them unachievable.
+        self._object_terms_enable = bool(cfg['env'].get('objectTermsEnable', True))
+        # Opt-in mass-hold verification print (OBJECTAUG_DEBUG=1): prints per-object
+        # total_mass vs aug for the first envs so you can confirm mass tracks
+        # scale**massExp (not scale**3) before trusting a run. No training effect.
+        self._oa_debug = os.environ.get('OBJECTAUG_DEBUG') == '1'
 
         super().__init__(cfg=cfg,
                          sim_params=sim_params,
@@ -890,7 +940,27 @@ class InterMimic(Humanoid_SMPLX):
         self.gym.set_actor_rigid_shape_properties(env_ptr, target_handle, props)
 
         self._target_handles.append(target_handle)
-        self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size)
+        aug = float(self._oa_scale[env_id])                      # 1.0 when objectAug off
+        self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size * aug)
+        # set_actor_scale grows mass by aug**3 (solid assumption). Correct it so mass
+        # tracks scale**massExp (2=shell, 3=solid): multiply mass/inertia by
+        # aug**(massExp-3). massExp=3 => factor 1 (no correction).
+        if self._object_aug and aug != 1.0 and self._oa_mass_exp != 3.0:
+            corr = aug ** (self._oa_mass_exp - 3.0)
+            props = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            for bp in props:
+                bp.mass *= corr
+                bp.inertia.x.x *= corr; bp.inertia.x.y *= corr; bp.inertia.x.z *= corr
+                bp.inertia.y.x *= corr; bp.inertia.y.y *= corr; bp.inertia.y.z *= corr
+                bp.inertia.z.x *= corr; bp.inertia.z.y *= corr; bp.inertia.z.z *= corr
+            self.gym.set_actor_rigid_body_properties(env_ptr, target_handle, props,
+                                                     recomputeInertia=False)
+
+        if self._oa_debug and env_id < 8:
+            dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            print(f"[masschk] env{env_id} obj={self.object_name[env_id % len(self.object_name)]} "
+                  f"aug={aug:.3f} total_mass={sum(p.mass for p in dbg):.4f} "
+                  f"(expect mass ~ nominal * aug^{self._oa_mass_exp:.1f})", flush=True)
 
         return
 
@@ -911,7 +981,20 @@ class InterMimic(Humanoid_SMPLX):
         self._target_states[env_ids, 3:7] = self.extract_ref_component('obj_rot', self.data_id[env_ids], self.ref_index[env_ids], self.progress_buf[env_ids])
         self._target_states[env_ids, 7:10] = self.extract_ref_component('obj_pos_vel', self.data_id[env_ids], self.ref_index[env_ids], self.progress_buf[env_ids])
         self._target_states[env_ids, 10:13] = self.extract_ref_component('obj_rot_vel', self.data_id[env_ids], self.ref_index[env_ids], self.progress_buf[env_ids])
-        return  
+        # objectAug: perturb the INITIAL object pose per episode (scale is baked at env
+        # creation). Random yaw about Z + random XY translate for training diversity.
+        if self._object_aug and (self._oa_yaw > 0.0 or self._oa_translate > 0.0):
+            n = env_ids.shape[0] if torch.is_tensor(env_ids) else len(env_ids)
+            if self._oa_yaw > 0.0:
+                yaw = (torch.rand(n, device=self.device) * 2.0 - 1.0) * self._oa_yaw
+                half = yaw * 0.5
+                zq = torch.zeros(n, 4, device=self.device)
+                zq[:, 2] = torch.sin(half); zq[:, 3] = torch.cos(half)
+                self._target_states[env_ids, 3:7] = quat_mul(zq, self._target_states[env_ids, 3:7])
+            if self._oa_translate > 0.0:
+                dxy = (torch.rand(n, 2, device=self.device) * 2.0 - 1.0) * self._oa_translate
+                self._target_states[env_ids, 0:2] += dxy
+        return
 
     def _reset_env_tensors(self, env_ids):
         super()._reset_env_tensors(env_ids)
@@ -1349,7 +1432,7 @@ class InterMimic(Humanoid_SMPLX):
                                                         self._dof_obs_size, self._target_states,
                                                         self._tar_contact_forces,
                                                         self._contact_forces,
-                                                        self.object_points[self.object_id[self.data_id]],
+                                                        self.object_points[self.object_id[self.data_id]] * self._oa_scale.view(-1, 1, 1),
                                                         self._rigid_body_rot,
                                                         self._rigid_body_vel,
                                                         self._rigid_body_ang_vel
@@ -1662,7 +1745,14 @@ class InterMimic(Humanoid_SMPLX):
         ro, object_reset, obj_points, ref_obj_points = self.compute_obj_reward(self.reward_weights)
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
-        reward = rb * ro * rig * rcg
+        reward = rb
+        # Stock object-match terms (object-pose ro, interaction-graph rig, contact-graph
+        # rcg). ON by default => stock product rb*ro*rig*rcg. Toggle OFF for objectAug
+        # runs where the perturbed object makes them unachievable.
+        if self._object_terms_enable:
+            reward = reward * ro * rig * rcg
+        # Breakdown logging reports the raw TERMS (rb/ro/rig/rcg), so it stays useful
+        # even when the object terms are gated out of the product above.
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
                 self._log_reward_breakdown(rb, ro, rig, rcg)
@@ -1673,10 +1763,18 @@ class InterMimic(Humanoid_SMPLX):
         # Term 1 (opt-in): relative joint-angle pose factor, layered on the product.
         if self._pose_term_enable:
             reward = reward * self._compute_pose_reward()
+        # Term 2 (opt-in): relaxed contact / "hold" factor (objectAug companion).
+        if self._hold_term_enable:
+            reward = reward * self._compute_hold_reward(key_pos, obj_points)
         self.rew_buf[:] = reward
         kinematic_reset = torch.logical_or(human_reset, object_reset)
         self.contact_reset = (self.contact_reset + contact_reset) * contact_reset
         self.kinematic_reset = torch.logical_or(ig_reset, kinematic_reset)
+        # objectAug / object-terms-off: the perturbed object makes the object/ig/contact
+        # resets fire spuriously every step -> relax to human-only termination.
+        if self._object_aug or not self._object_terms_enable:
+            self.contact_reset = torch.zeros_like(self.contact_reset)
+            self.kinematic_reset = human_reset
         index = torch.arange(self._curr_reward.shape[0])
         # # print(self._humanoid_root_states.dtype)
         self._curr_reward[index, self.progress_buf - self.start_times] = self.rew_buf
@@ -1730,6 +1828,37 @@ class InterMimic(Humanoid_SMPLX):
                           f"(small min/med => dof aligned; max = hybrid default-init resets)",
                           flush=True)
         return torch.exp(-self._pose_lambda * err)
+
+    def _compute_hold_reward(self, key_pos, obj_points):
+        """Term 2: relaxed contact / 'hold' factor (opt-in objectAug companion).
+
+        Ported from objectaug-experiment. LAYERED (not a replacement for rcg/ro/rig):
+        encourages keeping the object held without the source clip's EXACT contact
+        pattern -- useful when objectAug perturbs the object so the exact pattern is
+        unreachable. Two soft sub-factors in (0,1]:
+          r_prox   : hands (wrist key bodies) near the (scaled, posed) object surface.
+          r_contact: the hands the SOURCE used for contact are in contact now
+                     (promotion-only, kept in [0.5,1] so it shapes, not starves).
+        Weight = rewardTerms.hold.lambda.
+        """
+        if not hasattr(self, '_hand_key_ids'):
+            self._hand_key_ids = [i for i, n in enumerate(self.key_bodies)
+                                  if n in ('L_Wrist', 'R_Wrist')]
+        hand_pos = key_pos[:, self._hand_key_ids, :]                 # (E, H, 3)
+        min_d = torch.cdist(hand_pos, obj_points).min(dim=-1)[0]     # (E, H)
+        r_prox = torch.exp(-self._hold_lambda * min_d.mean(dim=-1))
+
+        contact_thres = 0.1
+        ref_contact = self.extract_data_component('contact_human', obs=self._curr_ref_obs)
+        live_contact = self.extract_data_component('contact_human', obs=self._curr_obs)
+        sides = []
+        for ids in (list(range(17, 33)), list(range(36, 52))):      # left, right hand links
+            ref_any = (ref_contact[:, ids] > contact_thres).any(dim=-1).float()
+            live_any = (live_contact[:, ids] > contact_thres).any(dim=-1).float()
+            sides.append(ref_any * live_any + (1.0 - ref_any))      # source-used-it -> reward contact; else 1
+        mean_side = torch.stack(sides, dim=-1).mean(dim=-1)         # [0,1]
+        r_contact = 0.5 + 0.5 * mean_side                          # [0.5,1]
+        return r_prox * r_contact
 
     def compute_humanoid_reward(self, w):
         # body pos reward
@@ -1803,7 +1932,7 @@ class InterMimic(Humanoid_SMPLX):
 
         local_obj_rot = quat_mul(heading_rot, obj_rot)
 
-        object_points = self.object_points[self.object_id[self.data_id]]
+        object_points = self.object_points[self.object_id[self.data_id]] * self._oa_scale.view(-1, 1, 1)
         obj_rot_extend = obj_rot.unsqueeze(1).repeat(1, object_points.shape[1], 1).view(-1, 4)
         object_points_extend = object_points.view(-1, 3)
         obj_points = torch_utils.quat_rotate(obj_rot_extend, object_points_extend).view(obj_rot.shape[0], object_points.shape[1], 3) + obj_pos.unsqueeze(1)
