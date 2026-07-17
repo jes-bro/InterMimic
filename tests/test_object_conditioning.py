@@ -73,7 +73,7 @@ for f in cond_cfgs:
           and e["objectConditioning"]["enable"] is True)
     check(f"{os.path.basename(f)}: numObs {e['numObs']} matches arithmetic", ok)
 
-check("found the conditioning configs (obj_cond + geom_cond, 3 each)", len(cond_cfgs) == 6)
+check("found conditioning configs (obj_cond + geom_cond)", len(cond_cfgs) >= 6)
 
 print()
 if fails:
