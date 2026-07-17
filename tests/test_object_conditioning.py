@@ -64,14 +64,16 @@ check("scale slots fold uniform*aniso per axis",
 BASE, BETAS, NH = 1599, 32, 4
 expect_numobs = NH * (BASE + BETAS + (1 + 3 + K))
 check(f"expected transformer numObs == {expect_numobs}", expect_numobs == 6616)
-for f in sorted(glob.glob(os.path.join(CFG, "*_xf_aug_obj_geom_cond.yaml"))):
+cond_cfgs = sorted(glob.glob(os.path.join(CFG, "*_xf_aug_obj_cond.yaml"))
+                   + glob.glob(os.path.join(CFG, "*_xf_aug_obj_geom_cond.yaml")))
+for f in cond_cfgs:
     e = yaml.safe_load(open(f))["env"]
     ok = (e["numObs"] == expect_numobs
           and e["useTransformerObs"] is True
           and e["objectConditioning"]["enable"] is True)
     check(f"{os.path.basename(f)}: numObs {e['numObs']} matches arithmetic", ok)
 
-check("found the geom_cond configs", len(glob.glob(os.path.join(CFG, "*_xf_aug_obj_geom_cond.yaml"))) == 3)
+check("found the conditioning configs (obj_cond + geom_cond, 3 each)", len(cond_cfgs) == 6)
 
 print()
 if fails:
