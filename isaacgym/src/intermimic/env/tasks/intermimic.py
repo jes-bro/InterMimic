@@ -404,7 +404,9 @@ class InterMimic(Humanoid_SMPLX):
         self._pose_term_enable = bool(pose_cfg.get('enable', False))
         self._pose_lambda = float(pose_cfg.get('lambda', 0.02))
         # Env-var-gated dof-alignment sanity print (no effect on training).
-        self._pose_reward_debug = os.environ.get('POSE_REWARD_DEBUG') == '1'
+        # ON by default (set POSE_REWARD_DEBUG=0 to silence). No-op unless the pose
+        # term is enabled; prints periodic dof-alignment sanity for fresh-reset envs.
+        self._pose_reward_debug = os.environ.get('POSE_REWARD_DEBUG', '1') != '0'
         if self._pose_term_enable:
             print(f"[intermimic] pose reward (relative joint-angle) enabled; "
                   f"lambda={self._pose_lambda}", flush=True)
@@ -1663,7 +1665,11 @@ class InterMimic(Humanoid_SMPLX):
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
         reward = rb * ro * rig * rcg
-        if os.environ.get('REWARD_BREAKDOWN') == '1':
+        # Reward breakdown is ON by default now (set REWARD_BREAKDOWN=0 to silence,
+        # e.g. for clean eval logs). Self-inits lazily + try/except'd, so on-by-
+        # default is safe; per-term rb/ro/rig/rcg logging every REWARD_BREAKDOWN_EVERY
+        # steps is what tells you which factor pins the multiplicative product.
+        if os.environ.get('REWARD_BREAKDOWN', '1') != '0':
             try:
                 self._log_reward_breakdown(rb, ro, rig, rcg)
             except Exception as _rbde:
