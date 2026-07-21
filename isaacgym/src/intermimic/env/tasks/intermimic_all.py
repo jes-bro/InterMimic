@@ -3,7 +3,9 @@ from .intermimic import InterMimic
 
 from isaacgym.torch_utils import *
 from rl_games.algos_torch import torch_ext
-from ...learning import intermimic_network_builder, intermimic_models_teacher
+from ...learning import (intermimic_network_builder,
+                         intermimic_transformer_network_builder,
+                         intermimic_models_teacher)
 from ...utils.path_utils import resolve_data_path, resolve_repo_path
 from torch.func import vmap
 from functorch import make_functional
@@ -39,11 +41,23 @@ class InterMimic_All(InterMimic):
             'num_seqs' : cfg["env"]["numEnvs"] * 1,
             'value_size': 1,
         }
-        network = intermimic_network_builder.InterMimicBuilder()
         teacher_cfg_path = resolve_data_path("cfg", "train", "rlg", os.path.basename(cfg["env"]["teacherPolicyCFG"]))
         with open(teacher_cfg_path, 'r') as f:
             cfg_teacher = yaml.load(f, Loader=yaml.SafeLoader)
 
+        # Pick the teacher network builder from the teacher's OWN train cfg. The
+        # source-teachers are transformers (intermimic_transformer); the paper's
+        # per-subject teachers were MLP (intermimic). No silent default -- an
+        # unknown arch loads wrong weights and produces silently-bad targets.
+        _teacher_net = cfg_teacher['params']['network']['name']
+        if _teacher_net == 'intermimic_transformer':
+            network = intermimic_transformer_network_builder.InterMimicBuilder()
+        elif _teacher_net == 'intermimic':
+            network = intermimic_network_builder.InterMimicBuilder()
+        else:
+            raise ValueError(
+                f"InterMimic_All: unsupported teacher network '{_teacher_net}' in "
+                f"{teacher_cfg_path} (expected 'intermimic' or 'intermimic_transformer')")
         network.load(cfg_teacher['params']['network'])
         network = intermimic_models_teacher.ModelInterMimicContinuous(network)
         teacher_policy = resolve_repo_path(cfg["env"]["teacherPolicy"])
