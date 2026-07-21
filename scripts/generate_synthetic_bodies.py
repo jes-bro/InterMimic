@@ -42,7 +42,11 @@ def main():
                     help="fraction of bodies that are extrapolated past the hull")
     ap.add_argument("--extrap-scale", type=float, nargs=2, default=[1.15, 1.45],
                     help="push factor range (1.0 = on the subject, >1 = beyond it)")
-    ap.add_argument("--held-out", nargs="+", default=["sub4", "sub10", "sub16"])
+    # sub13 added 2026-07-21: the FIRST synthetic set (sub100-139) was generated
+    # with only {sub4,sub10,sub16} held out, so sub121 landed 0.34 from sub13 and
+    # contaminated it as a held-out test (see project_synthetic_sub13_leak). Any
+    # regeneration now protects the full held-out set so this can't recur.
+    ap.add_argument("--held-out", nargs="+", default=["sub4", "sub10", "sub13", "sub16"])
     ap.add_argument("--min-heldout-dist", type=float, default=2.0,
                     help="reject synthetic bodies closer than this (L2 in betas) to any held-out subject")
     ap.add_argument("--start-id", type=int, default=100,

@@ -30,11 +30,11 @@ env:
   dataFPS: 30
   dataFramesScale: 1
   dataSub: ['sub16']
-  # 13 real train bodies (sub13 held out) + 40 TARGET-ONLY synthetic bodies
-  # (sub100..sub139): driven by the sub2 source, scored vs the real reference,
+  # 13 real train bodies (sub13 held out) + 39 TARGET-ONLY synthetic bodies (sub121 dropped:
+  # near-duplicate of held-out sub13) (sub100..sub139 minus sub121): driven by the sub2 source, scored vs the real reference,
   # body-norm handles the size gap. Tests: do synthetic bodies train in a
   # source-teacher WITHOUT staging (the curriculum folds them in gradually)?
-  subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17', 'sub100', 'sub101', 'sub102', 'sub103', 'sub104', 'sub105', 'sub106', 'sub107', 'sub108', 'sub109', 'sub110', 'sub111', 'sub112', 'sub113', 'sub114', 'sub115', 'sub116', 'sub117', 'sub118', 'sub119', 'sub120', 'sub121', 'sub122', 'sub123', 'sub124', 'sub125', 'sub126', 'sub127', 'sub128', 'sub129', 'sub130', 'sub131', 'sub132', 'sub133', 'sub134', 'sub135', 'sub136', 'sub137', 'sub138', 'sub139']
+  subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17', 'sub100', 'sub101', 'sub102', 'sub103', 'sub104', 'sub105', 'sub106', 'sub107', 'sub108', 'sub109', 'sub110', 'sub111', 'sub112', 'sub113', 'sub114', 'sub115', 'sub116', 'sub117', 'sub118', 'sub119', 'sub120', 'sub122', 'sub123', 'sub124', 'sub125', 'sub126', 'sub127', 'sub128', 'sub129', 'sub130', 'sub131', 'sub132', 'sub133', 'sub134', 'sub135', 'sub136', 'sub137', 'sub138', 'sub139']
   betas_file: scripts/omomo_betas_neutral_aug.npz
   bodyNormalizedReward: true
   subjectHeightsFile: scripts/synthetic_heights.json  # heights for sub100+ (body-norm)
