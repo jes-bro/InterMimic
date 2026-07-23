@@ -1,0 +1,8 @@
+{
+  "_comment": "Per-object realistic augmentation ranges. scaleMin/scaleMax bound the per-env uniform object scale; massExp is the mass model (2=hollow shell -> a +-15% size is ~+-30% mass; 3=solid; 1=rod/thin-frame). The loader (intermimic.py objectAug block) REQUIRES an entry for every object present in the training set and fails loudly listing any that are missing -- add cluster objects here rather than letting them default silently. Bigger/heavier furniture is scaled tighter. Review these before a real run; they are reasonable starting values, not measured.",
+  "largetable":  {"scaleMin": 0.90, "scaleMax": 1.10, "massExp": 2},
+  "woodchair":   {"scaleMin": 0.88, "scaleMax": 1.12, "massExp": 2},
+  "monitor":     {"scaleMin": 0.85, "scaleMax": 1.15, "massExp": 2},
+  "trashcan":    {"scaleMin": 0.85, "scaleMax": 1.15, "massExp": 2},
+  "plasticbox":  {"scaleMin": 0.85, "scaleMax": 1.15, "massExp": 2}
+}

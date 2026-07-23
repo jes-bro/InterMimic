@@ -317,24 +317,77 @@ class InterMimic(Humanoid_SMPLX):
                                             dtype=torch.float, device=self._init_device)
 
         # --- PHYSICS objectAug (training): per-env object scale + per-episode yaw/
-        # translate + reward-term toggles. Ported from objectaug-experiment. OFF =>
-        # scale=1, gates no-op => byte-identical to stock. NOTE: per-object realistic
-        # ranges, object CONDITIONING (obs change), and the curriculum schedule are
-        # deliberate FOLLOW-UPS -- this is the core physics-perturbation port only.
+        # translate + reward-term toggles + optional per-object ranges & obs
+        # conditioning. OFF => scale=1, gates no-op => byte-identical to stock.
+        #
+        # Per-env object identity is STATIC = env_id % len(object_name) (see the
+        # create_actor in _build_target_actors: self._target_asset[env_id % no]).
+        # object_name is set above (pre-super), so per-object scale is drawn HERE,
+        # before super().__init__() creates + scales the actors. massExp is kept as
+        # a per-env tensor so the reset mass-correction can apply per-object values.
         oa = cfg['env'].get('objectAug', None)
         self._object_aug = bool(oa) and bool(oa.get('enable', False))
         _ne = int(cfg['env']['numEnvs'])
+        _no = len(self.object_name)
+        _env_obj = (torch.arange(_ne) % _no).to(self._init_device)   # per-env object index
+        self._oa_cond = None
+        self._oa_obs_terms = list((oa or {}).get('obs', []) or [])   # e.g. ['scale','mass']
+        self._use_objaug_obs = self._object_aug and len(self._oa_obs_terms) > 0
         if self._object_aug:
-            _slo = float(oa.get('scaleMin', 1.0)); _shi = float(oa.get('scaleMax', 1.0))
             self._oa_yaw = float(oa.get('yawRad', 0.0))
             self._oa_translate = float(oa.get('translateM', 0.0))
-            self._oa_mass_exp = float(oa.get('massExp', 2.0))   # mass ~ scale**massExp (2 shell, 3 solid)
-            _g = torch.Generator().manual_seed(12345)           # fixed seed: reproducible per-env scale
-            self._oa_scale = (torch.rand(_ne, generator=_g) * (_shi - _slo) + _slo).to(self._init_device)
-            print(f"[objectAug] ON: scale U({_slo},{_shi}) yaw+/-{self._oa_yaw:.3f}rad "
-                  f"translate+/-{self._oa_translate}m massExp={self._oa_mass_exp}", flush=True)
+            _g = torch.Generator().manual_seed(12345)               # reproducible per-env scale
+            _u = torch.rand(_ne, generator=_g).to(self._init_device)
+            _ranges_file = oa.get('rangesFile', None)
+            if _ranges_file is not None:
+                # Per-object realistic ranges. REQUIRE an entry per object present --
+                # a missing object would otherwise get an arbitrary default and
+                # silently corrupt its physics, so fail loudly listing the gaps.
+                from ...utils.path_utils import resolve_repo_path
+                import json as _json
+                with open(resolve_repo_path(_ranges_file)) as _f:
+                    _rng = _json.load(_f)
+                _missing = [o for o in self.object_name if o not in _rng]
+                if _missing:
+                    raise ValueError(
+                        f"[objectAug] rangesFile '{_ranges_file}' is missing objects {_missing}. "
+                        f"Add a {{scaleMin,scaleMax,massExp}} entry for each; refusing to guess.")
+                _smin = torch.tensor([_rng[o]['scaleMin'] for o in self.object_name], device=self._init_device)
+                _smax = torch.tensor([_rng[o]['scaleMax'] for o in self.object_name], device=self._init_device)
+                _mexp = torch.tensor([float(_rng[o]['massExp']) for o in self.object_name], device=self._init_device)
+                self._oa_scale = _smin[_env_obj] + _u * (_smax[_env_obj] - _smin[_env_obj])
+                self._oa_mass_exp = _mexp[_env_obj]                  # per-env massExp
+                print("[objectAug] per-object ranges from %s: %s" % (_ranges_file, ", ".join(
+                    f"{self.object_name[k]}[{_smin[k]:.2f},{_smax[k]:.2f}]^{_mexp[k]:.0f}" for k in range(_no))),
+                    flush=True)
+            else:
+                # Flat range applied to every object (the validation default).
+                _slo = float(oa.get('scaleMin', 1.0)); _shi = float(oa.get('scaleMax', 1.0))
+                self._oa_scale = _slo + _u * (_shi - _slo)
+                self._oa_mass_exp = torch.full((_ne,), float(oa.get('massExp', 2.0)), device=self._init_device)
+                print(f"[objectAug] ON: scale U({_slo},{_shi}) yaw+/-{self._oa_yaw:.3f}rad "
+                      f"translate+/-{self._oa_translate}m massExp={float(self._oa_mass_exp[0])}", flush=True)
+            # Observation conditioning: a static per-env vector appended to obs so the
+            # policy can adapt to the perturbation. Built here; folded into obs in
+            # _stack_obs_horizons exactly like betas. Set numObs in cfg to match:
+            #   MLP: numObs_base + cond_dim ; transformer: 4*(token_base + cond_dim).
+            if self._use_objaug_obs:
+                _pieces = []
+                for _t in self._oa_obs_terms:
+                    if _t == 'scale':
+                        _pieces.append(self._oa_scale.view(-1, 1))
+                    elif _t == 'mass':
+                        _pieces.append((self._oa_scale ** self._oa_mass_exp).view(-1, 1))
+                    elif _t == 'category':
+                        _pieces.append(torch.nn.functional.one_hot(_env_obj, _no).float())
+                    else:
+                        raise ValueError(f"[objectAug] unknown objectAugObs term '{_t}' (want scale|mass|category)")
+                self._oa_cond = torch.cat(_pieces, dim=-1)
+                print(f"[objectAug] obs conditioning terms={self._oa_obs_terms} -> "
+                      f"cond_dim={self._oa_cond.shape[1]} (set numObs accordingly)", flush=True)
         else:
-            self._oa_yaw = 0.0; self._oa_translate = 0.0; self._oa_mass_exp = 3.0
+            self._oa_yaw = 0.0; self._oa_translate = 0.0
+            self._oa_mass_exp = torch.full((_ne,), 3.0, device=self._init_device)
             self._oa_scale = torch.ones(_ne, device=self._init_device)
         # Reward-term toggles. hold ported from objectaug-experiment; pose already exists.
         _rt = cfg['env'].get('rewardTerms', {}) or {}
@@ -928,12 +981,13 @@ class InterMimic(Humanoid_SMPLX):
 
         self._target_handles.append(target_handle)
         aug = float(self._oa_scale[env_id])                      # 1.0 when objectAug off
+        _mexp = float(self._oa_mass_exp[env_id])                 # per-env (per-object) massExp
         self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size * aug)
         # set_actor_scale grows mass by aug**3 (solid assumption). Correct it so mass
         # tracks scale**massExp (2=shell, 3=solid): multiply mass/inertia by
         # aug**(massExp-3). massExp=3 => factor 1 (no correction).
-        if self._object_aug and aug != 1.0 and self._oa_mass_exp != 3.0:
-            corr = aug ** (self._oa_mass_exp - 3.0)
+        if self._object_aug and aug != 1.0 and _mexp != 3.0:
+            corr = aug ** (_mexp - 3.0)
             props = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
             for bp in props:
                 bp.mass *= corr
@@ -947,7 +1001,7 @@ class InterMimic(Humanoid_SMPLX):
             dbg = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
             print(f"[masschk] env{env_id} obj={self.object_name[env_id % len(self.object_name)]} "
                   f"aug={aug:.3f} total_mass={sum(p.mass for p in dbg):.4f} "
-                  f"(expect mass ~ nominal * aug^{self._oa_mass_exp:.1f})", flush=True)
+                  f"(expect mass ~ nominal * aug^{_mexp:.1f})", flush=True)
 
         return
 
@@ -1373,17 +1427,29 @@ class InterMimic(Humanoid_SMPLX):
         horizons = [0, 1, 4, 16] if self._use_transformer_obs else [1, 16]
         if (env_ids is None):
             self._curr_ref_obs[:] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
-            # (source_betas, target_betas) — 32 dims. source_betas[data_id]: from
-            # the motion file; _env_target_betas: the env's actual body in sim.
-            betas = torch.cat([self.source_betas[self.data_id], self._env_target_betas], dim=-1) \
-                if self._use_betas_obs else None
-            self.obs_buf[:] = self._stack_obs_horizons(None, horizons, betas)
+            self.obs_buf[:] = self._stack_obs_horizons(None, horizons, self._obs_conditioning(None))
         else:
             self._curr_ref_obs[env_ids] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
-            betas = torch.cat([self.source_betas[self.data_id[env_ids]],
-                               self._env_target_betas[env_ids]], dim=-1) \
-                if self._use_betas_obs else None
-            self.obs_buf[env_ids] = self._stack_obs_horizons(env_ids, horizons, betas)
+            self.obs_buf[env_ids] = self._stack_obs_horizons(env_ids, horizons, self._obs_conditioning(env_ids))
+
+    def _obs_conditioning(self, env_ids):
+        """Per-env static conditioning appended to the policy obs: the 32-dim
+        (source_betas, target_betas) if betas are enabled, then the objectAug
+        [scale/mass/category] vector if enabled. Returns None when neither is on
+        (stock obs). _stack_obs_horizons appends this once (MLP) or folds it into
+        each token (transformer), identical to how betas were handled before."""
+        pieces = []
+        if self._use_betas_obs:
+            if env_ids is None:
+                pieces.append(torch.cat([self.source_betas[self.data_id], self._env_target_betas], dim=-1))
+            else:
+                pieces.append(torch.cat([self.source_betas[self.data_id[env_ids]],
+                                         self._env_target_betas[env_ids]], dim=-1))
+        if self._use_objaug_obs:
+            pieces.append(self._oa_cond if env_ids is None else self._oa_cond[env_ids])
+        if not pieces:
+            return None
+        return pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim=-1)
 
     def _stack_obs_horizons(self, env_ids, horizons, betas):
         """Build the stacked policy obs over `horizons` (delta_t values).

@@ -1,0 +1,105 @@
+# PHYSICS objectAug TRAINING run (v1: conditioning + per-object ranges, TRANSFORMER).
+# Unlike the validation cfg (omomo_objectaug.yaml, flat range, no conditioning, MLP),
+# this trains a TRANSFORMER policy that (a) scales each object within its OWN realistic
+# range from scripts/object_perturbation_ranges.json, and (b) OBSERVES the perturbation
+# via objectAug.obs=[scale,mass] appended to the obs -> the policy can adapt. Object-
+# match reward terms stay OFF (perturbed object can't match the source); pose + hold
+# carry the interaction. Identity sub2/sub2 x all sub2 objects.
+#
+# TRANSFORMER obs (useTransformerObs=true) => 4 tokens [dt 0,1,4,16], conditioning
+# folded into EACH token. numObs = 4 * (1599 token-base + 32 betas + 2 scale,mass)
+# = 4 * 1633 = 6532. Must be divisible by 4 (builder does obs.view(batch,4,-1)); keep
+# it in sync with objectAug.obs. Pair with train/rlg/omomo_objectaug_train.yaml
+# (network name: intermimic_transformer).
+env:
+  numEnvs: 4096          # drop to 2048 if PhysX OOMs at startup (see [mem] step 1)
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: False
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2
+  stateInit: "Hybrid"
+  rolloutLength: 300
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub2']
+  subjectBodies: ['sub2']
+  betas_file: scripts/omomo_betas.npz
+  bodyNormalizedReward: true
+  ballSize: 1.
+  useTransformerObs: true   # 4-token temporal obs for the transformer policy
+  numObs: 6532           # 4 * (1599 + 32 betas + 2 objectAug scale,mass); divisible by 4
+  objectAug:
+    enable: true
+    rangesFile: scripts/object_perturbation_ranges.json   # per-object scale caps + massExp
+    yawRad: 0.26          # ~15 deg per-episode yaw
+    translateM: 0.03      # +/- 3 cm per-episode translate
+    obs: [scale, mass]    # append [scale, scale**massExp] to obs so the policy adapts
+  objectTermsEnable: false
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+    hold:
+      enable: true
+      lambda: 5.0
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+  physicalBufferSize: 3
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+    ig: 5.
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 20.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
