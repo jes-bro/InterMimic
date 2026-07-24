@@ -166,9 +166,95 @@ def selftest():
     return 0 if ok else 1
 
 
+# --------------------------------------------------------------------- batch mode
+def _one(job):
+    """Worker: retarget a single (clip, target) pair -> <out>/<target>/<clip>.pt."""
+    # One thread per worker: torch grabs ~n_cores threads per process by default, so
+    # a pool of W workers oversubscribes W*n_cores threads and thrashes to a standstill.
+    torch.set_num_threads(1)
+    clip_path, source, target, scale, iters, out_dir = job
+    dst = os.path.join(out_dir, target, os.path.basename(clip_path))
+    if os.path.exists(dst):                       # resume: never redo finished work
+        return (target, os.path.basename(clip_path), None, None, "skip")
+    try:
+        clip = torch.load(clip_path, map_location="cpu", weights_only=False).detach()
+        out, st = retarget(clip, source, target, scale, iters=iters, verbose=False)
+        # An under-converged solve can end up WORSE than not retargeting at all
+        # (measured: 25 iters took sub16 from 2.72cm to 4.86cm). Never write that --
+        # it would silently hand training a reference worse than the original.
+        if st["contact_after_cm"] > st["contact_before_cm"]:
+            return (target, os.path.basename(clip_path),
+                    st["contact_before_cm"], st["contact_after_cm"],
+                    f"WORSE {st['contact_before_cm']:.2f}->{st['contact_after_cm']:.2f}cm "
+                    f"(raise --iters)")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        torch.save(out, dst)
+        return (target, os.path.basename(clip_path),
+                st["contact_before_cm"], st["contact_after_cm"], "ok")
+    except Exception as e:                        # never let one clip kill the sweep
+        return (target, os.path.basename(clip_path), None, None, f"ERROR {e!r}")
+
+
+def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=None):
+    """Retarget EVERY clip of `source` onto EVERY target body. This is the
+    preprocessing step that makes the retargeted reference usable for training:
+    one file per (target_body, clip), written to <out_dir>/<body>/<clip>.pt."""
+    import json
+    import multiprocessing as mp
+    from collections import defaultdict
+
+    clips = sorted(f for f in os.listdir(motion_dir)
+                   if f.endswith(".pt") and f.startswith(source + "_"))
+    if limit:
+        clips = clips[:limit]
+    if not clips:
+        raise SystemExit(f"no clips for source '{source}' in {motion_dir}")
+    jobs = [(os.path.join(motion_dir, c), source, t, scale, iters, out_dir)
+            for t in targets for c in clips]
+    print(f"[batch] {len(clips)} clips x {len(targets)} bodies = {len(jobs)} pairs, "
+          f"{workers} workers -> {out_dir}")
+
+    agg, errs, skipped = defaultdict(list), [], 0
+    with mp.Pool(workers) as pool:
+        for i, (tgt, clip, before, after, status) in enumerate(pool.imap_unordered(_one, jobs), 1):
+            if status == "ok":
+                agg[tgt].append((before, after))
+            elif status == "skip":
+                skipped += 1
+            else:
+                errs.append((tgt, clip, status))
+            if i % 50 == 0 or i == len(jobs):
+                print(f"  {i}/{len(jobs)}  (skipped {skipped}, errors {len(errs)})", flush=True)
+
+    # Per-body summary: this is the evidence the retarget actually did something.
+    print(f"\n[batch] per-body contact error (cm), mean over clips:")
+    summary = {}
+    for t in targets:
+        if not agg[t]:
+            continue
+        b = float(np.mean([x[0] for x in agg[t]])); a = float(np.mean([x[1] for x in agg[t]]))
+        summary[t] = dict(before_cm=b, after_cm=a, n=len(agg[t]))
+        print(f"    {t:>8}: {b:6.2f} -> {a:6.2f}   ({len(agg[t])} clips)")
+    if errs:
+        print(f"\n[batch] {len(errs)} FAILURES (not silently dropped):")
+        for t, c, s in errs[:10]:
+            print(f"    {t}/{c}: {s}")
+    with open(os.path.join(out_dir, "retarget_summary.json"), "w") as f:
+        json.dump(dict(source=source, object_scale=list(scale), iters=iters,
+                       summary=summary, errors=[list(e) for e in errs]), f, indent=2)
+    print(f"\n[batch] done -> {out_dir} (summary in retarget_summary.json)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--batch", action="store_true",
+                    help="retarget all clips of --source onto all --targets")
+    ap.add_argument("--motion-dir", default="InterAct/OMOMO_new")
+    ap.add_argument("--targets", nargs="*", help="target bodies, e.g. sub1 sub16 sub100")
+    ap.add_argument("--targets-from", help="env yaml to read subjectBodies from")
+    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
+    ap.add_argument("--limit", type=int, help="only the first N clips (smoke test)")
     ap.add_argument("--clip")
     ap.add_argument("--source", default="sub2")
     ap.add_argument("--target", required=False)
@@ -178,8 +264,18 @@ def main():
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
+    if a.batch:
+        targets = a.targets
+        if a.targets_from:                        # read subjectBodies straight from a cfg
+            import yaml
+            targets = yaml.safe_load(open(a.targets_from))["env"]["subjectBodies"]
+        if not targets:
+            ap.error("--batch needs --targets or --targets-from")
+        batch(a.motion_dir, a.source, targets, a.out_dir, tuple(a.object_scale),
+              a.iters, a.workers, a.limit)
+        return
     if not (a.clip and a.target):
-        ap.error("--clip and --target required (or --selftest)")
+        ap.error("--clip and --target required (or --selftest / --batch)")
     clip = torch.load(a.clip, map_location="cpu", weights_only=False).detach()
     print(f"[retarget] {os.path.basename(a.clip)}  {a.source} -> {a.target}  "
           f"object_scale={a.object_scale}")
