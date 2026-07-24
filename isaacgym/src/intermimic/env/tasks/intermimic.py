@@ -271,6 +271,50 @@ class InterMimic(Humanoid_SMPLX):
         self.target_subject_index = to_torch(target_subject_nums, dtype=torch.long).to(self._init_device)
         self.dataset_index = self.target_subject_index  # alias for back-compat
 
+        # --- Per-body reference retargeting (approach A). When retargetedMotionDir
+        # is set, each TARGET body reads ITS OWN contact-retargeted reference.
+        # obj2motion / pair-weights stay CLIP-level (the sampler picks a clip by
+        # object); every per-MOTION tensor read by data_id is expanded to the
+        # (body, clip) set in BODY-MAJOR order, so data_id = body*n_clips + clip
+        # indexes the right body's reference with NO reader changes. Body-major
+        # matches _env_subject_idx (round-robin over subjectBodies), which the
+        # sampler's body offset uses; the (data_id // n_clips == body) invariant is
+        # asserted at every sample. A missing (body, clip) file fails LOUD rather
+        # than silently falling back to the source reference.
+        self._retarget_dir = cfg['env'].get('retargetedMotionDir', None)
+        self._n_clips = len(self.motion_file)
+        self._retarget_bodies = None
+        if self._retarget_dir:
+            from ...utils.path_utils import resolve_repo_path
+            subj = list(cfg['env']['subjectBodies'])          # body-major order == _env_subject_idx
+            self._retarget_bodies = subj
+            n_b = len(subj)
+            clip_names = [os.path.basename(p) for p in self.motion_file]
+            exp_files, missing = [], []
+            for b in subj:
+                for cn in clip_names:
+                    rel = os.path.join(self._retarget_dir, b, cn)
+                    p = resolve_repo_path(rel)
+                    if os.path.exists(p):
+                        exp_files.append(p)
+                    else:
+                        missing.append(rel)
+            if missing:
+                raise FileNotFoundError(
+                    f"[retarget] {len(missing)} of {n_b * self._n_clips} (body,clip) reference "
+                    f"files missing under '{self._retarget_dir}', e.g. {missing[:3]}. Generate them "
+                    f"(scripts/retarget_contact.py --batch); refusing a silent source fallback.")
+            self.motion_file = exp_files
+            self.object_id = self.object_id.repeat(n_b)                       # body-major
+            self.source_subject_index = self.source_subject_index.repeat(n_b)
+            self.target_subject_index = self.target_subject_index.repeat(n_b)
+            self.dataset_index = self.target_subject_index                    # re-alias after expand
+            source_subject_nums = source_subject_nums * n_b                   # for source_betas below
+            self.num_motions = len(self.motion_file)
+            print(f"[retarget] expanded {self._n_clips} clips x {n_b} bodies = {self.num_motions} "
+                  f"per-body references from '{self._retarget_dir}' "
+                  f"(body-major; data_id = body*{self._n_clips} + clip)", flush=True)
+
         # Load per-subject betas lookup, then assemble per-motion betas tensors
         # so each motion file has (source_betas, target_betas) ready to go for
         # observation conditioning (task #7). The cfg field is OPTIONAL — if
@@ -952,18 +996,32 @@ class InterMimic(Humanoid_SMPLX):
         self._reset_default_env_ids = env_ids
         return
 
+    def _to_body_block(self, clip_ids, env_ids):
+        """Map per-env CLIP ids (in [0, n_clips)) into each env's BODY block for the
+        retargeted (body, clip) motion set: data_id = _env_subject_idx*n_clips + clip.
+        Identity when retargeting is off. Asserts the (data_id // n_clips == body)
+        invariant -- the single guarantee that an env reads ITS OWN body's reference."""
+        if not self._retarget_dir:
+            return clip_ids
+        body = self._env_subject_idx[env_ids].to(clip_ids.device)
+        mid = clip_ids + body * self._n_clips
+        assert torch.all(mid // self._n_clips == body), \
+            "[retarget] body-block invariant violated (env would read the wrong body's reference)"
+        return mid
+
     def _sample_motion_ids(self, env_ids):
         # Pick a motion for each env, restricted to that env's fixed object
         # bucket (env e physically owns object e % num_objects). Uniform by
         # default; if per-(body, source) pair weights are loaded, sample
-        # proportional to W[env's body, candidate motion's source].
+        # proportional to W[env's body, candidate motion's source]. Sampling is
+        # CLIP-level; _to_body_block maps the result into the env's body block.
         n_obj = len(self.object_name)
         if self._pair_weight_per_body is None:
-            return to_torch(
+            return self._to_body_block(to_torch(
                 [torch.where(self.obj2motion[e % n_obj] == 1)[0][
                     torch.randint(int(self.obj2motion[e % n_obj].sum()), ())]
                  for e in env_ids],
-                device=self.device, dtype=torch.long)
+                device=self.device, dtype=torch.long), env_ids)
         out = []
         rec = self._pair_sample_counts is not None
         for e in env_ids:
@@ -983,7 +1041,7 @@ class InterMimic(Humanoid_SMPLX):
                 self._pair_sample_counts[key] = self._pair_sample_counts.get(key, 0) + 1
         if rec:
             self._maybe_flush_pair_counts()
-        return to_torch(out, device=self.device, dtype=torch.long)
+        return self._to_body_block(to_torch(out, device=self.device, dtype=torch.long), env_ids)
 
     def _maybe_flush_pair_counts(self):
         """Write the realized-sample tally to disk every _pair_counts_flush_every
@@ -1026,9 +1084,12 @@ class InterMimic(Humanoid_SMPLX):
 
             i = to_torch(i, device=self.device, dtype=torch.long)
 
-            # Update visit counts
+            # Update visit counts (clip-level, matching the clip-level sampling above)
             for motion_id in i:
                 self._sequence_visit_count[motion_id] += 1
+            # Map clip -> body block AFTER counting, so i matches _sample_motion_ids'
+            # already-body-blocked output for the shared code below (data_id/ref_reward).
+            i = self._to_body_block(i, env_ids)
         else:
             # Random sampling for training (uniform, or pair-weighted if a
             # subjectPairWeightsFile is configured).
@@ -1935,11 +1996,13 @@ class InterMimic(Humanoid_SMPLX):
             # render_all_clips forces every env onto ONE specific clip so we can
             # export a deterministic per-clip video; the normal replay picks a
             # random clip per env (matched to that env's object).
+            _all_envs = torch.arange(self.num_envs, device=self.device)
             if getattr(self, '_force_clip_id', None) is not None:
-                self.data_id = torch.full((self.num_envs,), int(self._force_clip_id),
-                                          device=self.device, dtype=torch.long)
+                self.data_id = self._to_body_block(
+                    torch.full((self.num_envs,), int(self._force_clip_id),
+                               device=self.device, dtype=torch.long), _all_envs)
             else:
-                self.data_id = to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in range(self.num_envs)], device=self.device, dtype=torch.long)
+                self.data_id = self._to_body_block(to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in range(self.num_envs)], device=self.device, dtype=torch.long), _all_envs)
         env_ids = to_torch([i for i in range(self.num_envs)], device=self.device, dtype=torch.long)
         t = to_torch(
                 [
