@@ -749,7 +749,7 @@ class InterMimicAgent(common_agent.CommonAgent):
         self.scaler.update()
         with torch.no_grad():
             reduce_kl = not self.is_rnn
-            kl_dist = torch_ext.policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
+            kl_dist = common_agent.exact_policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
             if self.is_rnn:
                 kl_dist = (kl_dist * rnn_masks).sum() / rnn_masks.numel()  #/ sum_mask
                     

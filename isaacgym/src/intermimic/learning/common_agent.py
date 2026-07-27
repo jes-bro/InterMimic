@@ -38,6 +38,22 @@ from . import a2c_common
 import torch
 from torch import optim
 
+
+def exact_policy_kl(p0_mu, p0_sigma, p1_mu, p1_sigma, reduce=True):
+    """Exact diagonal-Gaussian KL(p0 || p1), summed over action dims.
+
+    Replaces rl_games' torch_ext.policy_kl, whose +1e-5 epsilons bias each dim
+    by ~-0.0016 at our fixed sigma (exp(-2.9)); over ~150 action dims that is a
+    ~-0.25 offset, which (a) makes the logged info/kl negative and unreadable,
+    and (b) breaks AdaptiveScheduler: it sees kl < threshold/2 ALWAYS and
+    ratchets the LR toward its 1e-2 cap. Sigma here is ~5.5e-2, nowhere near
+    underflow, so the epsilons are unnecessary. Identical policies give exactly 0.
+    """
+    c1 = torch.log(p1_sigma / p0_sigma)
+    c2 = (p0_sigma ** 2 + (p1_mu - p0_mu) ** 2) / (2.0 * p1_sigma ** 2)
+    kl = (c1 + c2 - 0.5).sum(dim=-1)
+    return kl.mean() if reduce else kl
+
 from . import amp_datasets as amp_datasets
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -498,7 +514,7 @@ class CommonAgent(a2c_continuous.A2CAgent):
 
         with torch.no_grad():
             reduce_kl = not self.is_rnn
-            kl_dist = torch_ext.policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
+            kl_dist = exact_policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
                     
         self.train_result = {
             'entropy': entropy,
