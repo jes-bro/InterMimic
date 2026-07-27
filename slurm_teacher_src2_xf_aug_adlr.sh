@@ -7,8 +7,8 @@
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 
-#SBATCH --job-name="tch-src2_xf_aug_adlr"
-#SBATCH --output=teacher-src2_xf_aug_adlr-%j.out
+#SBATCH --job-name="tch-src2_xf_aug_adlr2"
+#SBATCH --output=teacher-src2_xf_aug_adlr2-%j.out
 
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=ALL
@@ -21,7 +21,9 @@
 # can be attributed -- if adlr alone matches normval_adlr, normalization added
 # nothing; if normval_adlr wins, the combination is the lever.
 #
-# Runs from repo root. Saves to checkpoints/smplx_teacher_src2_xf_aug_adlr/nn/.
+# Runs from repo root. Saves to checkpoints/smplx_teacher_src2_xf_aug_adlr2/nn/
+# (_adlr2: fresh experiment name so auto-resume can never pick up a checkpoint
+# from an earlier attempt with the broken kl_threshold 0.008).
 
 source ~/.bashrc
 conda deactivate
@@ -35,7 +37,7 @@ CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src2_xf_aug_a
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 
 echo "[teacher] ADLR A/B: source=sub2 x 13 real + 40 synthetic bodies, neutral betas + body-norm + pose, lr_schedule=adaptive (normalize_value=False)"
-echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src2_xf_aug_adlr/nn/"
+echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src2_xf_aug_adlr2/nn/"
 
 # --- auto-resume: continue from the latest checkpoint if one exists. resume_from
 # loads mimic.pth at agent-init BEFORE any new save, so it never clobbers progress.
