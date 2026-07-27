@@ -37,29 +37,33 @@ params:
 
   config:
     name: mimic
-    # SOURCE-TEACHER: adaptive-LR A/B. Identical to src2_xf_aug EXCEPT lr_schedule=adaptive + kl_threshold added.
-    full_experiment_name: smplx_teacher_src2_xf_aug_adlr
+    # SOURCE-TEACHER (normval + adaptive-LR arm): the _normval A/B showed
+    # normalize_value learns FASTER mid-run but suffers recurring one-epoch
+    # catastrophic updates (KL spikes 36-155 at constant LR 2e-5) that erase the
+    # lead. This arm keeps normalize_value=True and adds the adaptive KL-based
+    # LR schedule (same knob as the _adlr variant) to suppress those blowups.
+    # Two knobs vs the src2_xf_aug baseline; single knob vs either A/B arm.
+    full_experiment_name: smplx_teacher_src2_xf_aug_normval_adlr
     env_name: rlgpu
     multi_gpu: False
     ppo: True
     mixed_precision: False
     normalize_input: True
-    normalize_value: False
+    normalize_value: True     # knob 1: critic value-target normalization (as in _normval)
     reward_shaper:
       scale_value: 1
     normalize_advantage: True
     gamma: 0.99
     tau: 0.95
     learning_rate: 2e-5
-    lr_schedule: adaptive         # <-- was 'constant'; adapts LR to keep KL near kl_threshold
+    lr_schedule: adaptive         # knob 2: adapts LR to keep KL near kl_threshold (as in _adlr)
     # kl_threshold is calibrated to the EXACT-KL scale (see exact_policy_kl in
     # learning/common_agent.py; the biased rl_games estimator is not used).
     # Healthy epochs at LR 2e-5 measure exact-KL ~= 0.06 over the 153-dim action
     # space, so 0.06 keeps LR steady in the stable regime (band 0.03-0.12) and
-    # slams it down on blowup epochs. Do NOT use rl_games' 0.008 default here --
-    # that scale assumes both the (biased) stock estimator and a much smaller
-    # action space. With the stock estimator (bias ~-0.25) ANY threshold breaks:
-    # the scheduler would see kl < threshold/2 always and ratchet LR to 1e-2.
+    # slams it down on the blowup epochs (KL 36-155) that collapsed the _normval
+    # run. Do NOT use rl_games' 0.008 default here -- that scale assumes both the
+    # (biased) stock estimator and a much smaller action space.
     kl_threshold: 0.06
     score_to_win: 20000
     max_epochs: 100000
