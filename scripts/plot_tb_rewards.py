@@ -113,6 +113,11 @@ def main(argv=None):
                         "/frame and /time variants of it are read)")
     p.add_argument("--smoothing", type=float, default=0.97,
                    help="EMA weight, TensorBoard-style (default 0.97)")
+    p.add_argument("--max-frames", type=float, default=None, metavar="BILLIONS",
+                   help="clip the x-axis to this many BILLION env frames (and the "
+                        "time panel to the wall-clock hours that budget took). Use "
+                        "when comparing runs of very different lengths, so the "
+                        "short ones are not squeezed into a stub.")
     p.add_argument("--out", required=True, help="output PNG path")
     args = p.parse_args(argv)
 
@@ -126,7 +131,8 @@ def main(argv=None):
     fig, (ax_frames, ax_time) = plt.subplots(
         1, 2, figsize=(12, 4.8), facecolor=SURFACE, sharey=True)
 
-    summary = []  # (label, last_frame, last_value) for the console report
+    summary = []      # (label, steps, smoothed) for the console report
+    end_labels = []   # (y, x, label, color) direct labels, placed after the loop
     for i, (label, run_dir) in enumerate(runs):
         color = SERIES_COLORS[i % len(SERIES_COLORS)]
         # x = env frames, from the '<tag>/frame' variant's step field
@@ -134,15 +140,38 @@ def main(argv=None):
         smoothed = ema(vals, args.smoothing)
         hours = (walls - walls[0]) / 3600.0  # wall clock, relative to run start
 
+        # Clip to a shared frame budget. EMA is causal, so smoothing the full
+        # series then clipping gives the same values as clipping first.
+        if args.max_frames is not None:
+            keep = steps <= args.max_frames * 1e9
+            if not keep.any():
+                raise ValueError(f"{label}: no data at or below "
+                                 f"{args.max_frames}B frames (run starts at "
+                                 f"{steps[0]/1e9:.3f}B)")
+            steps, vals, smoothed, hours = (steps[keep], vals[keep],
+                                            smoothed[keep], hours[keep])
+
         for ax, x in ((ax_frames, steps / 1e9), (ax_time, hours)):
             ax.plot(x, vals, color=color, linewidth=1.0, alpha=0.18)
             ax.plot(x, smoothed, color=color, linewidth=2.0, label=label)
 
         # Direct label at each curve's end so identity isn't color-alone.
-        ax_frames.annotate(
-            f" {label}", (steps[-1] / 1e9, smoothed[-1]), color=color,
-            fontsize=9, fontweight="bold", va="center")
+        # Collected here, placed after the loop so near-equal endpoints can be
+        # nudged apart instead of overprinting each other.
+        end_labels.append((smoothed[-1], steps[-1] / 1e9, label, color))
         summary.append((label, steps, smoothed))
+
+    # Place end labels, enforcing a minimum vertical gap (in data units) so
+    # curves finishing at similar rewards stay readable.
+    ylo, yhi = ax_frames.get_ylim()
+    min_gap = 0.055 * (yhi - ylo)
+    placed = []
+    for y, x, label, color in sorted(end_labels):      # bottom-up
+        y_text = y if not placed or y - placed[-1] >= min_gap else placed[-1] + min_gap
+        placed.append(y_text)
+        ax_frames.annotate(
+            f" {label}", xy=(x, y), xytext=(x, y_text), color=color,
+            fontsize=9, fontweight="bold", va="center", annotation_clip=False)
 
     # Console read-out: final smoothed values, plus the comparison at a COMMON
     # frame budget (runs stop at different frame counts; comparing last values
