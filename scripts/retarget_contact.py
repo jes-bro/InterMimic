@@ -10,8 +10,13 @@ it cannot exactly satisfy and has to burn samples absorbing the discrepancy.
 
 This script fixes the reference: it re-solves dof_pos so the TARGET body
 reproduces the source's world-space body positions -- with extra weight on the
-bodies that are in contact -- then recomputes body_pos and ig from that solution.
+bodies that are in contact -- then recomputes body_pos from that solution.
 Output is a clip in the identical [T, 591] layout, so training loads it normally.
+
+NOT recomputed: `ig` (interaction geometry) and the contact flags. That is sound
+for this solve because the target is made to reproduce the SOURCE's world body
+positions, so the human-object relationship those fields encode is preserved to
+within the solve residual (sub16 2.7 -> 0.13 cm).
 
 Two modes (the object side is a scale factor, so both are the same solve):
   --object-scale 1.0        body-only retarget      (original object)
@@ -20,8 +25,16 @@ When the object is scaled, the contact targets move with the surface, so the
 solve pulls the hands onto the NEW surface.
 
 Layout of a clip tensor [T, 591] (see intermimic.py _load_motion):
-  0:3 root_pos | 3:9 root_rot(6d) | 9:162 dof_pos(51*3) | 162:318 body_pos(52*3)
-  318:321 obj_pos | 321:325 obj_rot | ... | 330:331 contact_obj | 331:383 contact_human
+  0:3 root_pos | 3:7 root_rot QUATERNION (x,y,z,w) | 7:9 zero pad | 9:162 dof_pos(51*3)
+  162:318 body_pos(52*3, WORLD frame) | 318:321 obj_pos | 321:325 obj_rot
+  ... | 330:331 contact_obj | 331:383 contact_human
+
+VERIFIED against OMOMO_new: cols 3:7 have unit norm (1 - 3e-9) and cols 7:9 are
+exactly 0; decoding 3:7 as an (x,y,z,w) quaternion and running the FK below
+reproduces the stored body_pos to 0.10 mm mean / 0.27 mm max (sub2/sub6/sub9).
+An earlier version of this header called 3:9 a 6D rotation -- it is NOT, and
+building a matrix from those 6 numbers yields a non-orthonormal garbage frame
+(|RR^T - I| = 0.84). tests/test_retarget_fk.py pins this.
 
   python3 scripts/retarget_contact.py --selftest
   python3 scripts/retarget_contact.py --clip InterAct/OMOMO_new/sub2_largetable_000.pt \
@@ -39,9 +52,28 @@ from smplx_pose import _parse_mjcf_tree                      # noqa: E402
 
 MJCF = "isaacgym/src/intermimic/data/assets/smplx/smplx_omomo_%s.xml"
 DOF, NB = 153, 52
+I_ROOTP, I_ROOTQ = slice(0, 3), slice(3, 7)      # root_pos | root quat (x,y,z,w)
 I_DOF, I_BODY = slice(9, 162), slice(162, 318)
 I_OBJP, I_OBJR = slice(318, 321), slice(321, 325)
 I_CONTACT_H = slice(331, 383)
+# FK-vs-data agreement gate. Measured 0.10 mm mean / 0.27 mm max on OMOMO_new
+# (sub2/sub6/sub9); 5 mm is ~50x headroom yet still catches any frame or
+# convention error, which show up as centimetres-to-metres.
+FK_TOL_M = 0.005
+
+
+def quat_xyzw_to_mat(q):
+    """(T,4) unit quaternion in (x,y,z,w) order -> (T,3,3) rotation matrices.
+
+    The clip's root rotation uses x,y,z,w (verified: this decoding makes the FK
+    reproduce the stored body_pos to 0.1 mm; the w,x,y,z reading is off by 1.57).
+    """
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    return torch.stack([
+        torch.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1),
+        torch.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1),
+        torch.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1),
+    ], -2)
 
 
 # ---------------------------------------------------------------- differentiable FK
@@ -59,9 +91,14 @@ class MJCFChain:
         assert len(self.names) == NB, f"{subject}: expected {NB} bodies, got {len(self.names)}"
 
     def fk(self, dof, root_pos=None, root_rot=None):
-        """dof (T,153) -> body positions (T, 52, 3). Root defaults to identity: a
-        shared root cancels when comparing two bodies, and the solve is done in the
-        same frame the targets are built in."""
+        """dof (T,153) -> body positions (T, 52, 3).
+
+        Pass root_pos/root_rot to get WORLD-frame positions -- the frame the clip's
+        body_pos field is in, and the only frame safe to write out. Omitting them
+        yields root-local, root-rotation-cancelled coordinates: fine for comparing
+        two chains under identical dof (the shared root cancels), catastrophic if
+        written to a clip, which is exactly the bug that produced ~0 reward.
+        """
         T = dof.shape[0]
         d = dof.view(T, 51, 3)
         R = _expmap(d)                                   # (T,51,3,3)
@@ -101,14 +138,39 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
              w_contact=10.0, w_pose=1.0, w_reg=0.1, device="cpu", verbose=True):
     """Re-solve dof_pos so `target`'s body reproduces `source`'s world body positions,
     weighting bodies that are in contact. Returns (new_clip, stats)."""
-    clip = clip.to(torch.float64)
+    # .detach(): some OMOMO_new clips were saved with requires_grad=True, which
+    # makes every slice non-leaf and Adam refuse the dof ("can't optimize a
+    # non-leaf Tensor"). We never want autograd history from the loaded data.
+    clip = clip.detach().to(torch.float64)
     dof_src = clip[:, I_DOF].clone().to(device)
     contact_h = clip[:, I_CONTACT_H].to(device)                 # (T,52) binary
     src_chain, tgt_chain = MJCFChain(source, device), MJCFChain(target, device)
 
+    # WORLD frame throughout. The solve itself is invariant to this choice (the
+    # loss is a distance, and both sides get the same rigid root transform), but
+    # the OUTPUT body_pos field is world-frame, and the object-scale branch below
+    # mixes in world-space obj_pos -- so root-local FK here silently corrupts both.
+    root_p = clip[:, I_ROOTP].to(device)
+    root_R = quat_xyzw_to_mat(clip[:, I_ROOTQ].to(device))
+
     # Targets = where the SOURCE body actually was (its FK, same frame convention).
     with torch.no_grad():
-        p_src = src_chain.fk(dof_src)                           # (T,52,3)
+        p_src = src_chain.fk(dof_src, root_pos=root_p, root_rot=root_R)   # (T,52,3) world
+
+        # GATE: for a clip of subject S, FK(S, dof, root) MUST reproduce the clip's
+        # own stored body_pos. This is the check whose absence let a root-local
+        # write (1.34 m off, world-vs-local) ship and silently kill training --
+        # --selftest compares FK to FK, so shared convention errors cancel there.
+        # Fail loudly rather than emit references no policy can follow.
+        fk_err = (p_src - clip[:, I_BODY].to(device).reshape(-1, NB, 3)).norm(dim=-1)
+        if fk_err.mean() > FK_TOL_M:
+            raise RuntimeError(
+                f"FK does not reproduce the clip's stored body_pos for source "
+                f"'{source}': mean {fk_err.mean()*1000:.2f} mm, max "
+                f"{fk_err.max()*1000:.2f} mm (tolerance {FK_TOL_M*1000:.1f} mm). "
+                f"Expected ~0.1 mm. Either the clip is not this subject's, or a "
+                f"layout/convention assumption is wrong -- refusing to write a "
+                f"retarget built on a broken forward model.")
     # An anisotropically scaled object moves its surface; contact targets follow it.
     s = torch.tensor(object_scale, dtype=torch.float64, device=device)
     if not torch.allclose(s, torch.ones(3, dtype=torch.float64, device=device)):
@@ -125,7 +187,7 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
     opt = torch.optim.Adam([dof], lr=lr)
     for it in range(iters):
         opt.zero_grad()
-        p = tgt_chain.fk(dof)
+        p = tgt_chain.fk(dof, root_pos=root_p, root_rot=root_R)
         err = ((p - p_goal) ** 2).sum(-1)                        # (T,52)
         loss = (w * err).mean() + w_reg * ((dof - dof_src) ** 2).mean()
         loss.backward()
@@ -134,8 +196,8 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
             print(f"    it {it:4d}  loss {loss.item():.6f}")
 
     with torch.no_grad():
-        p_new = tgt_chain.fk(dof)
-        p_before = tgt_chain.fk(dof_src)
+        p_new = tgt_chain.fk(dof, root_pos=root_p, root_rot=root_R)
+        p_before = tgt_chain.fk(dof_src, root_pos=root_p, root_rot=root_R)
         cm = (contact_h > 0.5)
         def _e(p):
             d = (p - p_goal).norm(dim=-1)
