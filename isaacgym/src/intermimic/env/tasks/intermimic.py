@@ -14,6 +14,7 @@ import trimesh
 import imageio
 
 from ...utils.path_utils import resolve_data_path
+from ...utils.psi_update import psi_buffer_update
 
 
 # ----------------------------------------------------------------------------
@@ -1500,38 +1501,28 @@ class InterMimic(Humanoid_SMPLX):
             reset_ind = torch.logical_and(reset_ind, self.max_episode_length[self.data_id] > self.rollout_length)
             if reset_ind.sum() < 0.995:
                 return
-            curr_reward = self._curr_reward[reset_ind]
             state = self._curr_state[reset_ind]
-            # Initialize the reward tensor with zeros
-            reward = torch.zeros((curr_reward.shape[0], self.hoi_refs.shape[0], self.hoi_refs.shape[2]), device=curr_reward.device)
             end_i = torch.minimum(max_episode_length, self.rollout_length + start_index)
 
             assert (end_index < end_i).all()
-            # Loop through each example in the batch to assign the values from curr_reward to the correct slices in reward
-
-            # data_num, sample_choice, time, feature
-
-            for i in range(curr_reward.shape[0]):
-                if end_index[i] > start_index[i]+30:  # Ensure the indices are valid
-                    index_tensor = torch.arange(start_index[i]+10, end_index[i]-10, device=start_index.device)
-                    reward[i, data_id[i], start_index[i]+10:end_index[i]-10] = ((end_index[i] - index_tensor) / (end_i[i] - index_tensor))
-
-            adjust_reward, adjust_reward_index = reward.max(dim=0)
-            for i in range(reward.shape[1]):
-                if self.max_episode_length[i] < self.rollout_length:
-                    continue
-                for j in range(reward.shape[2]):
-                    if self.max_episode_length[i] - j < self.rollout_length:
-                        break
-                    value, index = self.ref_reward[i, 1:, j].min(dim=0)
-                    index = index + 1
-                    id1 = adjust_reward_index[i, j]
-                    idx = j - start_index[adjust_reward_index[i, j]]
-
-                    if idx > 0 and idx < self.rollout_length and adjust_reward[i, j] > 0.5:
-                        self.ref_reward[i, index, j] = adjust_reward[i, j]
-                        # state is on GPU; hoi_refs may be on CPU (cpuMotionData) -> match its device
-                        self.hoi_refs[i, index, j] = state[id1, idx].to(self.hoi_refs.device)
+            # Was: allocate (n_reset, num_motions, T) and walk every motion x timestep
+            # on every reset -- cost scaling with the dataset instead of with what
+            # reset. Body-major retargeting takes num_motions from 293 to 2704, i.e.
+            # 1.9 GB and ~1M Python iterations per batch, and ~3x slower steps.
+            # psi_buffer_update is bit-identical (tests/test_psi_update.py) and works
+            # only over data_id.unique(), which is all that can be written.
+            #
+            # NOTE (pre-existing, deliberately preserved): data_id/start_index/
+            # end_index come from the FIRST reset_ind above, while `state` is indexed
+            # with the narrowed one on the line before. If the narrowing ever drops an
+            # env these disagree elementwise. It is a no-op whenever every motion is
+            # longer than rollout_length, which is why it has not bitten; fixing it
+            # would change results, so it stays until that is a deliberate decision.
+            psi_buffer_update(
+                data_id=data_id, start_index=start_index, end_index=end_index,
+                end_i=end_i, state=state, ref_reward=self.ref_reward,
+                hoi_refs=self.hoi_refs, max_episode_length=self.max_episode_length,
+                rollout_length=self.rollout_length)
             self.ref_reward[:, 1:, :] = self.ref_reward[:, 1:, :] * (1 - 1e-5)
         return
 
