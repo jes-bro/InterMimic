@@ -28,10 +28,11 @@
 # 7d rather than the original 2h. (scontrol could not extend the running test job
 # -- raising a live job's TimeLimit is operator-only on this cluster.)
 #
-# NOTE ON auto-resume: slurm_teacher_src2_xf_aug_retarget.sh resumes from its
-# latest checkpoint. That is deliberately ABSENT here. A throughput test must
-# start fresh every time, or you measure a warm run against a cold one. If a
-# checkpoint dir exists from a previous test, delete it before re-running.
+# NOTE ON auto-resume: originally absent here on purpose (a throughput test must
+# start cold, or you compare a warm run to a cold one). Now that this is a real
+# training arm it needs to survive requeues, so the block from
+# slurm_teacher_src2_xf_aug_retarget.sh is in. If you ever want a clean fps
+# measurement again, delete the checkpoint dir first so it starts fresh.
 #
 # Runs from repo root.
 
@@ -54,6 +55,20 @@ if ! grep -qE '^\s*cpuMotionData:\s*[Tt]rue' "$CFG_ENV"; then
     echo "[teacher] ERROR: cpuMotionData is not True in $CFG_ENV -- this run would" >&2
     echo "[teacher]        just re-measure the baseline. Aborting." >&2
     exit 1
+fi
+
+# --- auto-resume: continue from the latest checkpoint if one exists (survives the
+# walltime kill / any requeue). resume_from loads mimic.pth at agent-init BEFORE
+# any new save, so it never clobbers progress. Fresh start when no checkpoint yet. ---
+EXP=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$CFG_TRAIN" | awk '{print $2}')
+CKPT="checkpoints/${EXP}/nn/mimic.pth"
+if [ -f "$CKPT" ]; then
+    RESUME_TRAIN="/tmp/${EXP}_resume_${SLURM_JOB_ID}.yaml"
+    sed "s|resume_from: 'None'|resume_from: '${CKPT}'|" "$CFG_TRAIN" > "$RESUME_TRAIN"
+    CFG_TRAIN="$RESUME_TRAIN"
+    echo "[teacher] RESUMING from ${CKPT}"
+else
+    echo "[teacher] fresh start (no checkpoint at ${CKPT})"
 fi
 
 python -u -m intermimic.run \
