@@ -289,14 +289,28 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
                 print(f"  {i}/{len(jobs)}  (skipped {skipped}, errors {len(errs)})", flush=True)
 
     # Per-body summary: this is the evidence the retarget actually did something.
+    # A clip whose contact flags are all zero has no contact error to report, so
+    # retarget() returns nan for it (e.g. sub6 has 3 such clips out of 278, sub9
+    # 3 of 293, sub2 none). Those must be EXCLUDED from the mean, not allowed to
+    # poison it -- a plain mean turns every body's average into nan and the whole
+    # generation looks failed when the data is fine. Counted and reported, not hidden.
     print(f"\n[batch] per-body contact error (cm), mean over clips:")
     summary = {}
     for t in targets:
         if not agg[t]:
             continue
-        b = float(np.mean([x[0] for x in agg[t]])); a = float(np.mean([x[1] for x in agg[t]]))
-        summary[t] = dict(before_cm=b, after_cm=a, n=len(agg[t]))
-        print(f"    {t:>8}: {b:6.2f} -> {a:6.2f}   ({len(agg[t])} clips)")
+        pairs = [(x[0], x[1]) for x in agg[t]]
+        live = [(b, a) for b, a in pairs if not (np.isnan(b) or np.isnan(a))]
+        n_nc = len(pairs) - len(live)
+        if not live:
+            summary[t] = dict(before_cm=float("nan"), after_cm=float("nan"),
+                              n=0, n_no_contact=n_nc)
+            print(f"    {t:>8}:   no clip with any contact frame ({n_nc} clips)")
+            continue
+        b = float(np.mean([x[0] for x in live])); a = float(np.mean([x[1] for x in live]))
+        summary[t] = dict(before_cm=b, after_cm=a, n=len(live), n_no_contact=n_nc)
+        note = f"   [{n_nc} clip(s) had no contact frames, excluded]" if n_nc else ""
+        print(f"    {t:>8}: {b:6.2f} -> {a:6.2f}   ({len(live)} clips){note}")
     if errs:
         print(f"\n[batch] {len(errs)} FAILURES (not silently dropped):")
         for t, c, s in errs[:10]:

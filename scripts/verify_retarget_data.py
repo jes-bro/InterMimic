@@ -32,7 +32,8 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retarget_contact import (  # noqa: E402
-    MJCFChain, NB, I_ROOTP, I_ROOTQ, I_DOF, I_BODY, I_OBJP, quat_xyzw_to_mat)
+    MJCFChain, NB, I_ROOTP, I_ROOTQ, I_DOF, I_BODY, I_OBJP, I_CONTACT_H,
+    quat_xyzw_to_mat)
 
 WORLD_TOL_M = 1e-4      # body0 vs root_pos; exact in practice
 BONE_TOL_M = 2e-3       # vs MJCF rest offsets (measured agreement is ~4e-5)
@@ -71,8 +72,9 @@ def check_clip(path, body, source_dir):
     if fk_e > FK_TOL_M:
         msgs.append(f"INCONSISTENT: FK(dof) vs written body_pos off by {fk_e*1000:.2f} mm")
 
-    # 4. fields the solve does not own must be untouched
+    # 4. fields the solve does not own must be untouched, and 5. did it HELP?
     src = os.path.join(source_dir, os.path.basename(path))
+    stat = None
     if os.path.exists(src):
         s = torch.load(src, map_location="cpu", weights_only=False).detach().double()
         if s.shape != clip.shape:
@@ -81,14 +83,26 @@ def check_clip(path, body, source_dir):
             for name, sl in [("root_pos", I_ROOTP), ("root_rot", I_ROOTQ), ("obj_pos", I_OBJP)]:
                 if (clip[:, sl] - s[:, sl]).abs().max().item() > 1e-6:
                     msgs.append(f"{name} was MODIFIED (must be copied through)")
-            moved = (body_pos - s[:, I_BODY].reshape(T, NB, 3)).norm(dim=-1).mean().item()
-            msgs.append(f"info: moved {moved*100:.2f} cm from source"
-                        + (" (identity: expect ~0)" if body == os.path.basename(path).split("_")[0]
-                           else ""))
+            # Contact error before vs after, recomputed from the written data (no
+            # re-solve). "before" = this body driven by the SOURCE's raw dof, which
+            # is what training used without retargeting; "after" = what was written.
+            # Reported per clip so a body's mean can skip no-contact clips instead
+            # of being poisoned by them (a plain mean turns everything into nan).
+            cm = s[:, I_CONTACT_H] > 0.5
+            if cm.any():
+                goal = s[:, I_BODY].reshape(T, NB, 3)          # source's world positions
+                before = chain.fk(s[:, I_DOF], root_pos=s[:, I_ROOTP],
+                                  root_rot=quat_xyzw_to_mat(s[:, I_ROOTQ]))
+                b = (before - goal).norm(dim=-1)[cm].mean().item() * 100
+                a = (body_pos - goal).norm(dim=-1)[cm].mean().item() * 100
+                stat = (b, a)
+                msgs.append(f"info: contact err {b:.2f} -> {a:.2f} cm")
+            else:
+                msgs.append("info: clip has NO contact frames (excluded from the mean)")
     else:
         msgs.append(f"info: no source clip at {src}, skipped field-preservation check")
 
-    return not any(not m.startswith("info:") for m in msgs), msgs
+    return not any(not m.startswith("info:") for m in msgs), msgs, stat
 
 
 def main(argv=None):
@@ -117,13 +131,28 @@ def main(argv=None):
         fmt = "%Y-%m-%d %H:%M"
         span = (f"{datetime.datetime.fromtimestamp(min(mt)):{fmt}}"
                 f" .. {datetime.datetime.fromtimestamp(max(mt)):{fmt}}")
-        ok, notes = True, []
+        ok, notes, stats = True, [], []
         for c in clips[:args.per_body]:
-            cok, msgs = check_clip(c, body, args.source_dir)
+            cok, msgs, stat = check_clip(c, body, args.source_dir)
             ok &= cok
+            if stat:
+                stats.append(stat)
             notes += [f"      {os.path.basename(c)}: {m}" for m in msgs]
         all_ok &= ok
-        print(f"  {body:>8}: {'PASS' if ok else 'FAIL'}  {len(clips):>4} clips  written {span}")
+        # Efficacy, over the sampled clips that HAVE contact frames. Identity
+        # (source==target) is a no-op by construction, so it is exempt.
+        eff = ""
+        if stats:
+            b = sum(s[0] for s in stats) / len(stats)
+            a = sum(s[1] for s in stats) / len(stats)
+            helped = a < b or b < 0.05
+            eff = f"  contact {b:5.2f} -> {a:5.2f} cm"
+            if not helped:
+                eff += "  <-- DID NOT REDUCE"
+                ok = False
+                all_ok = False
+        print(f"  {body:>8}: {'PASS' if ok else 'FAIL'}  {len(clips):>4} clips  "
+              f"written {span}{eff}")
         for n in notes:
             print(n)
     print(f"\n{'DATA OK -- safe to train on' if all_ok else 'DATA BAD -- do not train on this'}")
