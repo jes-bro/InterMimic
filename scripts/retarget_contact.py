@@ -56,10 +56,28 @@ I_ROOTP, I_ROOTQ = slice(0, 3), slice(3, 7)      # root_pos | root quat (x,y,z,w
 I_DOF, I_BODY = slice(9, 162), slice(162, 318)
 I_OBJP, I_OBJR = slice(318, 321), slice(321, 325)
 I_CONTACT_H = slice(331, 383)
+# Per-body global rotations, 52 quaternions in (x,y,z,w). The loader reads these
+# straight from here (intermimic.py:706) and the reward's `rr` term compares the
+# simulated rotations against them -- so re-solving dof WITHOUT rewriting this
+# field hands the policy a reference whose positions and rotations describe two
+# different poses. Rotations are shape-invariant (Rg[b] = Rg[parent] @ expmap(dof);
+# bone offsets enter only the position recursion), which is why the un-retargeted
+# reference was exactly reachable by every body and this one would not be.
+I_BODYROT = slice(331 + 52, 331 + 52 + 52 * 4)
 # FK-vs-data agreement gate. Measured 0.10 mm mean / 0.27 mm max on OMOMO_new
 # (sub2/sub6/sub9); 5 mm is ~50x headroom yet still catches any frame or
 # convention error, which show up as centimetres-to-metres.
 FK_TOL_M = 0.005
+# Same idea for rotations: measured 0.01 deg on OMOMO_new, so 0.5 deg is ~50x
+# headroom while still catching a wrong quaternion order or a transposed matrix.
+FK_ROT_TOL_DEG = 0.5
+
+
+def _geodesic_deg(A, B):
+    """Angle between two sets of rotation matrices (...,3,3) -> degrees."""
+    rel = A.transpose(-1, -2) @ B
+    tr = rel[..., 0, 0] + rel[..., 1, 1] + rel[..., 2, 2]
+    return torch.rad2deg(torch.arccos(((tr - 1) / 2).clamp(-1, 1)))
 
 
 def quat_xyzw_to_mat(q):
@@ -76,6 +94,46 @@ def quat_xyzw_to_mat(q):
     ], -2)
 
 
+def mat_to_quat_xyzw(R, like=None):
+    """(...,3,3) rotation matrices -> (...,4) unit quaternions in (x,y,z,w).
+
+    Shepperd's method: pick the branch with the largest denominator so the result
+    stays conditioned near 180 degrees, where a naive trace formula divides by ~0.
+
+    `like` (same shape as the output) resolves the q/-q sign ambiguity by matching
+    each quaternion to a reference. Both signs are the same rotation, but the
+    reward decodes the raw components, so writing the branch-arbitrary sign would
+    inject spurious differences against data that used the other one.
+    """
+    m = R.reshape(-1, 3, 3)
+    m00, m01, m02 = m[:, 0, 0], m[:, 0, 1], m[:, 0, 2]
+    m10, m11, m12 = m[:, 1, 0], m[:, 1, 1], m[:, 1, 2]
+    m20, m21, m22 = m[:, 2, 0], m[:, 2, 1], m[:, 2, 2]
+    t = m00 + m11 + m22
+
+    def branch(s, w, x, y, z):
+        return torch.stack([x / s, y / s, z / s, w / s], dim=-1)
+
+    s0 = torch.sqrt((t + 1).clamp_min(1e-12)) * 2
+    q0 = branch(s0, 0.25 * s0 * s0, m21 - m12, m02 - m20, m10 - m01)
+    s1 = torch.sqrt((1 + m00 - m11 - m22).clamp_min(1e-12)) * 2
+    q1 = branch(s1, m21 - m12, 0.25 * s1 * s1, m01 + m10, m02 + m20)
+    s2 = torch.sqrt((1 + m11 - m00 - m22).clamp_min(1e-12)) * 2
+    q2 = branch(s2, m02 - m20, m01 + m10, 0.25 * s2 * s2, m12 + m21)
+    s3 = torch.sqrt((1 + m22 - m00 - m11).clamp_min(1e-12)) * 2
+    q3 = branch(s3, m10 - m01, m02 + m20, m12 + m21, 0.25 * s3 * s3)
+
+    use1 = ((m00 >= m11) & (m00 >= m22)).unsqueeze(-1)
+    use2 = (m11 >= m22).unsqueeze(-1)
+    q = torch.where((t > 0).unsqueeze(-1), q0,
+                    torch.where(use1, q1, torch.where(use2, q2, q3)))
+    q = q / q.norm(dim=-1, keepdim=True)
+    q = q.reshape(*R.shape[:-2], 4)
+    if like is not None:
+        q = torch.where((q * like).sum(-1, keepdim=True) < 0, -q, q)
+    return q
+
+
 # ---------------------------------------------------------------- differentiable FK
 class MJCFChain:
     """Torch forward kinematics for one subject's MJCF, matching smplx_pose.mjcf_fk:
@@ -90,8 +148,9 @@ class MJCFChain:
                                    device=device)
         assert len(self.names) == NB, f"{subject}: expected {NB} bodies, got {len(self.names)}"
 
-    def fk(self, dof, root_pos=None, root_rot=None):
-        """dof (T,153) -> body positions (T, 52, 3).
+    def fk(self, dof, root_pos=None, root_rot=None, return_rot=False):
+        """dof (T,153) -> body positions (T, 52, 3), or (positions, rotations) when
+        return_rot -- the global rotations (T, 52, 3, 3) are computed either way.
 
         Pass root_pos/root_rot to get WORLD-frame positions -- the frame the clip's
         body_pos field is in, and the only frame safe to write out. Omitting them
@@ -117,6 +176,8 @@ class MJCFChain:
                 pg[b] = pg[par] + (Rg[par] @ self.offset[b].to(dof.dtype)).squeeze(-1) \
                     if False else pg[par] + torch.einsum('tij,j->ti', Rg[par], self.offset[b].to(dof.dtype))
                 di += 1
+        if return_rot:
+            return torch.stack(pg, dim=1), torch.stack(Rg, dim=1)
         return torch.stack(pg, dim=1)
 
 
@@ -155,7 +216,8 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
 
     # Targets = where the SOURCE body actually was (its FK, same frame convention).
     with torch.no_grad():
-        p_src = src_chain.fk(dof_src, root_pos=root_p, root_rot=root_R)   # (T,52,3) world
+        p_src, R_src = src_chain.fk(dof_src, root_pos=root_p, root_rot=root_R,
+                                    return_rot=True)                      # (T,52,3) world
 
         # GATE: for a clip of subject S, FK(S, dof, root) MUST reproduce the clip's
         # own stored body_pos. This is the check whose absence let a root-local
@@ -171,6 +233,19 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
                 f"Expected ~0.1 mm. Either the clip is not this subject's, or a "
                 f"layout/convention assumption is wrong -- refusing to write a "
                 f"retarget built on a broken forward model.")
+
+        # Same gate for the ROTATION half: FK(S, dof) must reproduce the clip's own
+        # body_rot. Positions matching does not imply rotations do -- they come from
+        # different columns and a different decode -- and a silent mismatch here
+        # would be written into every output file.
+        q_stored = clip[:, I_BODYROT].to(device).reshape(-1, NB, 4)
+        rot_err = _geodesic_deg(quat_xyzw_to_mat(q_stored.reshape(-1, 4)).reshape(-1, NB, 3, 3),
+                                R_src)
+        if rot_err.mean() > FK_ROT_TOL_DEG:
+            raise RuntimeError(
+                f"FK does not reproduce the clip's stored body_rot for source "
+                f"'{source}': mean {rot_err.mean():.3f} deg, max {rot_err.max():.3f} "
+                f"deg (tolerance {FK_ROT_TOL_DEG} deg). Expected ~0.01 deg.")
     # An anisotropically scaled object moves its surface; contact targets follow it.
     s = torch.tensor(object_scale, dtype=torch.float64, device=device)
     if not torch.allclose(s, torch.ones(3, dtype=torch.float64, device=device)):
@@ -196,7 +271,7 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
             print(f"    it {it:4d}  loss {loss.item():.6f}")
 
     with torch.no_grad():
-        p_new = tgt_chain.fk(dof, root_pos=root_p, root_rot=root_R)
+        p_new, R_new = tgt_chain.fk(dof, root_pos=root_p, root_rot=root_R, return_rot=True)
         p_before = tgt_chain.fk(dof_src, root_pos=root_p, root_rot=root_R)
         cm = (contact_h > 0.5)
         def _e(p):
@@ -206,9 +281,16 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
         stats = dict(contact_before_cm=cb * 100, contact_after_cm=ca * 100,
                      all_before_cm=ab * 100, all_after_cm=aa * 100,
                      contact_frac=cm.to(torch.float64).mean().item())
+        # body_rot must move with the re-solved dof. Sign-matched to the values it
+        # replaces so the q/-q branch choice cannot show up as a fake difference.
+        q_new = mat_to_quat_xyzw(R_new, like=q_stored)
+        stats['body_rot_shift_deg'] = _geodesic_deg(
+            quat_xyzw_to_mat(q_stored.reshape(-1, 4)).reshape(-1, NB, 3, 3), R_new).mean().item()
+
         out = clip.clone()
         out[:, I_DOF] = dof.detach().cpu()
         out[:, I_BODY] = p_new.reshape(p_new.shape[0], -1).cpu()
+        out[:, I_BODYROT] = q_new.reshape(q_new.shape[0], -1).cpu()
     return out.to(torch.float32), stats
 
 
