@@ -1,0 +1,107 @@
+# THROUGHPUT TEST, not a science arm. Identical to omomo_teacher_src2_xf_aug_retarget
+# EXCEPT cpuMotionData: True. The learning setup is untouched -- cpuMotionData only
+# changes WHERE the reference tensors live, not their values, so this run is
+# numerically equivalent to the retarget arm and exists purely to measure fps.
+#
+# Why: job 16390586 (the retarget arm) runs at ~7100 fps step against the
+# src2_xf_aug baseline's ~9000, and its log shows GPU used pinned at 43.5-43.7/44G
+# from step 201 onward -- 99.3% occupancy. The motion tensors are the new cost:
+#   [mem] hoi_data 4.32G (2704,354,1211) + hoi_refs 3.55G (2704,3,354,332) = 7.87G
+# Body-major retargeting took num_motions 52 -> 2704, so those tensors grew ~52x
+# (the 52-motion baseline carried ~0.15G). Offloading them should drop the card to
+# ~36/44G and let the caching allocator stop thrashing.
+#
+# Cost of the offload: ~20MB streamed per step against a ~580ms step (7100 fps over
+# 4096 envs), i.e. well under 1% -- but that is an ESTIMATE. Measuring it is the
+# entire point of this cfg. Read `fps step` and the `[mem]` lines, compare against
+# 16390586, and if it wins, set cpuMotionData on the real arm.
+env:
+  numEnvs: 4096
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: False
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2
+  stateInit: "Hybrid"
+  rolloutLength: 300
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub2']
+  subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17', 'sub100', 'sub101', 'sub102', 'sub103', 'sub104', 'sub105', 'sub106', 'sub107', 'sub108', 'sub109', 'sub110', 'sub111', 'sub112', 'sub113', 'sub114', 'sub115', 'sub116', 'sub117', 'sub118', 'sub119', 'sub120', 'sub122', 'sub123', 'sub124', 'sub125', 'sub126', 'sub127', 'sub128', 'sub129', 'sub130', 'sub131', 'sub132', 'sub133', 'sub134', 'sub135', 'sub136', 'sub137', 'sub138', 'sub139']
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2
+  # --- THE ONE CHANGE vs omomo_teacher_src2_xf_aug_retarget.yaml ---
+  # Keep hoi_data/hoi_refs on CPU and stream per step (_motion_gather). The retarget
+  # cfg's comment that "one source's clips is small, offload would only add per-step
+  # transfer for no VRAM win" predates the 52x body-major expansion -- 7.87G is not
+  # small, and the VRAM win is exactly what we are after.
+  cpuMotionData: True
+  betas_file: scripts/omomo_betas_neutral_aug.npz
+  bodyNormalizedReward: true
+  subjectHeightsFile: scripts/synthetic_heights.json
+  ballSize: 1.
+  numObs: 6524
+  useTransformerObs: true
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+  physicalBufferSize: 3
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+    ig: 5.
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 20.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
