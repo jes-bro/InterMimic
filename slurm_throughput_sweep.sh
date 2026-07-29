@@ -63,20 +63,22 @@ mkdir -p "$OUT_DIR"
 # Default sweep, ordered so the cheap diagnostics run BEFORE the expensive plays.
 # If the sweep dies partway (walltime, node failure) you still have the answers
 # that matter most.
-#   1 control      -- does the harness reproduce ~7100? if not, stop reading.
-#   2 cpumotion    -- settles (a) vs (b).
-#   3 buf10        -- free VRAM at zero learning cost? (20.0 is upstream, untuned)
-#   4 env6144+cpu  -- spend cpumotion's 7.87G on +50% envs.
-#   5 env6144+buf  -- same play, other memory source; keeps refs on the GPU, so
-#                     this is the one to beat if locality is the real cost.
-#   6 env8192+both -- greedy. Expected to OOM; that is a RESULT, not a failure.
+#   1 control      -- the arm as it now stands (cpuMotionData ON, since job 16391296
+#                     settled that at +43% fps step). Should read ~10250 fps step;
+#                     if it does not, the harness is lying and stop reading here.
+#   2 env6144      -- spend the freed 7.87G on +50% envs. THE question now.
+#   3 buf10        -- free more VRAM at zero learning cost (20.0 is upstream, untuned)
+#   4 env6144+buf  -- both memory sources, same env count
+#   5 env8192+buf  -- greedy. May OOM; that is a RESULT, not a failure.
+#
+# NOTE: cpuMotionData is no longer a probe -- it is in the base cfg, so probe 1
+# already has it. Setting CPU_MOTION=1 here would be a no-op duplicate.
 PROBES="${PROBES:-$(cat <<'EOF'
 -
-CPU_MOTION=1
+NUM_ENVS=6144
 BUFFER_MULT=10.0
-CPU_MOTION=1 NUM_ENVS=6144
 BUFFER_MULT=10.0 NUM_ENVS=6144
-CPU_MOTION=1 BUFFER_MULT=10.0 NUM_ENVS=8192
+BUFFER_MULT=10.0 NUM_ENVS=8192
 EOF
 )}"
 
