@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=simurgh
 #SBATCH --partition=simurgh --qos=normal
-#SBATCH --time=02:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -23,9 +23,10 @@
 #   [mem] motion tensors 7.87G on GPU | GPU used 43.5-43.7/44G from step 201 on
 # TARGET: the src2_xf_aug baseline's ~9000 fps step.
 #
-# 2h is deliberate: ~24s/epoch means ~300 epochs, far more than the ~30 needed to
-# read a stable fps. This is not meant to train anything -- kill it once the
-# number is clear.
+# It won: +43% fps step (7150 -> 10250), +32% fps total (5440 -> 7180), i.e.
+# 24.1 -> 18.3 sec/epoch. So this is now a real training arm, and the walltime is
+# 7d rather than the original 2h. (scontrol could not extend the running test job
+# -- raising a live job's TimeLimit is operator-only on this cluster.)
 #
 # NOTE ON auto-resume: slurm_teacher_src2_xf_aug_retarget.sh resumes from its
 # latest checkpoint. That is deliberately ABSENT here. A throughput test must
