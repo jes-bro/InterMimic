@@ -34,6 +34,11 @@
 #              training length -- the default picks each run's LATEST, and arms
 #              that have trained for different numbers of epochs are not
 #              comparable (you would be measuring training length, not the knob).
+#   AT_EPOCH   pick each run's checkpoint NEAREST this epoch instead of its
+#              latest. This is how you compare arms fairly: they train at
+#              different speeds, so their latest checkpoints sit at different
+#              epochs and comparing those measures training length. Prints the
+#              actual epoch chosen per run, and how far off target it is.
 #   NUM_ENVS   default 1024
 #   TIMEOUT    seconds per (body,source) pair, default 900
 #   N_SYNTHETIC / HELDOUT / BODIES / SOURCES  passed through to eval_one.sh
@@ -73,6 +78,28 @@ for spec in $RUNS; do
     if [ -n "$ckpt" ] && [ ! -f "$ckpt" ]; then
         echo "[eval-multi] $run: pinned checkpoint not found: $ckpt" >&2
         BAD="$BAD $run"; continue
+    fi
+    # AT_EPOCH: search the run's checkpoint dir for the snapshot nearest the
+    # target. The dir comes from the pinned path when one is given, else from
+    # whatever eval_one resolves as the latest -- so this works for borrowed
+    # configs (run@other-run-checkpoint) too.
+    if [ -n "${AT_EPOCH:-}" ]; then
+        if [ -n "$ckpt" ]; then nndir=$(dirname "$ckpt")
+        else
+            probe=$(EMIT=1 sh scripts/eval_one.sh "$run" 2>/dev/null | sed -n "s/^CHECKPOINT='\(.*\)'$/\1/p")
+            nndir=$(dirname "$probe")
+        fi
+        near=$(ls -1 "$nndir"/mimic_0*.pth 2>/dev/null | while read -r f; do
+                   n=$(basename "$f" .pth | sed 's/mimic_0*//')
+                   [ -n "$n" ] && echo "$(( n > AT_EPOCH ? n - AT_EPOCH : AT_EPOCH - n )) $n $f"
+               done | sort -n | head -1)
+        if [ -z "$near" ]; then
+            echo "[eval-multi] $run: no mimic_0*.pth in $nndir to match epoch $AT_EPOCH" >&2
+            BAD="$BAD $run"; continue
+        fi
+        off=$(echo "$near" | cut -d' ' -f1); ep=$(echo "$near" | cut -d' ' -f2)
+        ckpt=$(echo "$near" | cut -d' ' -f3-)
+        echo "[eval-multi] $run: epoch $ep (target $AT_EPOCH, off by $off)"
     fi
     plan=$(EMIT=1 sh scripts/eval_one.sh "$run" $ckpt 2>/dev/null) || { BAD="$BAD $run"; continue; }
     ck=$(printf '%s\n' "$plan" | sed -n "s/^CHECKPOINT='\(.*\)'$/\1/p")
