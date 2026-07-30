@@ -29,7 +29,11 @@
 #   DRY=1 RUNS="..." bash slurm_eval_multi.sh    # resolve + print, run nothing
 #
 # Env:
-#   RUNS       space-separated run ids (required)
+#   RUNS       space-separated run ids (required). An entry may pin a specific
+#              checkpoint as run@path, which is how you compare arms at MATCHED
+#              training length -- the default picks each run's LATEST, and arms
+#              that have trained for different numbers of epochs are not
+#              comparable (you would be measuring training length, not the knob).
 #   NUM_ENVS   default 1024
 #   TIMEOUT    seconds per (body,source) pair, default 900
 #   N_SYNTHETIC / HELDOUT / BODIES / SOURCES  passed through to eval_one.sh
@@ -62,8 +66,15 @@ echo
 # hour of the slot. ---
 PLANS=""
 BAD=""
-for run in $RUNS; do
-    plan=$(EMIT=1 sh scripts/eval_one.sh "$run" 2>/dev/null) || { BAD="$BAD $run"; continue; }
+for spec in $RUNS; do
+    run="${spec%%@*}"
+    ckpt=""
+    [ "$spec" != "$run" ] && ckpt="${spec#*@}"
+    if [ -n "$ckpt" ] && [ ! -f "$ckpt" ]; then
+        echo "[eval-multi] $run: pinned checkpoint not found: $ckpt" >&2
+        BAD="$BAD $run"; continue
+    fi
+    plan=$(EMIT=1 sh scripts/eval_one.sh "$run" $ckpt 2>/dev/null) || { BAD="$BAD $run"; continue; }
     ck=$(printf '%s\n' "$plan" | sed -n "s/^CHECKPOINT='\(.*\)'$/\1/p")
     [ -f "$ck" ] || { echo "[eval-multi] $run: checkpoint missing: $ck" >&2; BAD="$BAD $run"; continue; }
     PLANS="$PLANS$run|$(printf '%s' "$plan" | tr '\n' ';')"$'\n'
