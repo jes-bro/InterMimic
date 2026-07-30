@@ -1498,8 +1498,20 @@ class InterMimic(Humanoid_SMPLX):
                 self._sum_reward[reset_ind] = 0
                 return
             self._sum_reward[reset_ind] = 0
-            reset_ind = torch.logical_and(reset_ind, self.max_episode_length[self.data_id] > self.rollout_length)
-            if reset_ind.sum() < 0.995:
+            # NOTE: this narrowing drops resetting envs whose motion is not longer
+            # than rollout_length. It is used ONLY as an "is there anything to do"
+            # test -- `state` must stay on the ORIGINAL mask so its rows line up
+            # elementwise with data_id/start_index/end_index above. Indexing state
+            # with the narrowed mask is what crashed both teacher runs at ~epoch
+            # 1268: winner indexes [0, n_reset) but state had only the narrowed
+            # count of rows, so the gather ran off the end (device-side assert in
+            # IndexKernel.cu). The pre-vectorised loop sized its scratch tensor by
+            # the narrowed count, so it stayed in bounds while silently reading the
+            # WRONG row -- same misalignment, quieter symptom.
+            # Short motions are excluded downstream anyway: psi_update's `eligible`
+            # drops any motion with mel < rollout_length, so those rows are never read.
+            reset_ind_long = torch.logical_and(reset_ind, self.max_episode_length[self.data_id] > self.rollout_length)
+            if reset_ind_long.sum() < 0.995:
                 return
             state = self._curr_state[reset_ind]
             end_i = torch.minimum(max_episode_length, self.rollout_length + start_index)

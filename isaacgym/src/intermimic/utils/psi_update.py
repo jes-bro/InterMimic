@@ -57,6 +57,17 @@ def psi_buffer_update(data_id, start_index, end_index, end_i, state,
     # Original: for each reset i with end > start+30, fill columns
     # [start+10, end-10) with (end_index - t) / (end_i - t). Everything else 0.
     # Kept as an (n_reset, T) plane instead of an (n_reset, num_motions, T) volume
+    # `state` is gathered with reset-row indices in [0, n_reset), so it must have
+    # one row PER RESET, aligned elementwise with data_id/start_index/end_index.
+    # Passing a narrowed `state` gathers off the end and surfaces only as a
+    # device-side assert in IndexKernel.cu, thousands of epochs in, with a
+    # traceback that points here but says nothing about why. Fail readably.
+    if state.shape[0] != n_reset:
+        raise ValueError(
+            f"state has {state.shape[0]} rows but data_id has {n_reset}: these must "
+            f"be indexed with the SAME reset mask, or every row lookup is misaligned "
+            f"(and out of bounds when state is the shorter one).")
+
     # -- the motion axis was one-hot on data_id[i], so it stored nothing.
     long_enough = (end_index > start_index + 30)
     in_window = ((j[None, :] >= (start_index + 10)[:, None])

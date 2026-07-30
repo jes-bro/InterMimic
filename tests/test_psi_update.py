@@ -167,3 +167,31 @@ def test_hoi_refs_on_a_different_device_still_works():
     case = _make_case(0, num_motions=8, n_reset=32)
     case["hoi_refs"] = case["hoi_refs"].to("cpu")
     assert psi_buffer_update(**case) > 0
+
+
+def test_misaligned_state_fails_readably():
+    """A narrowed `state` must raise, not gather off the end of the tensor.
+
+    This is what crashed both teacher runs at ~epoch 1268: the caller built
+    `state` from a narrowed reset mask while data_id/start_index/end_index came
+    from the original one, so `winner` (in [0, n_reset)) indexed past the end of
+    `state`. On CUDA that is an opaque device-side assert in IndexKernel.cu.
+    """
+    import pytest
+    n_reset, T, F, n_motions, slots = 6, 40, 5, 3, 3
+    data_id = torch.tensor([0, 1, 2, 0, 1, 2])
+    start_index = torch.zeros(n_reset, dtype=torch.long)
+    end_index = torch.full((n_reset,), T - 1, dtype=torch.long)
+    end_i = torch.full((n_reset,), T, dtype=torch.long)
+    ref_reward = torch.ones((n_motions, slots, T))
+    hoi_refs = torch.zeros((n_motions, slots, T, F))
+    mel = torch.full((n_motions,), T, dtype=torch.long)
+
+    # state with one row per reset: fine (may or may not write, must not raise)
+    psi_buffer_update(data_id, start_index, end_index, end_i,
+                      torch.randn(n_reset, T, F), ref_reward, hoi_refs, mel, 10)
+
+    # state narrowed to fewer rows: must raise, and name the mismatch
+    with pytest.raises(ValueError, match="same reset mask|rows but data_id"):
+        psi_buffer_update(data_id, start_index, end_index, end_i,
+                          torch.randn(n_reset - 2, T, F), ref_reward, hoi_refs, mel, 10)
