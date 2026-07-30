@@ -35,8 +35,30 @@ CKPT_ARG="${2:-}"
 texp="${RUN#smplx_teacher_}"
 envc="$CFG/omomo_teacher_${texp}.yaml"
 trainc="$CFG/train/rlg/omomo_teacher_${texp}.yaml"
-[ -f "$envc" ]   || { echo "ERROR: env config not found: $envc" >&2; exit 2; }
 [ -f "$trainc" ] || { echo "ERROR: train config not found: $trainc (needed for the network arch)" >&2; exit 2; }
+
+# Some arms vary ONLY the train config -- normval / adlr / normval_adlr / lr4 all
+# reuse omomo_teacher_src2_xf_aug.yaml as their env, so there is no env yaml with
+# a matching name. Recover the env cfg the arm actually ran from its own slurm
+# script, which is authoritative (it is literally what was submitted). Not a
+# guess and not a fallback to some default: if neither the same-named env yaml
+# nor a slurm script naming one exists, that is an error.
+if [ ! -f "$envc" ]; then
+  slurm="slurm_teacher_${texp}.sh"
+  if [ -f "$slurm" ]; then
+    from_slurm=$(grep -m1 '^CFG_ENV=' "$slurm" | cut -d= -f2-)
+    if [ -n "$from_slurm" ] && [ -f "$from_slurm" ]; then
+      echo "[eval_one] $texp has no env cfg of its own; using the one its slurm script ran: $from_slurm" >&2
+      envc="$from_slurm"
+    fi
+  fi
+fi
+[ -f "$envc" ] || {
+  echo "ERROR: env config not found: $envc" >&2
+  echo "       and no CFG_ENV recoverable from slurm_teacher_${texp}.sh" >&2
+  echo "       (train-only arms reuse another arm's env yaml -- pass it explicitly" >&2
+  echo "        or add a slurm script that names it)" >&2
+  exit 2; }
 
 exp=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$trainc" | awk '{print $2}')
 [ -n "$exp" ] || { echo "ERROR: no full_experiment_name in $trainc" >&2; exit 2; }
@@ -111,6 +133,17 @@ BODIES="${BODIES:-$BODIES_DEFAULT}"
 id=$(basename "$CKPT" .pth)
 OUT="${OUT:-eval_results/${exp}__${id}__indist+heldout+syn.csv}"
 
+# EMIT=1: print the resolved plan as shell KEY='VALUE' lines and exit, so a
+# multi-run driver can `eval` it instead of re-implementing the resolution.
+# Arch/betas resolution is the part that fails SILENTLY when wrong (a mismatched
+# betas file corrupts the 32 beta obs dims and still runs), so it must have
+# exactly one implementation -- this one.
+if [ "${EMIT:-0}" = 1 ]; then
+  printf "CHECKPOINT='%s'\nOUT='%s'\nBETAS_FILE='%s'\nBASE_YAML='%s'\nTRAIN_YAML='%s'\nSOURCES='%s'\nBODIES='%s'\nEXP='%s'\n" \
+    "$CKPT" "$OUT" "$BETAS" "$BASE" "$trainc" "$SOURCES" "$BODIES" "$exp"
+  exit 0
+fi
+
 echo "== eval_one: $exp =="
 echo "   arch/betas : $ARCH (numObs=$NOBS) / $BETAS"
 echo "   checkpoint : $CKPT"
@@ -129,6 +162,7 @@ if [ "${DRY:-0}" = 1 ]; then
   echo "   (DRY=1: not submitting)"
   exit 0
 fi
+
 
 CHECKPOINT="$CKPT" OUT="$OUT" BETAS_FILE="$BETAS" \
 BASE_YAML="$BASE" TRAIN_YAML="$trainc" \
