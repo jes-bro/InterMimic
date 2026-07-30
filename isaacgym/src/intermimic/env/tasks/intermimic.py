@@ -777,6 +777,30 @@ class InterMimic(Humanoid_SMPLX):
         self.ref_reward = torch.zeros((self.hoi_refs.shape[0], self.hoi_refs.shape[1], self.hoi_refs.shape[2]), device=self.device)
         self.ref_reward[:, 0, :] = 1.0
 
+        # --- PSI scope. A (motion, timestep) slot can only ever be written if the
+        # motion is at least rollout_length long AND j <= mel - rollout_length (see
+        # `eligible` in utils/psi_update.py). With OMOMO clips at ~200 frames and
+        # rolloutLength 300, almost nothing qualifies -- so PSI can be silently
+        # inert while physicalBufferSize still triples the hoi_refs allocation.
+        # Print the ceiling here so that is visible rather than assumed.
+        if self.psi > 1:
+            mel = self.max_episode_length
+            per_motion = torch.clamp(mel - self.rollout_length + 1, min=0) * (mel >= self.rollout_length)
+            self._psi_eligible = int(per_motion.sum().item())
+            n_elig_motions = int((per_motion > 0).sum().item())
+            valid_cells = int(mel.sum().item())
+            print(f"[psi] buffer {self.psi} slots | eligible: {self._psi_eligible:,} "
+                  f"(motion,timestep) cells across {n_elig_motions:,}/{self.num_motions:,} "
+                  f"motions = {100.0 * self._psi_eligible / max(valid_cells, 1):.2f}% of "
+                  f"{valid_cells:,} valid cells  [gate: motion length >= rolloutLength="
+                  f"{self.rollout_length}]", flush=True)
+            if self._psi_eligible == 0:
+                print("[psi] WARNING: NO cell is eligible -- PSI cannot write anything. "
+                      "physicalBufferSize is costing memory for nothing; lower "
+                      "rolloutLength, or set it to 1 to stop paying for the buffer.",
+                      flush=True)
+            self._psi_resets = 0
+
         self.ref_index = torch.zeros((self.num_envs, ), dtype=torch.long, device=self.device)
 
         # Evaluation metrics tracking per sequence (only if evaluation is enabled)
@@ -1536,6 +1560,20 @@ class InterMimic(Humanoid_SMPLX):
                 hoi_refs=self.hoi_refs, max_episode_length=self.max_episode_length,
                 rollout_length=self.rollout_length)
             self.ref_reward[:, 1:, :] = self.ref_reward[:, 1:, :] * (1 - 1e-5)
+
+            # --- PSI occupancy. Slot 0 is the mocap reference; slots 1: start at 0
+            # and only ever become nonzero when psi_buffer_update writes them (the
+            # 1e-5 decay above shrinks them but never back to 0), so "> 0" is an
+            # exact has-been-written test. Reported against the ELIGIBLE ceiling
+            # printed at startup, not against all cells -- occupancy over cells PSI
+            # is structurally forbidden from touching would look alarming and mean
+            # nothing.
+            self._psi_resets += 1
+            if self._psi_resets % 200 == 1 and getattr(self, "_psi_eligible", 0) > 0:
+                written = int((self.ref_reward[:, 1:, :] > 0).any(dim=1).sum().item())
+                print(f"[psi] occupancy: {written:,}/{self._psi_eligible:,} eligible "
+                      f"cells written ({100.0 * written / self._psi_eligible:.1f}%) "
+                      f"after {self._psi_resets:,} reset batches", flush=True)
         return
 
     def compute_hoi_reset(self, reset_buf, progress_buf, obs_buf, rigid_body_pos,

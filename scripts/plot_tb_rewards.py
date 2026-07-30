@@ -27,6 +27,7 @@ files are an error, not a silent skip.
 """
 
 import argparse
+import glob
 import os
 import sys
 
@@ -42,7 +43,10 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 
 # Chart chrome (light surface) -- palette per the repo's plotting convention:
 # series hues assigned in fixed order, text/grid in neutral ink, not series color.
-SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # blue, orange, aqua, yellow
+# Six hues so a 6-arm comparison never reuses a colour (curves are also direct-
+# labelled at their endpoints, but repeated colours still read as "same run").
+SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+                 "#8a5cf0", "#c2325f"]  # blue, orange, aqua, yellow, violet, crimson
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
 INK_2 = "#52514e"
@@ -60,21 +64,90 @@ def load_scalar(run_dir, tag):
     run_dir = os.path.expanduser(run_dir)
     if not os.path.isdir(run_dir):
         raise FileNotFoundError(f"run dir does not exist: {run_dir}")
-    # size_guidance scalars=0 keeps EVERY point instead of TB's default
-    # reservoir-sampling to 10k (17k+ points here -- we want them all).
-    acc = EventAccumulator(run_dir, size_guidance={"scalars": 0})
-    acc.Reload()
-    tags = acc.Tags()["scalars"]
-    if not tags:
-        raise ValueError(f"no scalar events found under {run_dir} "
-                         f"(is this the summaries/ dir of a run?)")
-    if tag not in tags:
-        raise ValueError(f"tag {tag!r} not in {run_dir}; available: {sorted(tags)}")
-    events = acc.Scalars(tag)
-    steps = np.array([e.step for e in events], dtype=np.float64)
-    walls = np.array([e.wall_time for e in events], dtype=np.float64)
-    vals = np.array([e.value for e in events], dtype=np.float64)
-    return steps, walls, vals
+
+    # A requeued run writes ONE event file per job, so a run dir can hold several.
+    # They are read separately rather than letting EventAccumulator merge a whole
+    # directory, because two things need handling that it does not do:
+    #   * a job that died before writing scalars leaves an EMPTY file (seen: 3 of
+    #     the 4 files in the 'none' dir). Merging them is harmless; erroring on
+    #     them is not, so they are skipped -- but a run with NO usable file still
+    #     raises.
+    #   * resuming restarts from the last checkpoint, so each segment REPLAYS the
+    #     epochs between that checkpoint and the crash (e.g. 1205-1268). Those
+    #     steps appear twice with different values; concatenating gives a
+    #     non-monotonic x-axis and a curve that doubles back on itself.
+    files = sorted(glob.glob(os.path.join(run_dir, "events.out.tfevents*")))
+    if not files:
+        raise FileNotFoundError(f"no event files under {run_dir}")
+
+    # MERGE KEY IS EPOCH, NOT FRAMES. On resume the epoch counter is restored from
+    # the checkpoint and continues (5->349, 305->1268, 1205->3696), but the frame
+    # counter RESTARTS at 131,072 every job. Ordering or deduplicating on frames
+    # therefore interleaves the segments into nonsense; frames have to be rebuilt
+    # cumulatively instead.
+    iter_tag = tag.rsplit("/", 1)[0] + "/iter"
+
+    segments, skipped = [], []
+    for f in files:
+        # size_guidance scalars=0 keeps EVERY point instead of TB's default
+        # reservoir-sampling to 10k (60k+ points here -- we want them all).
+        acc = EventAccumulator(f, size_guidance={"scalars": 0})
+        acc.Reload()
+        have = acc.Tags()["scalars"]
+        if tag not in have or iter_tag not in have:
+            skipped.append(os.path.basename(f))
+            continue
+        ev = acc.Scalars(tag)
+        ep = acc.Scalars(iter_tag)
+        n = min(len(ev), len(ep))
+        segments.append((np.array([e.step for e in ep[:n]], dtype=np.float64),
+                         np.array([e.step for e in ev[:n]], dtype=np.float64),
+                         np.array([e.wall_time for e in ev[:n]], dtype=np.float64),
+                         np.array([e.value for e in ev[:n]], dtype=np.float64)))
+    if not segments:
+        raise ValueError(
+            f"no event file under {run_dir} has tag {tag!r} "
+            f"({len(files)} file(s) checked). Is this a run's summaries/ dir?")
+    if skipped:
+        print(f"  [{os.path.basename(run_dir)}] skipped {len(skipped)} event "
+              f"file(s) with no {tag!r} (empty/aborted jobs)", file=sys.stderr)
+
+    segments.sort(key=lambda s: s[0][0])          # by first EPOCH
+
+    # Frames and wall clock are both rebuilt CUMULATIVELY: each segment counts
+    # only what it did itself, laid end to end. Segment-local frames already count
+    # from that job's start, so they just get the running total added. For time,
+    # using raw timestamps would charge the hours a requeued job sat in the slurm
+    # queue to training.
+    frames_adj, walls_adj = [], []
+    f_off = w_off = 0.0
+    for _, frames_s, walls_s, _ in segments:
+        frames_adj.append(frames_s + f_off)
+        walls_adj.append(walls_s - walls_s[0] + w_off)
+        f_off += frames_s[-1]
+        w_off += walls_s[-1] - walls_s[0]
+
+    epochs = np.concatenate([s[0] for s in segments])
+    frames = np.concatenate(frames_adj)
+    walls = np.concatenate(walls_adj)
+    vals = np.concatenate([s[3] for s in segments])
+    seg_id = np.concatenate([np.full(len(s[0]), i, dtype=np.int64)
+                             for i, s in enumerate(segments)])
+
+    # Sort by epoch, then by segment; keeping the LAST of each duplicated epoch
+    # means the later (post-resume) segment wins on the replayed overlap. The
+    # frames axis still counts the replayed work, because it was really spent.
+    order = np.lexsort((seg_id, epochs))
+    epochs, frames, walls, vals = (epochs[order], frames[order],
+                                   walls[order], vals[order])
+    keep = np.ones(epochs.shape, dtype=bool)
+    keep[:-1] = epochs[1:] != epochs[:-1]
+    n_dup = int((~keep).sum())
+    if len(segments) > 1:
+        print(f"  [{os.path.basename(run_dir)}] merged {len(segments)} segments "
+              f"on epoch (frames restart each resume); dropped {n_dup} replayed "
+              f"point(s)", file=sys.stderr)
+    return frames[keep], walls[keep], vals[keep]
 
 
 def ema(values, weight):
