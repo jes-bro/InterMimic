@@ -9,6 +9,8 @@ the student:
 
   noheldout : 13 non-held-out sources {1,2,3,5,6,7,8,9,11,12,14,15,17}
   no14      : all 17 sources except sub14 (corrupt-source suspect) -> 16 sources
+  no1no14   : the noheldout (in-distribution) set minus sub1 AND sub14 -> 11 sources
+              {2,3,5,6,7,8,9,11,12,15,17}
 
 Writes:
   data/cfg/omomo_all_source_xf_aug_{variant}.yaml            (env)
@@ -35,6 +37,9 @@ CFG = REPO / "isaacgym/src/intermimic/data/cfg"
 VARIANTS = {
     "noheldout": [1, 2, 3, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17],
     "no14":      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17],
+    # In-distribution sources only (as noheldout) but with sub1 dropped as well
+    # as sub14. 11 sources.
+    "no1no14":   [2, 3, 5, 6, 7, 8, 9, 11, 12, 15, 17],
 }
 
 
