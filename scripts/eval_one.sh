@@ -131,7 +131,19 @@ BODIES_DEFAULT="$REAL_BODIES $HELDOUT $SYN_PICK"
 BODIES="${BODIES:-$BODIES_DEFAULT}"
 
 id=$(basename "$CKPT" .pth)
-OUT="${OUT:-eval_results/${exp}__${id}__indist+heldout+syn.csv}"
+# Name the CSV after the experiment the CHECKPOINT actually belongs to, not the
+# config's full_experiment_name. Those differ whenever a checkpoint is pinned from
+# another run -- e.g. evaluating smplx_teacher_src2_xf_aug_scratch, whose own cfg
+# was never committed, by borrowing src2_xf_aug's arch/betas. Naming it for the
+# config would file the result under the wrong run.
+ckexp=$(basename "$(dirname "$(dirname "$CKPT")")")
+if [ "$ckexp" != "$exp" ] && [ -n "$ckexp" ]; then
+  echo "[eval_one] checkpoint belongs to '$ckexp', not this config's '$exp' -- naming the CSV for '$ckexp'" >&2
+  exp_out="$ckexp"
+else
+  exp_out="$exp"
+fi
+OUT="${OUT:-eval_results/${exp_out}__${id}__indist+heldout+syn.csv}"
 
 # EMIT=1: print the resolved plan as shell KEY='VALUE' lines and exit, so a
 # multi-run driver can `eval` it instead of re-implementing the resolution.
