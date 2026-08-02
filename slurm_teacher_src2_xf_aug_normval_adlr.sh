@@ -29,8 +29,13 @@ conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
-# NOTE: the ENV cfg is the SAME file as the baseline -- only the TRAIN cfg differs.
-CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_teacher_src2_xf_aug.yaml
+# NOTE: this arm is TEMPORARILY off the shared baseline env cfg. The _lowbuf copy
+# is byte-identical except default_buffer_size_multiplier 20.0 -> 12.0, because the
+# shared config runs at ~97% of the 44G card and the epoch-11600 resume died in
+# PhysX's startup allocation (job 16433830). The other four arms on the shared yaml
+# are NOT switched until this is validated -- see the _lowbuf header for the
+# acceptance test (no PhysX warnings, [mem] < ~40G, rcg still ~0.618).
+CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_teacher_src2_xf_aug_lowbuf.yaml
 CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src2_xf_aug_normval_adlr.yaml
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 
