@@ -1,0 +1,98 @@
+params:
+  seed: -1
+
+  algo:
+    name: intermimic
+
+  model:
+    name: intermimic
+
+  network:
+    name: intermimic_transformer
+    separate: True
+
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: -2.9
+        fixed_sigma: True
+        learn_sigma: False
+
+    mlp:
+      units: [1024, 1024, 512]
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+      regularizer:
+        name: None
+
+  load_checkpoint: False
+
+  config:
+    name: mimic
+    # SOURCE-TEACHER (normval + adaptive-LR arm): the _normval A/B showed
+    # normalize_value learns FASTER mid-run but suffers recurring one-epoch
+    # catastrophic updates (KL spikes 36-155 at constant LR 2e-5) that erase the
+    # lead. This arm keeps normalize_value=True and adds the adaptive KL-based
+    # LR schedule (same knob as the _adlr variant) to suppress those blowups.
+    # Two knobs vs the src2_xf_aug baseline; single knob vs either A/B arm.
+    # CLEAN-PROVENANCE RERUN of _normval_adlr. Same knobs; the ONLY difference is
+    # the experiment name (-> its own checkpoint dir) and that it pairs with the
+    # _lowbuf env cfg from epoch 0.
+    #
+    # Why: the original run's history is 11,603 epochs at
+    # default_buffer_size_multiplier 20.0 + 5,441 at 12.0, across 3 jobs and 2
+    # nodes. The seam showed no learning effect (40.32 -> 40.75, sd ~1.9), so this
+    # is NOT re-testing the knob -- it is a single-config run for a writeup, where
+    # "one config, one run" beats a footnote about a mid-run buffer change.
+    #
+    # This name MUST stay distinct: sharing full_experiment_name would make both
+    # runs write into the same nn/ dir and clobber the 17,045-epoch original.
+    full_experiment_name: smplx_teacher_src2_xf_aug_normval_adlr_lowbuf
+    env_name: rlgpu
+    multi_gpu: False
+    ppo: True
+    mixed_precision: False
+    normalize_input: True
+    normalize_value: True     # knob 1: critic value-target normalization (as in _normval)
+    reward_shaper:
+      scale_value: 1
+    normalize_advantage: True
+    gamma: 0.99
+    tau: 0.95
+    learning_rate: 2e-5
+    lr_schedule: adaptive         # knob 2: adapts LR to keep KL near kl_threshold (as in _adlr)
+    # kl_threshold is calibrated to the EXACT-KL scale (see exact_policy_kl in
+    # learning/common_agent.py; the biased rl_games estimator is not used).
+    # Healthy epochs at LR 2e-5 measure exact-KL ~= 0.06 over the 153-dim action
+    # space, so 0.06 keeps LR steady in the stable regime (band 0.03-0.12) and
+    # slams it down on the blowup epochs (KL 36-155) that collapsed the _normval
+    # run. Do NOT use rl_games' 0.008 default here -- that scale assumes both the
+    # (biased) stock estimator and a much smaller action space.
+    kl_threshold: 0.06
+    score_to_win: 20000
+    max_epochs: 100000
+    save_best_after: 100
+    save_frequency: 100
+    print_stats: True
+    grad_norm: 1.0
+    entropy_coef: 0.0
+    truncate_grads: False
+    e_clip: 0.2
+    horizon_length: 32
+    minibatch_size: 16384
+    mini_epochs: 6
+    critic_coef: 5
+    clip_value: False
+    seq_len: 4
+    bounds_loss_coef: 10
+    enable_eps_greedy: False
+    save_intermediate: True
+    resume_from: 'None'
