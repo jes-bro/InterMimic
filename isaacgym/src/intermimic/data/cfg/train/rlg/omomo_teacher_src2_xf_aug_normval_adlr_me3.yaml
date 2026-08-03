@@ -1,0 +1,108 @@
+params:
+  seed: -1
+
+  algo:
+    name: intermimic
+
+  model:
+    name: intermimic
+
+  network:
+    name: intermimic_transformer
+    separate: True
+
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: -2.9
+        fixed_sigma: True
+        learn_sigma: False
+
+    mlp:
+      units: [1024, 1024, 512]
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+      regularizer:
+        name: None
+
+  load_checkpoint: False
+
+  config:
+    name: mimic
+    # SOURCE-TEACHER (normval + adaptive-LR arm): the _normval A/B showed
+    # normalize_value learns FASTER mid-run but suffers recurring one-epoch
+    # catastrophic updates (KL spikes 36-155 at constant LR 2e-5) that erase the
+    # lead. This arm keeps normalize_value=True and adds the adaptive KL-based
+    # LR schedule (same knob as the _adlr variant) to suppress those blowups.
+    # Two knobs vs the src2_xf_aug baseline; single knob vs either A/B arm.
+    # mini_epochs 6 -> 3, warm-started from the normval_adlr arm's epoch-21400
+    # checkpoint. ONE knob vs that arm; everything else (incl. the _lowbuf env cfg)
+    # is identical, so the two curves are directly comparable from a shared start.
+    #
+    # WHY: at epoch 21400 the adaptive-LR controller has throttled last_lr to
+    # 7.59e-6 -- below the 2e-5 it started at, and 7.6x below its own 5.77e-5 peak
+    # -- because kl sits pinned at kl_threshold 0.06 and clip_frac is 0.47-0.57
+    # (healthy PPO is ~0.1-0.2). Six passes over each batch compound the policy
+    # shift inside one epoch, so the controller must keep cutting LR to hold KL at
+    # target. The run is slow BY CONSTRUCTION, not by bad luck.
+    #
+    # Fewer inner epochs should reduce per-epoch drift -> KL falls under threshold
+    # -> the controller RAISES lr instead of cutting it. It also cuts the update
+    # phase, which is 34% of wall clock (fps step 12632 vs fps total 8281).
+    # The usual objection (fewer passes = worse sample efficiency) assumes the
+    # passes are useful; at clip_frac 0.5 passes 4-6 are largely clipped away.
+    #
+    # READ AFTER ~1500 EPOCHS: does info/last_lr climb back toward 5e-5, does
+    # info/clip_frac fall, and is the reward slope steeper than the control's?
+    #
+    # This name MUST stay distinct -- sharing full_experiment_name would write into
+    # the control arm's nn/ dir and destroy a 21,400-epoch run.
+    full_experiment_name: smplx_teacher_src2_xf_aug_normval_adlr_me3
+    env_name: rlgpu
+    multi_gpu: False
+    ppo: True
+    mixed_precision: False
+    normalize_input: True
+    normalize_value: True     # knob 1: critic value-target normalization (as in _normval)
+    reward_shaper:
+      scale_value: 1
+    normalize_advantage: True
+    gamma: 0.99
+    tau: 0.95
+    learning_rate: 2e-5
+    lr_schedule: adaptive         # knob 2: adapts LR to keep KL near kl_threshold (as in _adlr)
+    # kl_threshold is calibrated to the EXACT-KL scale (see exact_policy_kl in
+    # learning/common_agent.py; the biased rl_games estimator is not used).
+    # Healthy epochs at LR 2e-5 measure exact-KL ~= 0.06 over the 153-dim action
+    # space, so 0.06 keeps LR steady in the stable regime (band 0.03-0.12) and
+    # slams it down on the blowup epochs (KL 36-155) that collapsed the _normval
+    # run. Do NOT use rl_games' 0.008 default here -- that scale assumes both the
+    # (biased) stock estimator and a much smaller action space.
+    kl_threshold: 0.06
+    score_to_win: 20000
+    max_epochs: 100000
+    save_best_after: 100
+    save_frequency: 100
+    print_stats: True
+    grad_norm: 1.0
+    entropy_coef: 0.0
+    truncate_grads: False
+    e_clip: 0.2
+    horizon_length: 32
+    minibatch_size: 16384
+    mini_epochs: 3            # THE ONE KNOB vs _normval_adlr (was 6). See header.
+    critic_coef: 5
+    clip_value: False
+    seq_len: 4
+    bounds_loss_coef: 10
+    enable_eps_greedy: False
+    save_intermediate: True
+    resume_from: 'None'
