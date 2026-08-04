@@ -14,6 +14,7 @@ import argparse
 import csv
 import glob
 import os
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -52,8 +53,9 @@ def short_run(exp):
     return exp.replace("smplx_teacher_", "")
 
 
-def load(paths):
-    runs = {}
+def load(paths, exclude=()):
+    exclude = set(exclude)
+    loaded = []
     for p in paths:
         rows = list(csv.DictReader(open(p)))
         if not rows:
@@ -61,13 +63,44 @@ def load(paths):
         ckpt = rows[0]["checkpoint"]
         exp = short_run(ckpt.split("/")[1])
         step = int(os.path.basename(ckpt).split("_")[-1].split(".")[0])
+        # Drop excluded bodies (e.g. sub13, whose synthetic near-duplicate sub121
+        # contaminates its held-out eval) BEFORE any grouping/means are computed.
+        rows = [r for r in rows if r["body"] not in exclude]
+        if not rows:
+            raise SystemExit(f"FATAL: {p} has no rows left after excluding {sorted(exclude)}")
         for r in rows:
             r["group"] = body_group(r["body"])
             r["identity"] = r["is_identity"].strip().lower() == "true"
             for k in ("avg_steps", "human_pose_error", "object_pose_error", "success_rate"):
                 r[k] = float(r[k])
-        runs[exp] = {"rows": rows, "step": step, "source": rows[0]["source"]}
+        loaded.append((exp, {"rows": rows, "step": step, "source": rows[0]["source"]}))
+
+    # Two passes, because keying on the experiment name alone would make a second
+    # CSV from the SAME run silently REPLACE the first -- and comparing one run at
+    # two checkpoints (a matched-epoch read) is a normal thing to want. Only the
+    # names that actually repeat get an @<step> suffix, so the common case keeps
+    # its short label.
+    dupes = {e for e, _ in loaded if sum(1 for x, _ in loaded if x == e) > 1}
+    runs = {}
+    for exp, d in loaded:
+        key = f"{exp}@{d['step'] // 1000}k" if exp in dupes else exp
+        if key in runs:
+            raise SystemExit(f"FATAL: two CSVs map to the same key {key!r} "
+                             f"(same run AND same checkpoint passed twice?)")
+        runs[key] = d
     return runs
+
+
+def all_bodies(runs):
+    """Union of bodies across runs, group-ordered. Runs do NOT always cover the
+    same set -- a later eval may be submitted with BODIES="..." over a subset --
+    and taking the first run's set would silently drop columns another run has."""
+    seen = []
+    for r in runs.values():
+        for b in ordered_bodies(r["rows"]):
+            if b not in seen:
+                seen.append(b)
+    return ordered_bodies([{"body": b} for b in seen])
 
 
 def ordered_bodies(rows):
@@ -114,7 +147,11 @@ def draw_bands(ax, bodies, y0=0, y1=1, label=True):
 
 # ----------------------------------------------------------------- figure 1
 def fig_success_bars(runs, out):
-    bodies = ordered_bodies(next(iter(runs.values()))["rows"])
+    # Runs do NOT always cover the same bodies -- a later eval may be submitted
+    # with BODIES="..." over a subset. Take the union so no run's data is dropped,
+    # and leave a visible GAP where a run has no row for a body (np.nan), rather
+    # than plotting a zero, which would read as "scored 0%" instead of "not run".
+    bodies = all_bodies(runs)
     names = list(runs)
     x = np.arange(len(bodies))
     w = 0.8 / len(names)
@@ -123,17 +160,24 @@ def fig_success_bars(runs, out):
     style_ax(ax)
     draw_bands(ax, bodies, y1=1.005)
 
+    if len(names) > len(SERIES):
+        print(f"  [plot] WARNING: {len(names)} runs but only {len(SERIES)} palette "
+              f"slots -- colours repeat after {len(SERIES)}; read the legend order, "
+              f"not the colour alone", file=sys.stderr)
+    missing = {}
     for i, run in enumerate(names):
         lut = {r["body"]: r for r in runs[run]["rows"]}
-        vals = [lut[b]["success_rate"] for b in bodies]
+        vals = [lut[b]["success_rate"] if b in lut else np.nan for b in bodies]
+        gaps = [b for b in bodies if b not in lut]
+        if gaps:
+            missing[run] = gaps
         # 2px surface gap between adjacent bars; 4px rounded data-end at the top.
-        ax.bar(x + i * w - 0.4 + w / 2, vals, w * 0.88, label=run, color=SERIES[i],
+        ax.bar(x + i * w - 0.4 + w / 2, vals, w * 0.88, label=run, color=SERIES[i % len(SERIES)],
                zorder=3, linewidth=0.9, edgecolor=SURFACE)
-        # Ring the identity body (body == source) -- it's the trivial case, not a win.
-        for j, b in enumerate(bodies):
-            if lut[b]["identity"]:
-                ax.plot(x[j] + i * w - 0.4 + w / 2, vals[j] + 2.0, marker="v",
-                        ms=6, color=INK, zorder=5, clip_on=False)
+
+    for run, gaps in missing.items():
+        print(f"  [plot] NOTE {run}: no eval row for {len(gaps)} body(ies) "
+              f"({', '.join(gaps)}) -- drawn as a GAP, not as 0%", file=sys.stderr)
 
     ax.set_xticks(x)
     ax.set_xticklabels(bodies, rotation=45, ha="right")
@@ -141,17 +185,15 @@ def fig_success_bars(runs, out):
     ax.set_ylim(0, 100)
     ax.set_xlim(-0.5, len(bodies) - 0.5)
 
-    handles = [Patch(facecolor=SERIES[i], label=f"{r}  (step {runs[r]['step']:,}, "
+    handles = [Patch(facecolor=SERIES[i % len(SERIES)], label=f"{r}  (step {runs[r]['step']:,}, "
                                                 f"source {runs[r]['source']})")
                for i, r in enumerate(names)]
-    handles.append(plt.Line2D([], [], marker="v", ls="", color=INK,
-                              label="identity body (body == source)"))
     ax.legend(handles=handles, frameon=False, fontsize=9, labelcolor=INK2,
               loc="lower left", bbox_to_anchor=(0, -0.34), ncol=2)
 
     fig.suptitle("Teacher success rate per body", x=0.5, y=0.99, fontsize=15,
                  weight="bold", color=INK)
-    ax.set_title("Held-out and synthetic bodies were never trained on. Higher is better.",
+    ax.set_title("Held-out bodies were never trained on. Higher is better.",
                  fontsize=10, color=INK2, loc="center", pad=26)
     fig.tight_layout(rect=[0, 0.06, 1, 0.97])
     fig.savefig(out, dpi=160, facecolor=SURFACE)
@@ -160,7 +202,7 @@ def fig_success_bars(runs, out):
 
 # ----------------------------------------------------------------- figure 2
 def fig_heatmaps(runs, out):
-    bodies = ordered_bodies(next(iter(runs.values()))["rows"])
+    bodies = all_bodies(runs)
     names = list(runs)
     # (metric, title, higher_is_better) -- one hue each; darker always = "more".
     panels = [("success_rate", "Success rate (%) — higher is better", True),
@@ -169,8 +211,11 @@ def fig_heatmaps(runs, out):
 
     fig, axes = plt.subplots(len(panels), 1, figsize=(15, 9.2), facecolor=SURFACE)
     for ax, (metric, title, hib) in zip(axes, panels):
-        M = np.array([[{r["body"]: r for r in runs[run]["rows"]}[b][metric]
-                       for b in bodies] for run in names])
+        # np.nan where a run has no row for that body -> imshow leaves the cell
+        # blank instead of colouring it as if it were a real (bad) score.
+        M = np.array([[ (lambda lut: lut[b][metric] if b in lut else np.nan)(
+                            {r["body"]: r for r in runs[run]["rows"]})
+                       for b in bodies] for run in names], dtype=float)
         # Darker = better, regardless of metric direction, so the eye reads one way.
         norm = M if hib else -M
         im = ax.imshow(norm, cmap=SEQ, aspect="auto")
@@ -183,9 +228,13 @@ def fig_heatmaps(runs, out):
             s.set_visible(False)
         ax.tick_params(length=0)
 
-        lo, hi = norm.min(), norm.max()
+        lo, hi = np.nanmin(norm), np.nanmax(norm)
         for i in range(M.shape[0]):
             for j in range(M.shape[1]):
+                if np.isnan(M[i, j]):          # body not evaluated for this run
+                    ax.text(j, i, "n/r", ha="center", va="center", fontsize=7,
+                            color=INK3, style="italic")
+                    continue
                 frac = (norm[i, j] - lo) / (hi - lo + 1e-9)
                 txt = f"{M[i, j]:.0f}" if metric == "success_rate" else f"{M[i, j]:.3f}"
                 ax.text(j, i, txt, ha="center", va="center", fontsize=7.6,
@@ -231,7 +280,7 @@ def fig_summary(runs, out):
     for i, run in enumerate(names):
         vals = [sr[run][g] for g in GROUP_ORDER]
         pos = x + i * w - 0.4 + w / 2
-        ax.bar(pos, vals, w * 0.88, color=SERIES[i], zorder=3,
+        ax.bar(pos, vals, w * 0.88, color=SERIES[i % len(SERIES)], zorder=3,
                edgecolor=SURFACE, linewidth=1.2, label=run)
         for px, v in zip(pos, vals):          # direct labels (relief rule)
             ax.text(px, v + 1.2, f"{v:.1f}", ha="center", fontsize=9.5,
@@ -274,7 +323,7 @@ def fig_summary(runs, out):
         else:
             cell.set_text_props(color=INK)
             if c == 0:                        # run name carries its series color
-                cell.get_text().set_color(SERIES[(r - 1) // len(GROUP_ORDER)])
+                cell.get_text().set_color(SERIES[((r - 1) // len(GROUP_ORDER)) % len(SERIES)])
                 cell.get_text().set_weight("bold")
             if c == 3:
                 cell.get_text().set_color(BAND_EDGE[cells[r - 1][3]])
@@ -293,21 +342,30 @@ def main():
     ap.add_argument("--csv", nargs="+", default=sorted(
         glob.glob(os.path.expanduser("~/smplxteacher*result/*.csv"))))
     ap.add_argument("--out", default=os.path.expanduser("~/teacher_eval_figs"))
+    ap.add_argument("--exclude", nargs="*", default=[],
+                    help="bodies to drop from every figure, e.g. --exclude sub13. "
+                         "Output filenames get a _no_<bodies> suffix so existing "
+                         "figures are never overwritten.")
     a = ap.parse_args()
 
     if not a.csv:
         raise SystemExit("FATAL: no CSVs matched. Pass --csv explicitly.")
     os.makedirs(a.out, exist_ok=True)
-    runs = load(a.csv)
+    runs = load(a.csv, exclude=a.exclude)
+    # Suffix added to every output name when bodies are excluded -> new files, the
+    # baseline figures on disk stay untouched.
+    suffix = ("_no_" + "_".join(sorted(a.exclude))) if a.exclude else ""
     print(f"[plot] {len(runs)} runs: {', '.join(runs)}")
+    if a.exclude:
+        print(f"[plot] excluding bodies: {sorted(a.exclude)}  (suffix '{suffix}')")
     for run, d in runs.items():
         counts = {g: sum(1 for r in d["rows"] if r["group"] == g) for g in GROUP_ORDER}
         print(f"[plot]   {run}: source={d['source']} step={d['step']:,} bodies={counts}")
 
-    fig_summary(runs, f"{a.out}/1_summary.png")
-    fig_success_bars(runs, f"{a.out}/2_success_by_body.png")
-    fig_heatmaps(runs, f"{a.out}/3_heatmaps.png")
-    print(f"[plot] wrote 3 figures -> {a.out}")
+    fig_summary(runs, f"{a.out}/1_summary{suffix}.png")
+    fig_success_bars(runs, f"{a.out}/2_success_by_body{suffix}.png")
+    fig_heatmaps(runs, f"{a.out}/3_heatmaps{suffix}.png")
+    print(f"[plot] wrote 3 figures -> {a.out}  (names end in '{suffix}')")
 
 
 if __name__ == "__main__":
