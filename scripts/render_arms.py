@@ -161,10 +161,40 @@ def main():
     ap.add_argument("--frames", type=int, default=900)
     ap.add_argument("--out-dir", default="render_out")
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    ap.add_argument("--allow-mixed-epochs", action="store_true",
+                    help="render arms at DIFFERENT checkpoints anyway (see below)")
     args = ap.parse_args()
 
-    results = [render_one(r, emit_plan(r, args.repo_root), args, args.repo_root)
-               for r in args.runs]
+    plans = {r: emit_plan(r, args.repo_root) for r in args.runs}
+
+    # Arms train at different speeds, so their LATEST checkpoints sit at different
+    # epochs -- rendering those compares training length, not the arms. Refuse by
+    # default rather than emit a caveat nobody carries into the figure.
+    steps = {r: int(re.search(r"mimic_0*(\d+)\.pth", p["CHECKPOINT"]).group(1))
+             if re.search(r"mimic_0*(\d+)\.pth", p["CHECKPOINT"]) else None
+             for r, p in plans.items()}
+    distinct = {s for s in steps.values() if s is not None}
+    if len(distinct) > 1 and not args.allow_mixed_epochs:
+        lo = min(distinct)
+        print("FATAL: arms resolve to DIFFERENT epochs -- this would compare "
+              "training length, not the arms:", file=sys.stderr)
+        for r, s in steps.items():
+            print(f"    {r:44} epoch {s}", file=sys.stderr)
+        print(f"\n  Pin them all to a common epoch (lowest here is {lo}), e.g.:",
+              file=sys.stderr)
+        for r in args.runs:
+            exp = Path(plans[r]["CHECKPOINT"]).parents[1].name
+            print(f"    {r.partition('@')[0]}@checkpoints/{exp}/nn/mimic_{lo:08d}.pth",
+                  file=sys.stderr)
+        print("\n  Or pass --allow-mixed-epochs if the mismatch is the point.",
+              file=sys.stderr)
+        sys.exit(4)
+    if distinct:
+        print(f"[render] all arms pinned at epoch {sorted(distinct)[0]}"
+              if len(distinct) == 1 else
+              f"[render] MIXED epochs {sorted(distinct)} (--allow-mixed-epochs)")
+
+    results = [render_one(r, plans[r], args, args.repo_root) for r in args.runs]
 
     print("\n================ RENDER SUMMARY ================")
     for r in results:
