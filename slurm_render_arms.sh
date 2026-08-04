@@ -52,7 +52,16 @@
 # a comparison.
 
 set -u
-cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Under sbatch, $0 is slurm's COPY of this script in the job spool dir, so
+# dirname "$0" is NOT the repo -- slurm already sets cwd to the submit dir.
+# Use SLURM_SUBMIT_DIR when present, fall back to the script's dir for a plain
+# `bash slurm_*.sh` invocation, then verify we can actually see the repo.
+cd "${SLURM_SUBMIT_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}" || exit 2
+if [ ! -f scripts/eval_one.sh ]; then
+    echo "ERROR: cwd $(pwd) is not the InterMimic repo root (no scripts/eval_one.sh)." >&2
+    echo "       Submit from the repo root: cd <repo> && sbatch $(basename "$0")" >&2
+    exit 2
+fi
 
 RUNS="${RUNS:?set RUNS='run1 run2 ...'}"
 BODY="${BODY:?set BODY=sub16 (the target body to drive)}"

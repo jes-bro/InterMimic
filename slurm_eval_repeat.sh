@@ -45,7 +45,16 @@
 # Output: eval_results/<exp>__<ckpt>__repeat<i>.csv, one per repeat.
 
 set -u
-cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Under sbatch, $0 is slurm's COPY of this script in the job spool dir, so
+# dirname "$0" is NOT the repo -- slurm already sets cwd to the submit dir.
+# Use SLURM_SUBMIT_DIR when present, fall back to the script's dir for a plain
+# `bash slurm_*.sh` invocation, then verify we can actually see the repo.
+cd "${SLURM_SUBMIT_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}" || exit 2
+if [ ! -f scripts/eval_one.sh ]; then
+    echo "ERROR: cwd $(pwd) is not the InterMimic repo root (no scripts/eval_one.sh)." >&2
+    echo "       Submit from the repo root: cd <repo> && sbatch $(basename "$0")" >&2
+    exit 2
+fi
 
 RUN="${RUN:?set RUN=<run id>, e.g. RUN=src2_xf_aug_retarget_cpumotion}"
 CKPT="${CKPT:?set CKPT=<path to a specific mimic_000NNNNN.pth> -- a repeat test must pin the checkpoint}"
