@@ -34,12 +34,20 @@ from matplotlib.patches import Patch
 # and never cycled: >5 arms is an error here, not a wrapped palette.
 SERIES = ["#2a78d6", "#1baf7a", "#eda100", "#4a3aa7", "#e34948"]
 SURFACE, INK, INK2, INK3 = "#fcfcfb", "#0b0b0b", "#52514e", "#8a8880"
-BAND = {"in-dist": "#eef2f6", "held-out": "#fbeceb"}
-BAND_INK = {"in-dist": "#5b6b7a", "held-out": "#b4524f"}
+BAND = {"in-dist": "#eef2f6", "held-out": "#fbeceb", "synthetic": "#f2f0fa"}
+BAND_INK = {"in-dist": "#5b6b7a", "held-out": "#b4524f", "synthetic": "#6a5fa8"}
+GROUPS = ("in-dist", "synthetic", "held-out")
 HELDOUT = {"sub10", "sub13", "sub16"}
 
 
 def group(b):
+    """sub100+ are TARGET-ONLY synthetic training bodies. They are trained on, so
+    they are not held out -- but they are not real captured subjects either, and
+    lumping them in with the 13 real bodies inflates an 'in-distribution' mean
+    with a different kind of body. Own band."""
+    n = int(b[3:])
+    if n >= 100:
+        return "synthetic"
     return "held-out" if b in HELDOUT else "in-dist"
 
 
@@ -90,16 +98,19 @@ def main():
     # holes in an otherwise-shared column, drawn as gaps).
     dropped_bodies = {b for _, b in drops}
     common = set.intersection(*[set(v) | dropped_bodies for _, v in runs])
-    bodies = sorted(common, key=lambda b: (group(b) == "held-out", int(b[3:])))
+    bodies = sorted(common, key=lambda b: (GROUPS.index(group(b)), int(b[3:])))
     if not bodies:
         raise SystemExit("FATAL: these runs share no bodies -- nothing comparable to plot")
 
     x = np.arange(len(bodies))
     w = 0.8 / len(runs)
-    fig, ax = plt.subplots(figsize=(1.55 * len(bodies) + 3.2, 5.4), facecolor=SURFACE)
+    # Width scales with body count but is capped: 21 bodies at 1.55in each would
+    # be a 36-inch, 6000px image. Past ~12 columns the bars just get thinner.
+    _w = min(1.55 * len(bodies) + 3.2, 20.0)
+    fig, ax = plt.subplots(figsize=(_w, 5.4), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
 
-    for g in ("in-dist", "held-out"):
+    for g in GROUPS:
         idx = [i for i, b in enumerate(bodies) if group(b) == g]
         if idx:
             ax.axvspan(min(idx) - 0.5, max(idx) + 0.5, color=BAND[g], zorder=0)
@@ -111,8 +122,8 @@ def main():
         v = [vals.get(b, np.nan) for b in bodies]
         ax.bar(pos, v, w * 0.86, color=SERIES[i], zorder=3,
                linewidth=0.9, edgecolor=SURFACE)     # 2px surface gap between bars
-        for xi, vi in zip(pos, v):                    # direct labels: few enough bars
-            if not np.isnan(vi):
+        for xi, vi in zip(pos, v):                    # direct labels only when legible
+            if len(bodies) <= 12 and not np.isnan(vi):
                 ax.text(xi, vi + 1.5, f"{vi:.0f}", ha="center", va="bottom",
                         fontsize=7.5, color=INK2)
         for xi, b in zip(pos, bodies):                # name the holes, don't hide them
