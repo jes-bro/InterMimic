@@ -39,6 +39,13 @@
 #             draw; several at once shows the spread the number is summarising.
 #   FRAMES    max recorded frames (default 900 = ~30s at 30fps)
 #   OUT       output dir (default render_out/<BODY>)
+#   ALLOW_MIXED_EPOCHS=1
+#             render each arm at its LATEST checkpoint even though they sit at
+#             different epochs. That is a capability snapshot ("what can each arm
+#             do at its best so far"), NOT a method comparison -- arms that have
+#             trained longer are advantaged. Without this, differing epochs are a
+#             hard error, since the accidental version of this mistake is common
+#             and invisible in the resulting figure.
 #
 # Output: <OUT>/<run>__<BODY>.mp4, one per arm. The script cross-checks that every
 # arm loaded the SAME clip and exits 3 if not -- videos of different clips are not
@@ -54,6 +61,8 @@ SOURCE="${SOURCE:-sub2}"
 ATTEMPTS="${ATTEMPTS:-4}"
 FRAMES="${FRAMES:-900}"
 OUT="${OUT:-render_out/${BODY}}"
+MIXED=""
+[ "${ALLOW_MIXED_EPOCHS:-0}" = 1 ] && MIXED="--allow-mixed-epochs"
 
 if [ "${DRY:-0}" != 1 ]; then
     source ~/.bashrc
@@ -68,6 +77,7 @@ echo "[render] runs    : $RUNS"
 echo "[render] body    : $BODY   source: $SOURCE   object: $OBJECT"
 echo "[render] attempts: $ATTEMPTS   frames: $FRAMES"
 echo "[render] out     : $OUT"
+[ -n "$MIXED" ] && echo "[render] MIXED EPOCHS ALLOWED -- capability snapshot, not a method comparison"
 
 # imageio is what actually writes the mp4; intermimic_players.py raises if
 # RECORD_VIDEO is set without it, but checking here fails in seconds instead of
@@ -83,7 +93,7 @@ if [ "${DRY:-0}" = 1 ]; then
     echo "[render] DRY=1 -- would run:"
     echo "  python3 scripts/render_arms.py --runs $RUNS --body $BODY \\"
     echo "      --source $SOURCE --object $OBJECT --attempts $ATTEMPTS \\"
-    echo "      --frames $FRAMES --out-dir $OUT"
+    echo "      --frames $FRAMES --out-dir $OUT $MIXED"
     exit 0
 fi
 
@@ -94,7 +104,7 @@ python3 scripts/render_arms.py \
     --object "$OBJECT" \
     --attempts "$ATTEMPTS" \
     --frames "$FRAMES" \
-    --out-dir "$OUT"
+    --out-dir "$OUT" $MIXED
 rc=$?
 
 echo
