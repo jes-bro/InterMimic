@@ -114,8 +114,14 @@ CLIP_RE = re.compile(r"(InterAct/\S*?(sub\d+_\w+_\d+)\.pt)")
 
 
 def render_one(run, plan, args, repo_root):
+    # numEnvs=1, NOT numEnvs=attempts. The recording camera is attached to a
+    # single env (intermimic_players.py:97, task.envs[_record_env_idx]), so extra
+    # envs are simply off-camera -- and the "wide" preset that was meant to show
+    # them just parks the camera at (15,15,12), making everything unviewably
+    # small. Attempts come SEQUENTIALLY instead: each episode is a fresh attempt,
+    # so recording attempts*episodeLength frames captures that many, all close up.
     cfg = make_render_yaml(plan["BASE_YAML"], args.body, args.source,
-                           args.object, args.attempts, plan["BETAS_FILE"])
+                           args.object, 1, plan["BETAS_FILE"])
     # Filename carries every knob that changes what the video SHOWS: body,
     # attempts, and the checkpoint epoch. Two renders of the same arm that differ
     # in any of those are different experiments and must not share a path --
@@ -136,8 +142,11 @@ def render_one(run, plan, args, repo_root):
     env.update({
         "PYTHONPATH": f"{repo_root}/isaacgym/src:{repo_root}:" + env.get("PYTHONPATH", ""),
         "RECORD_VIDEO": str(out_mp4),
-        "MAX_VIDEO_FRAMES": str(args.frames),
-        "RECORD_VIDEO_WIDE": "1" if args.attempts > 1 else "0",
+        "MAX_VIDEO_FRAMES": str(args.frames if args.frames else
+                                args.attempts * args.episode_len),
+        "RECORD_VIDEO_WIDE": "0",          # never: it is a far-away single-env view
+        "RECORD_VIDEO_CAM_POS": args.cam_pos,
+        "RECORD_VIDEO_CAM_TARGET": args.cam_target,
     })
     cmd = ["python", "-u", "-m", "intermimic.run",
            "--task", "InterMimic",
@@ -145,7 +154,7 @@ def render_one(run, plan, args, repo_root):
            "--cfg_train", plan["TRAIN_YAML"],
            "--test", "--headless",
            "--checkpoint", plan["CHECKPOINT"],
-           "--num_envs", str(args.attempts)]
+           "--num_envs", "1"]
     print(f"\n=== {run} ===\n  ckpt : {plan['CHECKPOINT']}\n"
           f"  betas: {plan['BETAS_FILE']}\n  base : {plan['BASE_YAML']}\n"
           f"  cmd  : {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
@@ -169,8 +178,18 @@ def main():
     ap.add_argument("--object", required=True,
                     help="pins the clip together with maxClipsPerObject=1")
     ap.add_argument("--attempts", type=int, default=4,
-                    help="parallel envs = simultaneous attempts at the same clip")
-    ap.add_argument("--frames", type=int, default=900)
+                    help="SEQUENTIAL episodes to record; each is one attempt at "
+                         "the pinned clip")
+    ap.add_argument("--frames", type=int, default=0,
+                    help="max recorded frames; 0 = attempts * --episode-len")
+    ap.add_argument("--episode-len", type=int, default=300,
+                    help="frames per attempt; must match episodeLength in the cfg")
+    ap.add_argument("--cam-pos", default="2.5,2.5,1.8",
+                    help="camera position x,y,z. Closer = bigger subject. The "
+                         "old default (3,3,2.5) already read small; the previous "
+                         "'wide' preset (15,15,12) was unviewable.")
+    ap.add_argument("--cam-target", default="0,0,0.9",
+                    help="look-at point x,y,z; ~0.9 is torso height")
     ap.add_argument("--out-dir", default="render_out")
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--overwrite", action="store_true",

@@ -34,10 +34,17 @@
 #             single reference clip. Must be an object the SOURCE actually has
 #             clips for, or intermimic.py raises on an empty motion set.
 #   SOURCE    default sub2
-#   ATTEMPTS  parallel envs = simultaneous attempts at the same clip (default 4).
+#   ATTEMPTS  SEQUENTIAL episodes to record (default 4). Each episode is one
+#             attempt at the pinned clip.
 #             success_rate is best-of-~385 attempts, so ONE rollout is a single
 #             draw; several at once shows the spread the number is summarising.
-#   FRAMES    max recorded frames (default 900 = ~30s at 30fps)
+#   FRAMES    max recorded frames; 0 (default) = ATTEMPTS * 300, i.e. exactly
+#             that many complete attempts
+#   CAM_POS / CAM_TARGET
+#             camera "x,y,z" (defaults 2.5,2.5,1.8 -> 0,0,0.9). Move CAM_POS
+#             closer to the origin to fill more of the frame. The camera attaches
+#             to ONE env, so there is no view that shows several envs at once --
+#             which is why attempts are sequential episodes, not parallel envs.
 #   OUT       output dir (default render_out/<BODY>)
 #   ALLOW_MIXED_EPOCHS=1
 #             render each arm at its LATEST checkpoint even though they sit at
@@ -68,7 +75,9 @@ BODY="${BODY:?set BODY=sub16 (the target body to drive)}"
 OBJECT="${OBJECT:?set OBJECT=largetable (pins the clip with maxClipsPerObject=1)}"
 SOURCE="${SOURCE:-sub2}"
 ATTEMPTS="${ATTEMPTS:-4}"
-FRAMES="${FRAMES:-900}"
+FRAMES="${FRAMES:-0}"          # 0 = ATTEMPTS * episode length
+CAM_POS="${CAM_POS:-2.5,2.5,1.8}"
+CAM_TARGET="${CAM_TARGET:-0,0,0.9}"
 OUT="${OUT:-render_out/${BODY}}"
 MIXED=""
 [ "${ALLOW_MIXED_EPOCHS:-0}" = 1 ] && MIXED="--allow-mixed-epochs"
@@ -102,7 +111,7 @@ if [ "${DRY:-0}" = 1 ]; then
     echo "[render] DRY=1 -- would run:"
     echo "  python3 scripts/render_arms.py --runs $RUNS --body $BODY \\"
     echo "      --source $SOURCE --object $OBJECT --attempts $ATTEMPTS \\"
-    echo "      --frames $FRAMES --out-dir $OUT $MIXED"
+    echo "      --frames $FRAMES --cam-pos $CAM_POS --cam-target $CAM_TARGET --out-dir $OUT $MIXED"
     exit 0
 fi
 
@@ -113,6 +122,8 @@ python3 scripts/render_arms.py \
     --object "$OBJECT" \
     --attempts "$ATTEMPTS" \
     --frames "$FRAMES" \
+    --cam-pos "$CAM_POS" \
+    --cam-target "$CAM_TARGET" \
     --out-dir "$OUT" $MIXED
 rc=$?
 
