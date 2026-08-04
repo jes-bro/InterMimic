@@ -116,9 +116,21 @@ CLIP_RE = re.compile(r"(InterAct/\S*?(sub\d+_\w+_\d+)\.pt)")
 def render_one(run, plan, args, repo_root):
     cfg = make_render_yaml(plan["BASE_YAML"], args.body, args.source,
                            args.object, args.attempts, plan["BETAS_FILE"])
-    label = f"{run.partition('@')[0]}__{args.body}"
+    # Filename carries every knob that changes what the video SHOWS: body,
+    # attempts, and the checkpoint epoch. Two renders of the same arm that differ
+    # in any of those are different experiments and must not share a path --
+    # relying on the caller to pass a distinct --out-dir is how one silently
+    # overwrites the other.
+    step = re.search(r"mimic_0*(\d+)\.pth", plan["CHECKPOINT"])
+    stamp = f"ep{int(step.group(1))}" if step else "eplatest"
+    label = f"{run.partition('@')[0]}__{args.body}__{stamp}__x{args.attempts}"
     out_mp4 = Path(args.out_dir) / f"{label}.mp4"
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
+    if out_mp4.exists() and not args.overwrite:
+        raise SystemExit(
+            f"FATAL: {out_mp4} already exists. Refusing to overwrite a render.\n"
+            f"  Pass --overwrite if replacing it is what you want, or use a "
+            f"different --out-dir.")
 
     env = dict(os.environ)
     env.update({
@@ -161,6 +173,8 @@ def main():
     ap.add_argument("--frames", type=int, default=900)
     ap.add_argument("--out-dir", default="render_out")
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    ap.add_argument("--overwrite", action="store_true",
+                    help="replace an existing mp4 (default: refuse)")
     ap.add_argument("--allow-mixed-epochs", action="store_true",
                     help="render arms at DIFFERENT checkpoints anyway (see below)")
     args = ap.parse_args()
