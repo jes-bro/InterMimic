@@ -66,7 +66,8 @@ def emit_plan(run, repo_root):
     return plan
 
 
-def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file):
+def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file,
+                     motion_dir=None, playdataset=False):
     """Patch the arch-matched TEST yaml into a single-clip render config.
 
     Regex-on-text rather than yaml round-trip, matching eval_per_pair.py's
@@ -99,6 +100,16 @@ def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file):
                     f"FATAL: {base_yaml} has neither a '{key}:' line nor an 'env:' "
                     f"block to add one to. Refusing to render -- without {key} the "
                     f"arms would not be pinned to the same clip.")
+    if motion_dir:
+        text, n = re.subn(r"^(\s*motion_file:).*$", rf"\1 {motion_dir}", text,
+                          flags=re.MULTILINE)
+        if n == 0:
+            raise SystemExit(f"FATAL: no motion_file line in {base_yaml} to repoint")
+    if playdataset:
+        text, n = re.subn(r"^(\s*playdataset:).*$", r"\1 True", text, flags=re.MULTILINE)
+        if n == 0:
+            text = re.sub(r"^(env:\s*)$", r"\1\n  playdataset: True", text,
+                          count=1, flags=re.MULTILINE)
     if betas_file and betas_file != "none":
         text, n = re.subn(r"^(\s*betas_file:).*$", rf"\1 {betas_file}", text,
                           flags=re.MULTILINE)
@@ -111,6 +122,37 @@ def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file):
 
 
 CLIP_RE = re.compile(r"(InterAct/\S*?(sub\d+_\w+_\d+)\.pt)")
+
+
+def pin_clip_dir(base_yaml, source, obj, index, repo_root):
+    """Return (motion_dir, clip_name) exposing exactly ONE clip.
+
+    There is no config key that selects the Nth clip -- the loader filters by
+    dataSub/dataObjects, sorts by path, then caps with maxClipsPerObject, so
+    maxClipsPerObject=1 always yields clip _000. For sub2/largetable that is the
+    SHORTEST of 17 (153 frames vs up to 260), which makes for a poor qualitative
+    comparison: five seconds is not enough to tell arms apart.
+
+    So: build a temp dir holding a symlink to the chosen clip and point
+    motion_file at it. Filenames are preserved, which matters -- the loader parses
+    sub<src>_<obj>_<idx>.pt to recover subject and object.
+    """
+    import glob as _glob
+    mf = re.search(r"^\s*motion_file:\s*(\S+)", Path(base_yaml).read_text(), re.MULTILINE)
+    if not mf:
+        raise SystemExit(f"FATAL: no motion_file in {base_yaml}; cannot pin a clip")
+    src_dir = os.path.join(repo_root, mf.group(1))
+    clips = sorted(_glob.glob(os.path.join(src_dir, f"{source}_{obj}_*.pt")))
+    if not clips:
+        raise SystemExit(f"FATAL: no {source}_{obj}_*.pt under {src_dir}")
+    if not 0 <= index < len(clips):
+        listing = "\n".join(f"    [{i}] {os.path.basename(c)}" for i, c in enumerate(clips))
+        raise SystemExit(f"FATAL: --clip-index {index} out of range; "
+                         f"{len(clips)} clips available:\n{listing}")
+    chosen = clips[index]
+    d = tempfile.mkdtemp(prefix="clip_")
+    os.symlink(chosen, os.path.join(d, os.path.basename(chosen)))
+    return d, os.path.basename(chosen)
 
 
 def render_one(run, plan, args, repo_root):
@@ -129,7 +171,9 @@ def render_one(run, plan, args, repo_root):
     # overwrites the other.
     step = re.search(r"mimic_0*(\d+)\.pth", plan["CHECKPOINT"])
     stamp = f"ep{int(step.group(1))}" if step else "eplatest"
-    label = f"{run.partition('@')[0]}__{args.body}__{stamp}__x{args.attempts}"
+    clip = f"__clip{args.clip_index}" if args.clip_index else ""
+    label = (f"REFERENCE__{args.body}{clip}" if reference else
+             f"{run.partition('@')[0]}__{args.body}__{stamp}{clip}__x{args.attempts}")
     out_mp4 = Path(args.out_dir) / f"{label}.mp4"
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     if out_mp4.exists() and not args.overwrite:
@@ -153,8 +197,9 @@ def render_one(run, plan, args, repo_root):
            "--cfg_env", cfg,
            "--cfg_train", plan["TRAIN_YAML"],
            "--test", "--headless",
-           "--checkpoint", plan["CHECKPOINT"],
            "--num_envs", "1"]
+    if not reference:                      # play_dataset ignores the policy
+        cmd[-2:-2] = ["--checkpoint", plan["CHECKPOINT"]]
     print(f"\n=== {run} ===\n  ckpt : {plan['CHECKPOINT']}\n"
           f"  betas: {plan['BETAS_FILE']}\n  base : {plan['BASE_YAML']}\n"
           f"  cmd  : {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
@@ -192,6 +237,18 @@ def main():
                     help="look-at point x,y,z; ~0.9 is torso height")
     ap.add_argument("--out-dir", default="render_out")
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    ap.add_argument("--clip-index", type=int, default=0,
+                    help="which clip of (source, object) to pin. POSITIONAL after "
+                         "sorting, NOT the number in the filename -- sub2/largetable "
+                         "skips _006 and _013, so sub2_largetable_017.pt is index 15. "
+                         "Pass an out-of-range value to print the numbered list. "
+                         "0 (default) is what maxClipsPerObject=1 implicitly picks, "
+                         "and for sub2/largetable that is the SHORTEST of the 17 "
+                         "(153 frames vs up to 260) -- a poor qualitative comparison.")
+    ap.add_argument("--reference", action="store_true",
+                    help="ALSO render the ground-truth mocap replay of the pinned "
+                         "clip on the same body (playdataset), so 'what the policy "
+                         "is imitating' can be watched beside what it did")
     ap.add_argument("--overwrite", action="store_true",
                     help="replace an existing mp4 (default: refuse)")
     ap.add_argument("--allow-mixed-epochs", action="store_true",
@@ -227,7 +284,16 @@ def main():
               if len(distinct) == 1 else
               f"[render] MIXED epochs {sorted(distinct)} (--allow-mixed-epochs)")
 
-    results = [render_one(r, plans[r], args, args.repo_root) for r in args.runs]
+    motion_dir, clip_name = pin_clip_dir(
+        plans[args.runs[0]]["BASE_YAML"], args.source, args.object,
+        args.clip_index, args.repo_root)
+    print(f"[render] pinned clip [{args.clip_index}] {clip_name} -> {motion_dir}")
+
+    results = [render_one(r, plans[r], args, args.repo_root, motion_dir)
+               for r in args.runs]
+    if args.reference:
+        results.append(render_one(args.runs[0], plans[args.runs[0]], args,
+                                  args.repo_root, motion_dir, reference=True))
 
     print("\n================ RENDER SUMMARY ================")
     for r in results:

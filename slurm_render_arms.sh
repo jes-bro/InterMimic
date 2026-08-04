@@ -40,6 +40,13 @@
 #             draw; several at once shows the spread the number is summarising.
 #   FRAMES    max recorded frames; 0 (default) = ATTEMPTS * 300, i.e. exactly
 #             that many complete attempts
+#   CLIP_INDEX  which clip to pin, POSITIONAL after sorting (default 0). Clip 0 of
+#             sub2/largetable is the SHORTEST of 17 (153 frames) -- pass an
+#             out-of-range value to have the script print the numbered list.
+#   REFERENCE=1
+#             also render the ground-truth mocap replay of the same clip on the
+#             same body, so what the policy is IMITATING can be watched next to
+#             what it did. Written as REFERENCE__<body>__clip<N>.mp4
 #   CAM_POS / CAM_TARGET
 #             camera "x,y,z" (defaults 2.5,2.5,1.8 -> 0,0,0.9). Move CAM_POS
 #             closer to the origin to fill more of the frame. The camera attaches
@@ -78,6 +85,9 @@ ATTEMPTS="${ATTEMPTS:-4}"
 FRAMES="${FRAMES:-0}"          # 0 = ATTEMPTS * episode length
 CAM_POS="${CAM_POS:-2.5,2.5,1.8}"
 CAM_TARGET="${CAM_TARGET:-0,0,0.9}"
+CLIP_INDEX="${CLIP_INDEX:-0}"
+REF=""
+[ "${REFERENCE:-0}" = 1 ] && REF="--reference"
 OUT="${OUT:-render_out/${BODY}}"
 MIXED=""
 [ "${ALLOW_MIXED_EPOCHS:-0}" = 1 ] && MIXED="--allow-mixed-epochs"
@@ -111,7 +121,7 @@ if [ "${DRY:-0}" = 1 ]; then
     echo "[render] DRY=1 -- would run:"
     echo "  python3 scripts/render_arms.py --runs $RUNS --body $BODY \\"
     echo "      --source $SOURCE --object $OBJECT --attempts $ATTEMPTS \\"
-    echo "      --frames $FRAMES --cam-pos $CAM_POS --cam-target $CAM_TARGET --out-dir $OUT $MIXED"
+    echo "      --frames $FRAMES --cam-pos $CAM_POS --cam-target $CAM_TARGET --clip-index $CLIP_INDEX --out-dir $OUT $MIXED $REF"
     exit 0
 fi
 
@@ -124,7 +134,8 @@ python3 scripts/render_arms.py \
     --frames "$FRAMES" \
     --cam-pos "$CAM_POS" \
     --cam-target "$CAM_TARGET" \
-    --out-dir "$OUT" $MIXED
+    --clip-index "$CLIP_INDEX" \
+    --out-dir "$OUT" $MIXED $REF
 rc=$?
 
 echo
