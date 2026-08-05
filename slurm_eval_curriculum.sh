@@ -52,6 +52,16 @@ require CHECKPOINT "e.g. CHECKPOINT=checkpoints/<run>/nn/mimic_XXXX.pth"
 require OUT        "e.g. OUT=eval_results/<run>__<ckpt>__heldout.csv"
 require BETAS_FILE "must match the run's training betas (scripts/omomo_betas.npz gendered, _neutral, or _neutral_aug); set BETAS_FILE=none only if the run trained with no betas"
 
+# Diagnostics: forwarded EXPLICITLY so they cannot be lost between the caller's
+# shell, sbatch, and eval_per_pair's subprocess. TERM_REASON=1 prints the
+# per-body termination table (completed/fell/nan/ig/contact); REWARD_BREAKDOWN=1
+# the per-group reward terms. Both are read from os.environ inside intermimic.py.
+export TERM_REASON="${TERM_REASON:-0}"
+export TERM_REASON_EVERY="${TERM_REASON_EVERY:-2000}"
+export REWARD_BREAKDOWN="${REWARD_BREAKDOWN:-0}"
+[ "$TERM_REASON" = 1 ] && echo "[eval] TERM_REASON=1 (every $TERM_REASON_EVERY steps)"
+[ "$REWARD_BREAKDOWN" = 1 ] && echo "[eval] REWARD_BREAKDOWN=1"
+
 BODIES="${BODIES:-sub1 sub2 sub3 sub5 sub9 sub17}"     # the 6 folded-in subjects
 SOURCES="${SOURCES:-sub1 sub2 sub3 sub5 sub9 sub17}"
 NUM_ENVS="${NUM_ENVS:-1024}"
