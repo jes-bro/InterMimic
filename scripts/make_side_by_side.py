@@ -57,9 +57,13 @@ def resize_to_height(frame: np.ndarray, height: int) -> np.ndarray:
     otherwise -- upscaling a 448p source blockily is worth more than refusing to
     build the comparison at all.
     """
-    if frame.shape[0] == height:
-        return frame
+    # Even width, because libx264 with yuv420p rejects odd dimensions and two
+    # panels of odd width join into an odd total. Rounding here rather than
+    # padding the joined frame keeps the seam exactly at the centre.
     width = int(round(frame.shape[1] * height / frame.shape[0]))
+    width += width % 2
+    if frame.shape[0] == height and frame.shape[1] == width:
+        return frame
     try:
         from PIL import Image
         return np.asarray(Image.fromarray(frame).resize((width, height),
@@ -136,6 +140,7 @@ def main() -> int:
         raise SystemExit("no overlapping frames after the offset")
 
     height = args.height or max(left[0].shape[0], right[0].shape[0])
+    height += height % 2          # same even-dimension requirement
     out_frames = []
     for i in range(n):
         l = resize_to_height(left[i], height)
