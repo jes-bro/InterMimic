@@ -186,6 +186,18 @@ def main():
     trans = np.asarray(trans, dtype=np.float64)
     print(f"fitted poses {poses.shape}, trans {trans.shape}")
 
+    # CARI4D stores smpl_pose flat and distinguishes 72 from 156 by width:
+    # viz_pred.py:196 does pose72to156(x) if x.shape[1] == 72 else x. A (T, J, 3)
+    # array passes that test unchanged and reaches the body model with the wrong
+    # rank, so flatten here. SMPL-H's 52 joints give exactly the 156 expected.
+    if poses.ndim == 3:
+        poses = poses.reshape(len(poses), -1)
+        print(f"flattened to {poses.shape} for the CARI4D format")
+    if poses.shape[1] not in (72, 156):
+        raise SystemExit(
+            f"smpl_pose came out {poses.shape[1]} wide; CARI4D expects 72 or "
+            f"156, and anything else is read as one of them")
+
     # The object: rotate and translate its pose into the same frame.
     pose_abs = np.tile(np.eye(4), (len(obj_pos), 1, 1))
     pose_abs[:, :3, :3] = R_sb @ quat_to_mat(obj_rot)
