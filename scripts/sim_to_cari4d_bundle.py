@@ -205,12 +205,30 @@ def main():
 
     n = len(poses)
 
+    def keep(value):
+        """Whether a bundle field is plain data that can be written back out.
+
+        The bundle also holds training bookkeeping -- optimizer, scheduler,
+        train_state -- which the permissive loader reconstructs as local stub
+        classes. Those cannot be pickled again, and nothing about a render wants
+        them.
+        """
+        if isinstance(value, (torch.Tensor, np.ndarray, list, tuple, dict,
+                              str, int, float, bool)) or value is None:
+            return True
+        return False
+
     def trim(block):
-        """Cut a bundle sub-dict to the rollout's length, leaving other keys."""
-        out = {}
+        """Cut a bundle sub-dict to the rollout's length, keeping plain data."""
+        out, dropped = {}, []
         for key, value in block.items():
+            if not keep(value):
+                dropped.append(f"{key}({type(value).__name__})")
+                continue
             out[key] = value[:n] if hasattr(value, "__len__") and len(value) >= n \
                 else value
+        if dropped:
+            print(f"dropped non-data fields: {', '.join(dropped)}")
         return out
 
     # Start from the original prediction and replace only what the simulator
