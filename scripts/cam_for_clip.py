@@ -64,6 +64,29 @@ def clip_bounds(path: Path, include_object: bool = True) -> tuple:
     return centre, radius
 
 
+def heading_degrees(path: Path) -> float:
+    """Return the subject's mean direction of travel, as a world azimuth.
+
+    Taken from root_pos rather than root_rot so it needs no knowledge of which
+    local axis the rig calls forward -- a person running somewhere is going
+    where their trajectory goes. Frame-to-frame steps are summed and the total
+    displacement used, so a dribble's side-to-side jitter does not dominate.
+
+    Raises:
+        SystemExit: if the subject barely moves, since the heading is then
+            meaningless and silently returning zero would aim the camera
+            somewhere arbitrary.
+    """
+    data = torch.load(str(path), map_location="cpu")
+    root = data[:, 0:3].numpy()
+    delta = root[-1, :2] - root[0, :2]
+    if np.linalg.norm(delta) < 0.3:
+        raise SystemExit(
+            f"{path.name}: net travel is only {np.linalg.norm(delta):.2f} m, so "
+            f"there is no meaningful heading. Use --azimuth instead.")
+    return float(np.degrees(np.arctan2(delta[1], delta[0])))
+
+
 def camera_for(centre: np.ndarray, radius: float, azimuth: float,
                elevation: float, fov_deg: float, width: int, height: int,
                margin: float) -> tuple:
@@ -90,6 +113,17 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pt_path", type=Path)
+    parser.add_argument("--from-heading", type=float, default=None,
+                        metavar="DEG",
+                        help="Place the camera at this angle from the subject's "
+                             "direction of travel instead of a world azimuth. "
+                             "180 views him head-on as he moves toward it, 0 "
+                             "follows from behind, 90 is side-on. Use this to "
+                             "approximate the angle the source footage had: the "
+                             "exact viewpoint would need the clip in the "
+                             "calibration's world frame, and rotation plus the "
+                             "floor shift have moved it out of that frame, but "
+                             "the view RELATIVE to the runner is preserved.")
     parser.add_argument("--azimuth", type=float, default=45.0,
                         help="viewing direction around vertical, degrees "
                              "(default: 45, a three-quarter view)")
@@ -110,12 +144,19 @@ def main() -> int:
                              "past the player and pulls the camera back with it.")
     args = parser.parse_args()
 
-    centre, radius = clip_bounds(args.pt_path.expanduser().resolve(),
-                                 include_object=not args.no_object)
+    src = args.pt_path.expanduser().resolve()
+    centre, radius = clip_bounds(src, include_object=not args.no_object)
+
+    azimuth = args.azimuth
+    if args.from_heading is not None:
+        heading = heading_degrees(src)
+        azimuth = heading + args.from_heading
+        print(f"#   heading {heading:.1f} deg, camera {args.from_heading:.0f} deg "
+              f"off it -> azimuth {azimuth:.1f} deg")
     if radius < 1e-6:
         raise SystemExit("the clip has zero extent; nothing to frame")
 
-    pos, target = camera_for(centre, radius, args.azimuth, args.elevation,
+    pos, target = camera_for(centre, radius, azimuth, args.elevation,
                              args.fov, args.width, args.height, args.margin)
     print(f"#   camera {np.round(pos, 2)} -> {np.round(target, 2)}  "
           f"(distance {np.linalg.norm(pos - target):.2f} m)")
