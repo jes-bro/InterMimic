@@ -17,9 +17,16 @@ Writes a NEW archive by default rather than editing omomo_betas.npz in place, so
 the file the existing figures depend on is left alone.
 
 One caveat worth knowing: these betas describe an SMPL-H body and the renderer
-builds SMPL-X. The two shape spaces are similar but not identical, so the mesh is
-a close likeness rather than the exact body the physics used. For seeing what the
-retarget looks like that is fine; for measuring a body it is not.
+builds SMPL-X. The two do NOT share a shape space, so a coefficient fitted for
+one exaggerates the other -- most visibly as girth, since the low-order betas
+carry build. The mesh is therefore a body of roughly the right height and
+proportions wearing someone else's waistline.
+
+--beta-scale damps this. It is a cosmetic control, not a conversion: nothing
+here maps between the two shape spaces, and no value of it makes the mesh the
+subject's actual body. It only decides how far from the model's mean body to
+place a shape that is being read in the wrong basis. The motion is unaffected
+either way, which is what this render is for.
 """
 
 import argparse
@@ -61,6 +68,13 @@ def main() -> int:
                         help="archive to start from (default: scripts/omomo_betas.npz)")
     parser.add_argument("--out", type=Path, default=Path("scripts/cari4d_betas.npz"),
                         help="archive to write (default: scripts/cari4d_betas.npz)")
+    parser.add_argument("--beta-scale", type=float, default=1.0,
+                        help="multiply the betas before writing (default: 1.0). "
+                             "SMPL-H and SMPL-X do not share a shape space, so "
+                             "coefficients fitted for one exaggerate the other -- "
+                             "commonly as girth. 0.5 keeps some of the subject's "
+                             "build, 0 renders the model's mean body, which is "
+                             "wrong about shape but honest about it.")
     parser.add_argument("--gender", default="male",
                         choices=["male", "female", "neutral"],
                         help="SMPL-H gender used during reconstruction "
@@ -75,6 +89,10 @@ def main() -> int:
     betas = read_betas(args.human.expanduser().resolve())
     print(f"{args.human.name}: {betas.size} betas, "
           f"range {betas.min():+.3f}..{betas.max():+.3f}")
+    if args.beta_scale != 1.0:
+        betas = betas * args.beta_scale
+        print(f"scaled by {args.beta_scale}: "
+              f"range {betas.min():+.3f}..{betas.max():+.3f}")
 
     entries = {}
     if args.base.is_file():
