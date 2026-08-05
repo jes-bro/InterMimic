@@ -194,11 +194,16 @@ ROTATE_CALIB="${ROTATE_CALIB:-}"
 ROTATE_AXIS="${ROTATE_AXIS:-}"
 ROTATE_DEGREES="${ROTATE_DEGREES:-180}"
 
-# Rotate about each frame's root rather than the world origin. Keeps the figure
-# where it was instead of swinging it below the floor. Set 0 when the goal is to
-# match a real camera's viewpoint -- that needs true world coordinates, and this
-# mode deliberately leaves translations alone.
-ROTATE_AROUND_ROOT="${ROTATE_AROUND_ROOT:-1}"
+# Rotate about each frame's root rather than the world origin. OFF by default,
+# and worth understanding before turning on: it does not rotate root_pos, so the
+# body's facing turns while its path does not, and the figure walks backwards
+# along its own trajectory. It only avoided the height problem that
+# DROP_TO_FLOOR now solves properly.
+ROTATE_AROUND_ROOT="${ROTATE_AROUND_ROOT:-0}"
+
+# Re-seat the clip on the ground after rotating. interact2mimic.py:853 fits the
+# height in its own frame, which any rotation invalidates.
+DROP_TO_FLOOR="${DROP_TO_FLOOR:-1}"
 
 if [ -n "$ROTATE_CALIB" ] || [ -n "$ROTATE_AXIS" ]; then
     PT_PATH="$INTERMIMIC/InterAct/$DATASET_TAG/${SEQ_NAME}.pt"
@@ -212,16 +217,18 @@ if [ -n "$ROTATE_CALIB" ] || [ -n "$ROTATE_AXIS" ]; then
     fi
     AROUND_ROOT_FLAG=""
     if [ "$ROTATE_AROUND_ROOT" = "1" ]; then AROUND_ROOT_FLAG="--around-root"; fi
+    FLOOR_FLAG=""
+    if [ "$DROP_TO_FLOOR" = "1" ]; then FLOOR_FLAG="--drop-to-floor"; fi
     if [ -n "$ROTATE_CALIB" ]; then
         log "step 3.5: rotate_pt --from-calib $ROTATE_CALIB"
         python scripts/rotate_pt.py "$PT_PATH" \
             --from-calib "$ROTATE_CALIB" \
-            $AROUND_ROOT_FLAG
+            $AROUND_ROOT_FLAG $FLOOR_FLAG
     else
         log "step 3.5: rotate_pt --axis $ROTATE_AXIS --degrees $ROTATE_DEGREES"
         python scripts/rotate_pt.py "$PT_PATH" \
             --axis "$ROTATE_AXIS" --degrees "$ROTATE_DEGREES" \
-            $AROUND_ROOT_FLAG
+            $AROUND_ROOT_FLAG $FLOOR_FLAG
     fi
     # Report the result rather than trusting it: this reads root_rot, which is
     # what the replay actually renders, so a wrong rotation shows up here

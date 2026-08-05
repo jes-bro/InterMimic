@@ -117,6 +117,21 @@ def main() -> int:
                              "figure-object relative geometry. Recommended for "
                              "fixing CARI4D's upside-down output without breaking "
                              "the motion.")
+    parser.add_argument("--drop-to-floor", action="store_true",
+                        help="After rotating, shift the whole clip vertically so "
+                             "the feet rest on the ground. Use this INSTEAD of "
+                             "--around-root: rotating about the world origin "
+                             "keeps orientation and trajectory consistent, and "
+                             "this fixes the height it costs. --around-root "
+                             "avoids the height problem by not rotating "
+                             "root_pos at all, which leaves the body facing one "
+                             "way while its path still runs the other -- the "
+                             "figure appears to walk backwards.")
+    parser.add_argument("--floor-percentile", type=float, default=10.0,
+                        help="Percentile of per-frame lowest-foot height taken "
+                             "as ground contact (default: 10). Not the minimum: "
+                             "one frame of a foot clipping through the floor "
+                             "would then lift the entire clip into the air.")
     parser.add_argument("--out", type=Path, default=None,
                         help="Output path. Default: overwrite input with <input>.bak backup.")
     args = parser.parse_args()
@@ -190,6 +205,23 @@ def main() -> int:
     rot_quats(slice(3, 7))                                        # root_rot
     rot_quats(slice(321, 325))                                    # obj_rot
     rot_quats(slice(383, 591))                                    # body_rot
+
+    if args.drop_to_floor:
+        # interact2mimic.py:853 seats the clip on the ground in ITS frame; any
+        # rotation invalidates that, so the height has to be re-fit here.
+        # Applied as one constant offset to every position channel, which leaves
+        # the motion and the human-object relationship untouched -- only where
+        # the whole scene sits vertically changes.
+        feet = [7, 8, 10, 11]                # L/R Ankle, L/R Toe
+        body = data[:, 162:318].clone().reshape(T, -1, 3)
+        lowest = body[:, feet, 2].min(dim=1).values.numpy()
+        offset = float(-np.percentile(lowest, args.floor_percentile))
+        data[:, 2] += offset                                      # root_pos z
+        body[:, :, 2] += offset
+        data[:, 162:318] = body.reshape(T, -1)
+        data[:, 320] += offset                                    # obj_pos z
+        print(f"drop-to-floor: lowest foot ran {lowest.min():.2f}..{lowest.max():.2f} m, "
+              f"shifted by {offset:+.3f} m")
 
     if dst == src:
         backup = src.with_suffix(src.suffix + ".bak")
