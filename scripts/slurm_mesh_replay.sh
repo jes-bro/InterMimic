@@ -49,6 +49,11 @@ CHECKPOINT="${CHECKPOINT:-}"
 # reconstructed from video.
 BETAS="${BETAS:-scripts/cari4d_betas.npz}"
 
+# SMPL-X model files, which smplx_pose.py reads as SMPLX_{MALE,FEMALE,NEUTRAL}.npz.
+# Its default points at a Downloads folder on someone's laptop, so this has to be
+# set for the fit to find a body at all.
+SMPLX_MODELS="${SMPLX_MODELS:-/simurgh2/projects/ret-hoi/InterAct/models/smplx}"
+
 # The object drawn alongside the body. Unset falls back to a marker.
 OBJECT_MESH="${OBJECT_MESH:-$INTERMIMIC/isaacgym/src/intermimic/data/assets/objects/objects/${OBJECT_NAME}/${OBJECT_NAME}.obj}"
 OBJ_FACES="${OBJ_FACES:-800}"
@@ -83,6 +88,16 @@ log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=$CONDA_DEFAULT_ENV"
 log "sequence=$SEQ_NAME  mode=$([ -n "$CHECKPOINT" ] && echo policy || echo reference)"
 log "dump=$DUMP_NPZ"
 log "out=$OUT_MP4"
+
+export SMPLX_MODELS
+if [ ! -f "$SMPLX_MODELS/SMPLX_MALE.npz" ]; then
+    echo "ERROR: no SMPL-X models at $SMPLX_MODELS" >&2
+    echo "  Expected SMPLX_MALE.npz there. Find them with:" >&2
+    echo "    find /simurgh2 /sailhome/\$USER -name SMPLX_MALE.npz 2>/dev/null" >&2
+    echo "  then re-run with SMPLX_MODELS=<that directory> sbatch ..." >&2
+    exit 1
+fi
+log "smplx models: $SMPLX_MODELS"
 
 if [ ! -f "$BETAS" ]; then
     echo "ERROR: no betas archive at $BETAS." >&2
