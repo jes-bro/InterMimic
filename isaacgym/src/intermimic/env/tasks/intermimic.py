@@ -654,6 +654,25 @@ class InterMimic(Humanoid_SMPLX):
             hoi_data = torch.load(data_path)[startk:]
             loaded_dict['hoi_data'] = hoi_data.detach()  # Keep on CPU for processing
 
+            # Which file the sim actually opened, and which way up its first
+            # frame is. Editing a .pt and re-rendering only tells you something
+            # if the render read that file; without this, a stale path and a
+            # wrong rotation look the same from the outside.
+            if os.environ.get("DEBUG_MOTION_LOAD"):
+                import numpy as _np
+                _q = hoi_data[0, 3:7].numpy()
+                _n = float(_np.linalg.norm(_q)) or 1.0
+                _x, _y, _z, _w = _q / _n
+                # Rotate the rig's local +Z by the root quaternion; the result
+                # is where 'up' points for the frame that gets drawn.
+                _up = _np.array([2 * (_x * _z + _w * _y),
+                                 2 * (_y * _z - _w * _x),
+                                 1 - 2 * (_x * _x + _y * _y)])
+                print(f"[motion] loaded {data_path}", flush=True)
+                print(f"[motion]   frames={hoi_data.shape[0]} "
+                      f"root_rot[0]={_np.round(_q, 4)} local+Z -> {_np.round(_up, 3)}",
+                      flush=True)
+
 
             max_episode_length.append(loaded_dict['hoi_data'].shape[0])
             self.fps_data = 30.

@@ -244,6 +244,7 @@ if [ ! -f "$INTERMIMIC/$CFG_ENV" ]; then
     exit 1
 fi
 
+export DEBUG_MOTION_LOAD=1
 log "step 4/4: headless replay -> $RECORD_VIDEO"
 mkdir -p "$(dirname "$RECORD_VIDEO")"
 export PYTHONPATH="$INTERMIMIC/isaacgym/src:$INTERMIMIC:${PYTHONPATH:-}"
