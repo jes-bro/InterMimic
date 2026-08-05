@@ -193,7 +193,6 @@ def main():
               f"using the first {n}")
         body_pos, obj_pos, obj_rot = body_pos[:n], obj_pos[:n], obj_rot[:n]
 
-    joints_cam = body_pos @ R_sb.T + t_sb
 
     poser_mod = load_module("smplx_pose", os.path.join(here, "smplx_pose.py"))
     subject = args.subject
@@ -209,12 +208,33 @@ def main():
     if subject not in P.betas.files:
         raise SystemExit(f"{subject!r} has no betas entry in {args.betas}")
 
-    print(f"fitting {len(joints_cam)} frames in the camera's frame...")
-    poses, trans = P.fit_sequence(subject, joints_cam, iters_warm=args.ik_iters,
+    # Fitted in the SIMULATOR's frame, untransformed. fit_sequence documents its
+    # targets as Z-up, and the camera's frame is Y-down -- handing it camera
+    # coordinates yields a body rotated by exactly that difference, while the
+    # object, which never passes through the fitter, comes out correct. That
+    # asymmetry is what a wrong-looking body beside a right-looking ball means.
+    print(f"fitting {len(body_pos)} frames in the simulator's frame...")
+    poses, trans = P.fit_sequence(subject, body_pos, iters_warm=args.ik_iters,
                                   verbose=False)
     poses = np.asarray(poses, dtype=np.float64)
     trans = np.asarray(trans, dtype=np.float64)
     print(f"fitted poses {poses.shape}, trans {trans.shape}")
+
+    # Then moved into the camera's frame as SMPL parameters. A body is posed
+    # about its rest-pose root joint and displaced by trans, so a world
+    # transform (R, t) is not simply applied to trans: the root offset has to be
+    # taken out and put back.
+    from scipy.spatial.transform import Rotation as sRot
+    _, J0, _ = P._shape(subject)
+    j0 = np.asarray(J0, dtype=np.float64)[0]
+    poses[:, 0] = (sRot.from_matrix(R_sb) * sRot.from_rotvec(poses[:, 0])).as_rotvec()
+    trans = (trans + j0) @ R_sb.T + t_sb - j0
+    print(f"moved into the camera frame (root offset {np.round(j0, 3)})")
+
+    # Where the pelvis should land, for comparison against the render.
+    expect = body_pos[:, 0] @ R_sb.T + t_sb
+    print(f"  pelvis in camera frame: z {expect[:, 2].min():.2f}..{expect[:, 2].max():.2f} m "
+          f"(positive is in front of the camera)")
 
     # CARI4D stores smpl_pose flat and distinguishes 72 from 156 by width:
     # viz_pred.py:196 does pose72to156(x) if x.shape[1] == 72 else x. A (T, J, 3)
