@@ -29,12 +29,14 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import imageio.v2 as imageio
 
 
-def _poser(models, betas):
+def _poser(models, betas, model_type="smplx"):
+    """Build the SMPL poser used to fit and skin the body."""
     spec = importlib.util.spec_from_file_location(
         "smplx_pose", os.path.join(os.path.dirname(__file__), "smplx_pose.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
-    return m.SMPLXPoser(models_dir=models, betas_path=betas)
+    return m.SMPLXPoser(models_dir=models, betas_path=betas,
+                        model_type=model_type)
 
 
 def _ik_frames(P, subject, target_joints, obj_pos, obj_rot, warm):
@@ -225,6 +227,11 @@ def main():
                     help="decimate the object to this many faces (default: 800); "
                          "matplotlib draws each face separately, so a full "
                          "reconstruction is unusably slow")
+    ap.add_argument("--model-type", default="smplh", choices=["smplh", "smplx"],
+                    help="body model to render (default: smplh). CARI4D fits "
+                         "SMPL-H, and reading those betas in SMPL-X's shape "
+                         "basis distorts build -- a visible belly -- because "
+                         "the two do not share one.")
     ap.add_argument("--bg", default="black",
                     help="background colour, any matplotlib colour "
                          "(default: black). The mesh shading is unchanged, so a "
@@ -244,7 +251,7 @@ def main():
     if a.clip and not a.subject:
         raise SystemExit("FATAL: --clip needs --subject (which body to shape)")
 
-    P = _poser(a.models, a.betas)
+    P = _poser(a.models, a.betas, a.model_type)
     gen = (frames_from_dump(P, a.dump, a.ik_iters, a.stride, a.subject) if a.dump
            else frames_from_clip(P, a.clip, a.subject, a.ik_iters, a.stride))
 

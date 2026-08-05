@@ -55,6 +55,90 @@ for _s in ("L", "R"):
                 f"{'left' if _s == 'L' else 'right'}_{_f.lower()}{_k}"
 
 # SMPL Y-up -> Isaac Z-up: (x,y,z)->(x,-z,y)
+# SMPL-H is SMPL-X without the jaw and the two eyes, in the same order, so the
+# MJCF-to-joint mapping is shared and only the indices differ. Built from the
+# SMPL-X list rather than retyped, so the two cannot drift apart.
+SMPLH_JOINTS = SMPLX_JOINTS[:22] + SMPLX_JOINTS[25:]
+
+
+def _load_model_file(path):
+    """Load a SMPL-family model from .npz or .pkl into plain numpy arrays.
+
+    The SMPL-H release ships pickles holding chumpy arrays, which will not
+    unpickle without chumpy installed. A stub is registered when it is missing:
+    the arrays only need to survive as buffers, and every field is converted to
+    numpy immediately afterwards.
+
+    Raises:
+        SystemExit: if the file cannot be read or lacks a field the fit needs.
+    """
+    import pickle
+    import sys as _sys
+    import types as _types
+
+    if not os.path.isfile(path):
+        raise SystemExit(f"no model file at {path}")
+
+    if path.endswith(".npz"):
+        raw = dict(np.load(path, allow_pickle=True))
+    else:
+        if "chumpy" not in _sys.modules:
+            try:
+                import chumpy  # noqa: F401
+            except ImportError:
+                stub = _types.ModuleType("chumpy")
+
+                class Ch(np.ndarray):
+                    """Stand-in for chumpy.Ch that unpickles as a plain array."""
+
+                    def __array_finalize__(self, obj):
+                        """Nothing to carry over; the array data is the payload."""
+                        return
+
+                stub.Ch = Ch
+                stub.ch = stub
+                _sys.modules["chumpy"] = stub
+                _sys.modules["chumpy.ch"] = stub
+        with open(path, "rb") as fh:
+            raw = pickle.load(fh, encoding="latin1")
+
+    def field(*names):
+        """Return the first present key, or fail naming what was looked for."""
+        for n in names:
+            if n in raw:
+                return raw[n]
+        raise SystemExit(f"{os.path.basename(path)} has no {names[0]}; "
+                         f"found {sorted(raw)[:12]}")
+
+    reg = field("J_regressor")
+    if hasattr(reg, "toarray"):
+        reg = reg.toarray()
+
+    out = dict(
+        v_template=np.asarray(field("v_template"), dtype=np.float64),
+        shapedirs=np.asarray(field("shapedirs"), dtype=np.float64),
+        J_regressor=np.asarray(reg, dtype=np.float64),
+        weights=np.asarray(field("weights"), dtype=np.float64),
+        kintree_table=np.asarray(field("kintree_table")),
+        faces=np.asarray(field("f", "faces"), dtype=np.uint32))
+
+    # Validate rather than trust. A model whose parts disagree produces a body
+    # that renders without complaint and is wrong, which is the failure this
+    # whole exercise is trying to escape.
+    n_v = out["v_template"].shape[0]
+    if out["v_template"].shape != (n_v, 3):
+        raise SystemExit(f"v_template is {out['v_template'].shape}, expected (V, 3)")
+    if out["shapedirs"].shape[:2] != (n_v, 3):
+        raise SystemExit(f"shapedirs is {out['shapedirs'].shape}, expected (V, 3, B)")
+    if out["weights"].shape[0] != n_v:
+        raise SystemExit(f"weights has {out['weights'].shape[0]} rows for "
+                         f"{n_v} vertices")
+    if out["J_regressor"].shape[1] != n_v:
+        raise SystemExit(f"J_regressor is {out['J_regressor'].shape}, expected "
+                         f"(J, {n_v})")
+    return out
+
+
 Q_ZUP = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
 
 
@@ -92,34 +176,69 @@ def _parse_mjcf_tree(path=MJCF):
 
 class SMPLXPoser:
     def __init__(self, models_dir=None, betas_path="scripts/omomo_betas.npz",
-                 mesh_npz=None):
+                 mesh_npz=None, model_type=None):
         self.models_dir = os.path.expanduser(
             models_dir or os.environ.get("SMPLX_MODELS", "~/Downloads/models/smplx"))
         self.betas = np.load(betas_path, allow_pickle=True)
         self.gender = dict(x.split(":") for x in self.betas["_genders"])
+        # smplh renders the body the betas were actually fitted for; smplx
+        # reads those same coefficients in a different shape basis, which
+        # distorts build even when the pose is right.
+        self.model_type = (model_type
+                           or os.environ.get("SMPL_MODEL_TYPE", "smplx")).lower()
+        if self.model_type not in ("smplx", "smplh"):
+            raise SystemExit(f"model_type must be smplx or smplh, got "
+                             f"{self.model_type!r}")
+        self.joint_names = (SMPLH_JOINTS if self.model_type == "smplh"
+                            else SMPLX_JOINTS)
         self.tree = _parse_mjcf_tree()
         self.body_order = [n for n, _, _ in self.tree]         # 52 MJCF bodies
-        self.b2s = [SMPLX_JOINTS.index(_MJCF_TO_SMPL[n]) for n in self.body_order]
+        self.b2s = [self.joint_names.index(_MJCF_TO_SMPL[n]) for n in self.body_order]
         self._cache = {}
 
     def _model(self, gender):
         g = gender.upper()
-        if g not in self._cache:
-            m = np.load(os.path.join(self.models_dir, f"SMPLX_{g}.npz"), allow_pickle=True)
-            parents = m["kintree_table"][0].astype(np.int64).copy()
-            parents[0] = -1
-            self._cache[g] = dict(
-                v_template=m["v_template"].astype(np.float64),
-                shapedirs=m["shapedirs"].astype(np.float64)[:, :, :N_BETAS],
-                posedirs=m["posedirs"].astype(np.float64),
-                J_reg=m["J_regressor"].astype(np.float64),
-                weights=m["weights"].astype(np.float64),
-                parents=parents, faces=m["f"].astype(np.uint32))
+        if g in self._cache:
+            return self._cache[g]
+
+        prefix = "SMPLH" if self.model_type == "smplh" else "SMPLX"
+        candidates = [f"{prefix}_{g}.npz", f"{prefix}_{g}.pkl",
+                      f"{prefix}_{gender.lower()}.pkl"]
+        path = next((os.path.join(self.models_dir, c) for c in candidates
+                     if os.path.isfile(os.path.join(self.models_dir, c))), None)
+        if path is None:
+            raise SystemExit(
+                f"no {prefix} model for {gender} in {self.models_dir}; looked "
+                f"for {candidates}")
+        m = _load_model_file(path)
+
+        parents = m["kintree_table"][0].astype(np.int64).copy()
+        parents[0] = -1
+
+        # The joint count the model actually has must match the list this poser
+        # indexes with, or every b2s lookup silently addresses the wrong joint.
+        n_joints = m["weights"].shape[1]
+        if n_joints != len(self.joint_names):
+            raise SystemExit(
+                f"{os.path.basename(path)} has {n_joints} joints but "
+                f"{self.model_type} expects {len(self.joint_names)}. The model "
+                f"file and --model-type disagree.")
+
+        n_betas = min(N_BETAS, m["shapedirs"].shape[2])
+        self._cache[g] = dict(
+            v_template=m["v_template"],
+            shapedirs=m["shapedirs"][:, :, :n_betas],
+            J_reg=m["J_regressor"],
+            weights=m["weights"],
+            parents=parents[:n_joints], faces=m["faces"], n_betas=n_betas)
+        print(f"[smplx_pose] {os.path.basename(path)}: "
+              f"{m['v_template'].shape[0]} verts, {n_joints} joints, "
+              f"{n_betas} betas", flush=True)
         return self._cache[g]
 
     def _shape(self, subject):
         M = self._model(self.gender[subject])
-        beta = self.betas[subject].astype(np.float64)[:N_BETAS]
+        beta = self.betas[subject].astype(np.float64)[:M["shapedirs"].shape[2]]
         v_sh = M["v_template"] + M["shapedirs"] @ beta
         v0 = (Q_ZUP @ v_sh.T).T                                # template, Z-up
         J0 = (Q_ZUP @ (M["J_reg"] @ v_sh).T).T                 # rest joints, Z-up
@@ -266,7 +385,7 @@ class SMPLXPoser:
         """Native SMPL-X forward (shape + pose blendshapes + LBS) -> verts (V,3)
         Z-up, faces. Clean surface -- it's the model's own pose space."""
         M = self._model(self.gender[subject])
-        beta = self.betas[subject].astype(np.float64)[:N_BETAS]
+        beta = self.betas[subject].astype(np.float64)[:M["shapedirs"].shape[2]]
         v = M["v_template"] + M["shapedirs"] @ beta
         J = M["J_reg"] @ v
         R = np.stack([expmap(a) for a in np.asarray(pose_aa)])          # (55,3,3)

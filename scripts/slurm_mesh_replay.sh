@@ -73,6 +73,10 @@ CAM_POS="${CAM_POS:-}"
 CAM_TARGET="${CAM_TARGET:-}"
 BG="${BG:-black}"
 
+# smplh is the model CARI4D fits, so its betas mean what they say. smplx reads
+# the same numbers in a different shape basis and thickens the build.
+MODEL_TYPE="${MODEL_TYPE:-smplh}"
+
 TAG="${TAG:-$SEQ_NAME}"
 RENDER_DIR="${RENDER_DIR:-$INTERMIMIC/renders}"
 DUMP_NPZ="${DUMP_NPZ:-$RENDER_DIR/${TAG}_rollout.npz}"
@@ -155,7 +159,7 @@ python -u scripts/render_mesh_replay.py \
     --out "$OUT_MP4" \
     --stride "$STRIDE" \
     --ik-iters "$IK_ITERS" \
-    --elev "$ELEV" --azim "$AZIM" --bg "$BG" \
+    --elev "$ELEV" --azim "$AZIM" --bg "$BG" --model-type "$MODEL_TYPE" \
     ${CAM_POS:+--cam-pos "$CAM_POS"} ${CAM_TARGET:+--cam-target "$CAM_TARGET"} \
     ${OBJ_ARGS[@]+"${OBJ_ARGS[@]}"}
 
