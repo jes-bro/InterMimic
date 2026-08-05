@@ -117,8 +117,10 @@ def main() -> int:
                         metavar="DEG",
                         help="Place the camera at this angle from the subject's "
                              "direction of travel instead of a world azimuth. "
-                             "180 views him head-on as he moves toward it, 0 "
-                             "follows from behind, 90 is side-on. Use this to "
+                             "0 puts it AHEAD of him, so he moves toward it and "
+                             "is seen head-on; 180 follows from behind; 90 is "
+                             "side-on. (The camera is offset ALONG the heading, "
+                             "so 0 is in front, not behind.) Use this to "
                              "approximate the angle the source footage had: the "
                              "exact viewpoint would need the clip in the "
                              "calibration's world frame, and rotation plus the "
