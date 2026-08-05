@@ -139,18 +139,20 @@ python scripts/cari4d_to_interact.py \
 
 # Step 2: InterAct -> InterMimic. Either rig derives its proportions from the
 # subject's betas; see MESH above for why hulls are not the default.
-if [ "$MESH" = "1" ]; then
-    log "step 2/4: run_interact2mimic (--mesh, convex hulls)"
-    python scripts/run_interact2mimic.py \
-        --interact-root "$INTERACT" \
-        --dataset-name "$DATASET_TAG" \
-        --mesh
-else
-    log "step 2/4: run_interact2mimic (capsules)"
-    python scripts/run_interact2mimic.py \
-        --interact-root "$INTERACT" \
-        --dataset-name "$DATASET_TAG"
-fi
+#
+# --only restricts this to the clip step 1 just wrote. Without it every sequence
+# under sequences_canonical is retargeted, and step 3 then renames all of them
+# to --subject-id -- so a second clip lands on the same MJCF path and one body
+# silently overwrites the other.
+SEQ_NAME="sub${SUBJECT_ID}_${OBJECT_NAME}_${CLIP_IDX}"
+MESH_FLAG=""
+if [ "$MESH" = "1" ]; then MESH_FLAG="--mesh"; fi
+log "step 2/4: run_interact2mimic ($([ "$MESH" = "1" ] && echo hulls || echo capsules), only $SEQ_NAME)"
+python scripts/run_interact2mimic.py \
+    --interact-root "$INTERACT" \
+    --dataset-name "$DATASET_TAG" \
+    --only "$SEQ_NAME" \
+    $MESH_FLAG
 
 # Step 3: install the .pt and MJCF into this repo under the sub<N> naming.
 # --subject-id takes the string form here; step 1 took the bare integer.

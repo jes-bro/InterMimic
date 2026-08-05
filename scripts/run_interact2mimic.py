@@ -33,6 +33,15 @@ from pathlib import Path
 SOURCE_NEEDLE = '"mesh": False,'
 SOURCE_REPLACEMENT = '"mesh": True,  # patched by run_interact2mimic.py'
 
+# interact2mimic.py retargets every directory under sequences_canonical with no
+# way to select one (it just lists the directory, line 442). Beyond the wasted
+# time, that is a correctness problem downstream: cari4d_finalize.py renames
+# whatever it finds to a single --subject-id, so a second clip present here gets
+# relabelled as the same subject and its MJCF overwrites the intended one.
+FILTER_NEEDLE = 'data_name = sorted(os.listdir(MOTION_PATH))'
+FILTER_REPLACEMENT = ('data_name = [_n for _n in sorted(os.listdir(MOTION_PATH)) '
+                      'if _n in {names!r}]  # patched by run_interact2mimic.py')
+
 
 # Prefix injected at the top of the exec'd interact2mimic.py source. Monkey-
 # patches smplx.create() and BodyModel() so that failures (missing model
@@ -85,6 +94,12 @@ def main() -> int:
     parser.add_argument("--dataset-name", required=True,
                         help="Value to pass as --dataset_name to interact2mimic.py "
                              "(e.g. behave_cari4d).")
+    parser.add_argument("--only", action="append", default=None, metavar="SEQ",
+                        help="Retarget only this sequence directory under "
+                             "sequences_canonical, e.g. sub100_bball_000. "
+                             "Repeatable. Without it every sequence present is "
+                             "retargeted, which makes cari4d_finalize.py rename "
+                             "them all to one subject and collide their MJCFs.")
     parser.add_argument("--mesh", action="store_true",
                         help="Patch mesh=True so PHC emits per-bone convex-hull STLs. "
                              "Off by default — capsules with subject-derived bone "
@@ -105,6 +120,28 @@ def main() -> int:
         return 2
 
     source = script_path.read_text()
+
+    if args.only:
+        # Checked here rather than trusting the injected filter to come up
+        # empty: interact2mimic.py would simply retarget nothing and exit 0, and
+        # a silent success that produced no output is the worst of the options.
+        seq_root = interact_root / "data" / args.dataset_name.lower() / "sequences_canonical"
+        present = sorted(p.name for p in seq_root.iterdir()) if seq_root.is_dir() else []
+        missing = [s for s in args.only if s not in present]
+        if missing:
+            print(f"[run_interact2mimic] --only named {missing}, which are not in "
+                  f"{seq_root}; present: {present}", file=sys.stderr)
+            return 4
+        if FILTER_NEEDLE not in source:
+            print(f"[run_interact2mimic] expected literal '{FILTER_NEEDLE}' in "
+                  f"{script_path}; refusing to run with stale assumptions.",
+                  file=sys.stderr)
+            return 3
+        source = source.replace(
+            FILTER_NEEDLE, FILTER_REPLACEMENT.format(names=set(args.only)))
+        print(f"[run_interact2mimic] --only: retargeting {sorted(args.only)} "
+              f"of {len(present)} sequence(s)")
+
     if not args.no_skip_missing_models:
         source = SAFE_LOADERS_PREFIX + source
         print(f"[run_interact2mimic] missing-model loaders patched to return None")

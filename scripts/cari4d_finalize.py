@@ -256,10 +256,11 @@ def main() -> int:
     print("\n[cari4d-finalize] done. Replay with:")
     print(f"  cd {intermimic_root}")
     print(f"  sh isaacgym/scripts/data_replay_cari4d.sh")
+    # target_sub, not the source subjects: everything above was installed under
+    # the renamed id, so listing the sources would name files that do not exist.
     print(f"\nGenerated MJCFs (use as robotType in env YAML):")
-    for sub in subjects:
-        for f in sorted(mjcf_dst_dir.glob(f"smplh_*_{sub}.xml")):
-            print(f"  smplx/{f.name}")
+    for f in sorted(mjcf_dst_dir.glob(f"smplh_*_{target_sub}.xml")):
+        print(f"  smplx/{f.name}")
     return 0
 
 
