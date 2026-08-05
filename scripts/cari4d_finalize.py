@@ -135,6 +135,16 @@ def main() -> int:
     parser.add_argument("--simulation-cwd", type=Path, default=None,
                         help="Directory you ran interact2mimic.py from (defaults to "
                              "<interact-root>/simulation).")
+    parser.add_argument("--subject-id", default="sub99",
+                        help="Subject ID for the installed files. InterMimic's task "
+                             "code (intermimic.py:_load_motion) requires .pt filenames "
+                             "to start with 'sub<N>_'. CARI4D's native naming "
+                             "(Date<DD>_Sub<NN>_...) doesn't fit, so this script "
+                             "renames both .pt and MJCF on install. Default: sub99.")
+    parser.add_argument("--clip-index", default="000",
+                        help="Three-digit clip index suffix for renamed .pt. "
+                             "Default: 000. Use distinct values if installing "
+                             "multiple clips of the same subject+object.")
     args = parser.parse_args()
 
     interact_root = args.interact_root.expanduser().resolve()
@@ -170,26 +180,48 @@ def main() -> int:
     print(f"[cari4d-finalize] dataset_tag={args.dataset_tag}")
     print(f"[cari4d-finalize] {len(pt_files)} motion file(s) to install\n")
 
+    target_sub = args.subject_id
+    target_idx = args.clip_index
+
+    # Track {source_sub -> [object_name, ...]} so we can map MJCFs back to
+    # their original interact2mimic.py-generated names after the .pt rename.
+    source_subs = sorted({pt.stem.split("_")[0] for pt in pt_files})
+
     print("motion tensors:")
     for pt in pt_files:
-        _safe_move(pt, pt_dst_dir / pt.name)
+        parts = pt.stem.split("_")
+        if len(parts) >= 4 and parts[0].lower().startswith(("date", "sub")) and not parts[0].startswith("sub"):
+            # CARI4D-style: Date03_Sub01_gas_wild002 → sub99_gas_000
+            obj_name = parts[2]
+            target_pt_name = f"{target_sub}_{obj_name}_{target_idx}.pt"
+        elif len(parts) >= 3 and parts[0].startswith("sub"):
+            # Already in sub<N>_<obj>_<idx>.pt format; keep name as-is
+            target_pt_name = pt.name
+        else:
+            print(f"  WARNING: can't infer sub<N>_<obj>_<idx> from {pt.name}; "
+                  f"installing under original name", file=sys.stderr)
+            target_pt_name = pt.name
+        _safe_move(pt, pt_dst_dir / target_pt_name)
 
-    subjects = sorted({pt.stem.split("_")[0] for pt in pt_files})
     print("\nper-subject MJCFs + STL hulls:")
-    for sub in subjects:
-        candidates = sorted(mjcf_src_dir.glob(f"smplh_*_{sub}.xml"))
+    for source_sub in source_subs:
+        candidates = sorted(mjcf_src_dir.glob(f"smplh_*_{source_sub}.xml"))
         if not candidates:
-            print(f"  WARNING: no MJCF found for subject '{sub}' in {mjcf_src_dir}",
-                  file=sys.stderr)
+            print(f"  WARNING: no MJCF found for source subject '{source_sub}' "
+                  f"in {mjcf_src_dir}", file=sys.stderr)
             continue
         for src in candidates:
-            dst_mjcf = mjcf_dst_dir / src.name
+            # Replace the trailing _<source_sub> with _<target_sub>.
+            # e.g. smplh_behave_Date03.xml -> smplh_behave_sub99.xml
+            prefix = src.stem.rsplit("_", 1)[0]
+            target_mjcf_name = f"{prefix}_{target_sub}.xml"
+            dst_mjcf = mjcf_dst_dir / target_mjcf_name
             uuids = _extract_stl_uuids(src)
             _safe_move(src, dst_mjcf)
             for uuid_dir in uuids:
                 _relocate_stl_dir(uuid_dir, dst_mjcf.parent / uuid_dir)
 
-    objects = sorted({pt.stem.split("_")[-2] for pt in pt_files})
+    objects = sorted({pt.stem.split("_")[-2] for pt in pt_files if len(pt.stem.split("_")) >= 2})
     print("\nobject URDFs + meshes:")
     for obj in objects:
         mesh_src = interact_objs_dir / obj / f"{obj}.obj"
@@ -197,7 +229,25 @@ def main() -> int:
             print(f"  WARNING: mesh missing at {mesh_src}; skipping {obj}",
                   file=sys.stderr)
             continue
-        _safe_copy(mesh_src, obj_dst_dir / obj / f"{obj}.obj")
+        mesh_dst = obj_dst_dir / obj / f"{obj}.obj"
+        _safe_copy(mesh_src, mesh_dst)
+        # Re-export through trimesh so Isaac Gym's mesh loader accepts it
+        # (it chokes on n-gons, leftover material refs, mixed vertex/normal
+        # indexing in Hunyuan3D outputs).
+        try:
+            import trimesh
+            mesh = trimesh.load(str(mesh_dst), force="mesh", process=False)
+            with mesh_dst.open("w") as f:
+                for v in mesh.vertices:
+                    f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+                for face in mesh.faces:
+                    f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+            print(f"  cleaned {mesh_dst} via trimesh ({len(mesh.vertices)} verts, "
+                  f"{len(mesh.faces)} tri faces)")
+        except Exception as e:
+            print(f"  WARNING: trimesh re-export failed: {e!r}", file=sys.stderr)
+            print(f"  (Isaac Gym may still reject the mesh; if so, run "
+                  f"clean_mesh_for_isaacgym.py manually.)", file=sys.stderr)
         urdf_path = urdf_dst_dir / f"{obj}.urdf"
         urdf_path.parent.mkdir(parents=True, exist_ok=True)
         urdf_path.write_text(URDF_TEMPLATE.format(object_name=obj))
