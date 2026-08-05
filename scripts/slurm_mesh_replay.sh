@@ -66,6 +66,13 @@ DUMP_FRAMES="${DUMP_FRAMES:-400}"
 ELEV="${ELEV:-12}"
 AZIM="${AZIM:-55}"
 
+# CAM_POS overrides ELEV/AZIM with a real viewpoint. Feed it what
+# scripts/cam_from_bundle.py prints to look from where the take was filmed,
+# which is what makes the render comparable to the source footage.
+CAM_POS="${CAM_POS:-}"
+CAM_TARGET="${CAM_TARGET:-}"
+BG="${BG:-black}"
+
 TAG="${TAG:-$SEQ_NAME}"
 RENDER_DIR="${RENDER_DIR:-$INTERMIMIC/renders}"
 DUMP_NPZ="${DUMP_NPZ:-$RENDER_DIR/${TAG}_rollout.npz}"
@@ -148,7 +155,8 @@ python -u scripts/render_mesh_replay.py \
     --out "$OUT_MP4" \
     --stride "$STRIDE" \
     --ik-iters "$IK_ITERS" \
-    --elev "$ELEV" --azim "$AZIM" \
+    --elev "$ELEV" --azim "$AZIM" --bg "$BG" \
+    ${CAM_POS:+--cam-pos "$CAM_POS"} ${CAM_TARGET:+--cam-target "$CAM_TARGET"} \
     ${OBJ_ARGS[@]+"${OBJ_ARGS[@]}"}
 
 log "done"

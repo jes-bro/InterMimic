@@ -155,6 +155,43 @@ def pose_object(verts, pos, rot):
     return verts @ quat_to_mat(rot).T + np.asarray(pos, dtype=np.float64)
 
 
+def view_angles_from_camera(cam_pos, target):
+    """Return matplotlib (elev, azim) for a camera at cam_pos looking at target.
+
+    matplotlib's 3D axes are aimed with two spherical angles about the data,
+    not with a camera pose, so a viewpoint worked out in world coordinates --
+    a real camera's, say -- has to be converted. azim is measured in the x-y
+    plane from +x; elev is the angle above that plane.
+
+    The result matches the DIRECTION the camera looks from, not its projection:
+    matplotlib does not model focal length, so the framing still differs even
+    when the angle agrees.
+    """
+    d = np.asarray(cam_pos, dtype=np.float64) - np.asarray(target, dtype=np.float64)
+    r = np.linalg.norm(d)
+    if r < 1e-9:
+        raise SystemExit("camera position and target coincide; no direction to view from")
+    elev = float(np.degrees(np.arcsin(np.clip(d[2] / r, -1.0, 1.0))))
+    azim = float(np.degrees(np.arctan2(d[1], d[0])))
+    return elev, azim
+
+
+def parse_vec3(text):
+    """Parse an 'x,y,z' string into a float array.
+
+    Raises:
+        SystemExit: on anything that is not three numbers, rather than viewing
+            from a silently defaulted direction.
+    """
+    parts = [p for p in str(text).replace(" ", "").split(",") if p]
+    if len(parts) != 3:
+        raise SystemExit(f"expected 'x,y,z', got {text!r}")
+    try:
+        return np.array([float(p) for p in parts], dtype=np.float64)
+    except ValueError:
+        raise SystemExit(f"expected three numbers, got {text!r}")
+
+
 def shade(v, f, light=np.array([0.3, -0.6, 0.8])):
     """Per-face lambert shading from vertex normals of the tri mesh."""
     tri = v[f]                                        # (F,3,3)
@@ -188,6 +225,16 @@ def main():
                     help="decimate the object to this many faces (default: 800); "
                          "matplotlib draws each face separately, so a full "
                          "reconstruction is unusably slow")
+    ap.add_argument("--bg", default="black",
+                    help="background colour, any matplotlib colour "
+                         "(default: black). The mesh shading is unchanged, so a "
+                         "light ground needs a light value here.")
+    ap.add_argument("--cam-pos", default=None, metavar="X,Y,Z",
+                    help="view from this world position instead of --elev/--azim. "
+                         "Pass what scripts/cam_from_bundle.py prints, to look "
+                         "from where the take was filmed.")
+    ap.add_argument("--cam-target", default=None, metavar="X,Y,Z",
+                    help="what --cam-pos looks at (default: the motion's centre)")
     ap.add_argument("--elev", type=float, default=12.0)
     ap.add_argument("--azim", type=float, default=55.0)
     a = ap.parse_args()
@@ -205,12 +252,18 @@ def main():
     frames = list(gen)
     if not frames:
         raise SystemExit("FATAL: no frames produced")
+    elev, azim = a.elev, a.azim
     obj_v, obj_f = (None, None)
     if a.object:
         obj_v, obj_f = load_object_mesh(a.object, a.obj_faces)
 
     allv = np.concatenate([v for v, _, _, _ in frames], 0)
     ctr = allv.mean(0)
+    if a.cam_pos:
+        target = parse_vec3(a.cam_target) if a.cam_target else ctr
+        elev, azim = view_angles_from_camera(parse_vec3(a.cam_pos), target)
+        print(f"[mesh-replay] viewing from {a.cam_pos} -> elev={elev:.1f} "
+              f"azim={azim:.1f}")
     rng = float(np.abs(allv - ctr).max()) * 1.05
     faces = frames[0][1]
 
@@ -223,6 +276,11 @@ def main():
         fig = plt.figure(figsize=(6, 8), dpi=110)
         ax = fig.add_subplot(111, projection="3d")
         ax.set_axis_off()
+        # Both the figure and the axes: set_axis_off hides the panes but leaves
+        # the canvas behind them, so colouring only one shows a border of the
+        # other around the render.
+        fig.patch.set_facecolor(a.bg)
+        ax.set_facecolor(a.bg)
         c = shade(v, f)
         pc = Poly3DCollection(v[f], linewidths=0)
         pc.set_facecolor(plt.cm.get_cmap("Blues")(0.35 + 0.5 * (c - c.min()) / (c.ptp() + 1e-9)))
@@ -243,7 +301,7 @@ def main():
             ax.set_box_aspect((1, 1, 1))
         except Exception:
             pass
-        ax.view_init(elev=a.elev, azim=a.azim)
+        ax.view_init(elev=elev, azim=azim)
         fig.subplots_adjust(0, 0, 1, 1)
         fig.canvas.draw()
         img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
