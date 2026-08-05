@@ -124,7 +124,7 @@ def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file,
 CLIP_RE = re.compile(r"(InterAct/\S*?(sub\d+_\w+_\d+)\.pt)")
 
 
-def pin_clip_dir(base_yaml, source, obj, index, repo_root):
+def pin_clip_dir(base_yaml, source, obj, clip, repo_root):
     """Return (motion_dir, clip_name) exposing exactly ONE clip.
 
     There is no config key that selects the Nth clip -- the loader filters by
@@ -145,17 +145,25 @@ def pin_clip_dir(base_yaml, source, obj, index, repo_root):
     clips = sorted(_glob.glob(os.path.join(src_dir, f"{source}_{obj}_*.pt")))
     if not clips:
         raise SystemExit(f"FATAL: no {source}_{obj}_*.pt under {src_dir}")
-    if not 0 <= index < len(clips):
-        listing = "\n".join(f"    [{i}] {os.path.basename(c)}" for i, c in enumerate(clips))
-        raise SystemExit(f"FATAL: --clip-index {index} out of range; "
-                         f"{len(clips)} clips available:\n{listing}")
-    chosen = clips[index]
+    names = [os.path.basename(c) for c in clips]
+    listing = "\n".join(f"    {n}" for n in names)
+    if not clip:                                   # default: first after sorting
+        chosen = clips[0]
+    else:
+        want = clip if clip.endswith(".pt") else clip + ".pt"
+        if want not in names:
+            raise SystemExit(
+                f"FATAL: clip {want!r} not found for {source}/{obj}. "
+                f"{len(clips)} available:\n{listing}\n"
+                f"  (select by NAME, not position -- the file set differs between "
+                f"machines, so an index is not portable)")
+        chosen = clips[names.index(want)]
     d = tempfile.mkdtemp(prefix="clip_")
     os.symlink(chosen, os.path.join(d, os.path.basename(chosen)))
     return d, os.path.basename(chosen)
 
 
-def render_one(run, plan, args, repo_root):
+def render_one(run, plan, args, repo_root, motion_dir=None, reference=False):
     # numEnvs=1, NOT numEnvs=attempts. The recording camera is attached to a
     # single env (intermimic_players.py:97, task.envs[_record_env_idx]), so extra
     # envs are simply off-camera -- and the "wide" preset that was meant to show
@@ -163,7 +171,8 @@ def render_one(run, plan, args, repo_root):
     # small. Attempts come SEQUENTIALLY instead: each episode is a fresh attempt,
     # so recording attempts*episodeLength frames captures that many, all close up.
     cfg = make_render_yaml(plan["BASE_YAML"], args.body, args.source,
-                           args.object, 1, plan["BETAS_FILE"])
+                           args.object, 1, plan["BETAS_FILE"],
+                           motion_dir=motion_dir, playdataset=reference)
     # Filename carries every knob that changes what the video SHOWS: body,
     # attempts, and the checkpoint epoch. Two renders of the same arm that differ
     # in any of those are different experiments and must not share a path --
@@ -171,7 +180,7 @@ def render_one(run, plan, args, repo_root):
     # overwrites the other.
     step = re.search(r"mimic_0*(\d+)\.pth", plan["CHECKPOINT"])
     stamp = f"ep{int(step.group(1))}" if step else "eplatest"
-    clip = f"__clip{args.clip_index}" if args.clip_index else ""
+    clip = ("__" + args.clip.replace(".pt", "")) if args.clip else ""
     label = (f"REFERENCE__{args.body}{clip}" if reference else
              f"{run.partition('@')[0]}__{args.body}__{stamp}{clip}__x{args.attempts}")
     out_mp4 = Path(args.out_dir) / f"{label}.mp4"
@@ -237,14 +246,15 @@ def main():
                     help="look-at point x,y,z; ~0.9 is torso height")
     ap.add_argument("--out-dir", default="render_out")
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
-    ap.add_argument("--clip-index", type=int, default=0,
-                    help="which clip of (source, object) to pin. POSITIONAL after "
-                         "sorting, NOT the number in the filename -- sub2/largetable "
-                         "skips _006 and _013, so sub2_largetable_017.pt is index 15. "
-                         "Pass an out-of-range value to print the numbered list. "
-                         "0 (default) is what maxClipsPerObject=1 implicitly picks, "
-                         "and for sub2/largetable that is the SHORTEST of the 17 "
-                         "(153 frames vs up to 260) -- a poor qualitative comparison.")
+    ap.add_argument("--clip", default="",
+                    help="clip to pin, BY NAME e.g. sub2_largetable_017 (.pt "
+                         "optional). Empty = first after sorting, which is what "
+                         "maxClipsPerObject=1 implicitly picks -- for sub2/largetable "
+                         "that is the SHORTEST of 17 (153 frames vs up to 260), a poor "
+                         "qualitative comparison. An unknown name prints the list. "
+                         "By name and not by index because the file set differs "
+                         "between machines: index 15 is _017 on one and _016 on the "
+                         "cluster, which silently renders a different clip.")
     ap.add_argument("--reference", action="store_true",
                     help="ALSO render the ground-truth mocap replay of the pinned "
                          "clip on the same body (playdataset), so 'what the policy "
@@ -286,8 +296,8 @@ def main():
 
     motion_dir, clip_name = pin_clip_dir(
         plans[args.runs[0]]["BASE_YAML"], args.source, args.object,
-        args.clip_index, args.repo_root)
-    print(f"[render] pinned clip [{args.clip_index}] {clip_name} -> {motion_dir}")
+        args.clip, args.repo_root)
+    print(f"[render] pinned clip {clip_name} -> {motion_dir}")
 
     results = [render_one(r, plans[r], args, args.repo_root, motion_dir)
                for r in args.runs]
