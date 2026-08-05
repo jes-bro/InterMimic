@@ -249,6 +249,16 @@ def main():
               "gt": trim(bundle.get("gt", bundle["pr"])),
               "in": trim(bundle.get("in", bundle["pr"]))}
 
+    # viz_pred.py:212 decides which object mesh to load by looking for "hy3d"
+    # in the prediction file's PATH: with it, the reconstructed mesh; without
+    # it, a BEHAVE template under a path that does not exist here. Since a
+    # reconstructed clip always uses the former, say so rather than let the
+    # render fail on someone else's home directory.
+    if "hy3d" not in str(args.out):
+        print(f"WARNING: '{args.out}' has no 'hy3d' in its path, so viz_pred "
+              f"will look for a BEHAVE object template instead of the "
+              f"reconstructed mesh. Put 'hy3d' in the directory or filename.")
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(result, str(args.out))
     print(f"wrote {args.out}")

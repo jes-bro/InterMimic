@@ -63,7 +63,9 @@ CARI4D_ENV="${CARI4D_ENV:-newcari4d}"
 
 TAG="${TAG:-reference}"
 DUMP_NPZ="${DUMP_NPZ:-$INTERMIMIC/renders/${SEQ_NAME}_${TAG}_rollout.npz}"
-PRED_PTH="${PRED_PTH:-$CARI4D/output/sim/${TAG}/${SEQ}.pth}"
+# 'hy3d' in the path is load-bearing, not decoration: viz_pred.py:212 reads it
+# to decide between the reconstructed object mesh and a BEHAVE template.
+PRED_PTH="${PRED_PTH:-$CARI4D/output/sim/${TAG}-hy3d/${SEQ}.pth}"
 OUT_ROOT="${OUT_ROOT:-$CARI4D/output/viz-sim/${TAG}}"
 
 # Skip the simulation and reuse an existing rollout. Useful when only the render
