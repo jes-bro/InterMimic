@@ -24,8 +24,14 @@ import sys
 from pathlib import Path
 
 
-SOURCE_NEEDLE = '"mesh": False'
-SOURCE_REPLACEMENT = '"mesh": True   # patched by run_interact2mimic.py'
+# The needle includes the trailing comma, and the replacement puts it back
+# BEFORE the marker comment. Without the comma in both, a comment appended after
+# `"mesh": True` swallows the dict's separator -- robot_cfg spans several lines
+# (interact2mimic.py:758) so the entry that follows then has nothing separating
+# it, and Python reports the SyntaxError at THAT key, ~28 lines off from the
+# real one once the injected prefix has shifted everything.
+SOURCE_NEEDLE = '"mesh": False,'
+SOURCE_REPLACEMENT = '"mesh": True,  # patched by run_interact2mimic.py'
 
 
 # Prefix injected at the top of the exec'd interact2mimic.py source. Monkey-
