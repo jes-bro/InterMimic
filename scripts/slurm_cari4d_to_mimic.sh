@@ -182,24 +182,51 @@ ls -la "$INTERMIMIC/isaacgym/src/intermimic/data/assets/smplx/smplh_"*_sub"$SUBJ
 # twice.
 ROTATE_CALIB="${ROTATE_CALIB:-}"
 
+# ROTATE_AXIS/ROTATE_DEGREES is usually the right choice, NOT ROTATE_CALIB.
+# interact2mimic.py:795 already applies its upright_start correction, which
+# gravity-aligns the clip -- measured on the basketball take, the rig's local +Z
+# came out 1.5 degrees from world -Z, i.e. exactly inverted and nothing else.
+# --from-calib then rotates an already-world-aligned tensor by the full
+# camera-to-world rotation and rolls it 19 degrees off vertical. Use the
+# calibration only for a tensor still in raw camera frame.
+#
+#   ROTATE_AXIS=x ROTATE_DEGREES=180
+ROTATE_AXIS="${ROTATE_AXIS:-}"
+ROTATE_DEGREES="${ROTATE_DEGREES:-180}"
+
 # Rotate about each frame's root rather than the world origin. Keeps the figure
 # where it was instead of swinging it below the floor. Set 0 when the goal is to
 # match a real camera's viewpoint -- that needs true world coordinates, and this
 # mode deliberately leaves translations alone.
 ROTATE_AROUND_ROOT="${ROTATE_AROUND_ROOT:-1}"
 
-if [ -n "$ROTATE_CALIB" ]; then
+if [ -n "$ROTATE_CALIB" ] || [ -n "$ROTATE_AXIS" ]; then
     PT_PATH="$INTERMIMIC/InterAct/$DATASET_TAG/${SEQ_NAME}.pt"
     if [ ! -f "$PT_PATH" ]; then
-        echo "ERROR: ROTATE_CALIB set but no motion tensor at $PT_PATH" >&2
+        echo "ERROR: rotation requested but no motion tensor at $PT_PATH" >&2
+        exit 1
+    fi
+    if [ -n "$ROTATE_CALIB" ] && [ -n "$ROTATE_AXIS" ]; then
+        echo "ERROR: set ROTATE_CALIB or ROTATE_AXIS, not both" >&2
         exit 1
     fi
     AROUND_ROOT_FLAG=""
     if [ "$ROTATE_AROUND_ROOT" = "1" ]; then AROUND_ROOT_FLAG="--around-root"; fi
-    log "step 3.5: rotate_pt --from-calib $ROTATE_CALIB"
-    python scripts/rotate_pt.py "$PT_PATH" \
-        --from-calib "$ROTATE_CALIB" \
-        $AROUND_ROOT_FLAG
+    if [ -n "$ROTATE_CALIB" ]; then
+        log "step 3.5: rotate_pt --from-calib $ROTATE_CALIB"
+        python scripts/rotate_pt.py "$PT_PATH" \
+            --from-calib "$ROTATE_CALIB" \
+            $AROUND_ROOT_FLAG
+    else
+        log "step 3.5: rotate_pt --axis $ROTATE_AXIS --degrees $ROTATE_DEGREES"
+        python scripts/rotate_pt.py "$PT_PATH" \
+            --axis "$ROTATE_AXIS" --degrees "$ROTATE_DEGREES" \
+            $AROUND_ROOT_FLAG
+    fi
+    # Report the result rather than trusting it: this reads root_rot, which is
+    # what the replay actually renders, so a wrong rotation shows up here
+    # instead of costing a render to discover.
+    python scripts/check_pt_orientation.py "$PT_PATH" || true
 fi
 
 if [ "$REPLAY" != "1" ]; then
