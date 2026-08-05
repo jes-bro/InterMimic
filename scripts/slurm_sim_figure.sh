@@ -73,6 +73,11 @@ OUT_ROOT="${OUT_ROOT:-$CARI4D/output/viz-sim/${TAG}}"
 # a miss there arrives as a type error from inside pytorch3d.
 HY3D_MESHES_ROOT="${HY3D_MESHES_ROOT:-$CARI4D/data/cari4d-demo/meshes-metric}"
 
+# The side panel's camera uses up=(0,1,0), which points at the floor in the
+# camera coordinates CARI4D reconstructs in, so it is wrong on wild sequences.
+# NO_SIDE=0 brings it back.
+NO_SIDE="${NO_SIDE:-1}"
+
 # Skip the simulation and reuse an existing rollout. Useful when only the render
 # is being iterated on -- stage 1 is the only part that needs the GPU twice.
 REUSE_DUMP="${REUSE_DUMP:-0}"
@@ -164,6 +169,7 @@ python -u tools/viz_pred.py \
     --wild_video --kid 0 \
     --video "$VIDEO" \
     --hy3d_meshes_root "$HY3D_MESHES_ROOT" \
+    ${NO_SIDE:+$([ "$NO_SIDE" = "1" ] && echo --no_side)} \
     --out_root "$OUT_ROOT"
 
 log "done"
