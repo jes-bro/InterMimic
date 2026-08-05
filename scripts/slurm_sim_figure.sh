@@ -68,6 +68,11 @@ DUMP_NPZ="${DUMP_NPZ:-$INTERMIMIC/renders/${SEQ_NAME}_${TAG}_rollout.npz}"
 PRED_PTH="${PRED_PTH:-$CARI4D/output/sim/${TAG}-hy3d/${SEQ}.pth}"
 OUT_ROOT="${OUT_ROOT:-$CARI4D/output/viz-sim/${TAG}}"
 
+# Where the reconstructed object meshes live. viz_pred globs
+# <root>/<seq>*/<seq>*_align.obj; its default is the original author's home, and
+# a miss there arrives as a type error from inside pytorch3d.
+HY3D_MESHES_ROOT="${HY3D_MESHES_ROOT:-$CARI4D/data/cari4d-demo/meshes-metric}"
+
 # Skip the simulation and reuse an existing rollout. Useful when only the render
 # is being iterated on -- stage 1 is the only part that needs the GPU twice.
 REUSE_DUMP="${REUSE_DUMP:-0}"
@@ -88,7 +93,8 @@ log "sequence=$SEQ_NAME  tag=$TAG  mode=$([ -n "$CHECKPOINT" ] && echo policy ||
 log "bundle=$BUNDLE"
 log "video=$VIDEO"
 
-for required in "$BUNDLE" "$VIDEO" "$SMPLX_MODELS/SMPLX_MALE.npz"; do
+for required in "$BUNDLE" "$VIDEO" "$SMPLX_MODELS/SMPLX_MALE.npz" \
+                "$HY3D_MESHES_ROOT"; do
     if [ ! -e "$required" ]; then
         echo "ERROR: missing required input: $required" >&2
         exit 1
@@ -156,6 +162,7 @@ python -u tools/viz_pred.py \
     -pf "$PRED_PTH" \
     --wild_video --kid 0 \
     --video "$VIDEO" \
+    --hy3d_meshes_root "$HY3D_MESHES_ROOT" \
     --out_root "$OUT_ROOT"
 
 log "done"
