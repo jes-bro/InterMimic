@@ -156,6 +156,18 @@ if [ "${EMIT:-0}" = 1 ]; then
   exit 0
 fi
 
+# Refuse to overwrite an existing CSV. Each of these costs 1-4 GPU-hours, and a
+# narrower re-run (fewer BODIES, or a TERM_REASON diagnostic) resolves to the SAME
+# default OUT path -- which is how a 21-body result got replaced by a 2-body one.
+# OUT=<path> for a variant, OVERWRITE=1 to genuinely replace.
+if [ -f "$OUT" ] && [ "${OVERWRITE:-0}" != 1 ]; then
+  echo "ERROR: $OUT already exists ($(awk 'END{print NR-1}' "$OUT") data rows)." >&2
+  echo "       Refusing to overwrite -- an eval costs GPU-hours and a narrower" >&2
+  echo "       re-run writes to this same path." >&2
+  echo "       Use OUT=<other path> for a variant, or OVERWRITE=1 to replace it." >&2
+  exit 2
+fi
+
 echo "== eval_one: $exp =="
 echo "   arch/betas : $ARCH (numObs=$NOBS) / $BETAS"
 echo "   checkpoint : $CKPT"
