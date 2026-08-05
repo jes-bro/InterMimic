@@ -32,6 +32,61 @@ from scipy.spatial.transform import Rotation as sRot
 # 383:591 body_rot (52*4, xyzw)
 
 
+def rotation_from_calibration(spec: str) -> sRot:
+    """Return the camera-to-world rotation from an Ego-Exo4D gopro_calibs.csv.
+
+    CARI4D reconstructs in the camera's frame, so 'up' in its output is wherever
+    that camera's up happened to point. A humanoid handed to a physics engine
+    that way falls over, and guessing the correction as a single-axis flip only
+    works when the camera happened to be axis-aligned.
+
+    The calibration already holds the answer. Its columns are named *_world_cam,
+    so the quaternion is the camera's orientation in the world frame -- and that
+    world frame is gravity-aligned, which is what makes it the right target. On
+    the basketball take all four cameras sit at z = -0.05, consistent with z
+    being vertical.
+
+    Args:
+        spec: "<path to gopro_calibs.csv>:<cam_uid>", e.g.
+            "trajectory/gopro_calibs.csv:cam04".
+
+    Returns:
+        The rotation taking camera-frame vectors to world frame.
+
+    Raises:
+        SystemExit: if the file, the camera, or the columns are missing.
+    """
+    import csv
+
+    if ":" not in spec:
+        raise SystemExit("--from-calib wants <csv>:<cam_uid>, e.g. "
+                         "trajectory/gopro_calibs.csv:cam04")
+    path, _, cam_uid = spec.rpartition(":")
+    csv_path = Path(path).expanduser()
+    if not csv_path.is_file():
+        raise SystemExit(f"no calibration at {csv_path}")
+
+    with open(csv_path) as f:
+        rows = {r["cam_uid"]: r for r in csv.DictReader(f)}
+    if cam_uid not in rows:
+        raise SystemExit(f"{cam_uid} not in {csv_path}; found {sorted(rows)}")
+    row = rows[cam_uid]
+
+    try:
+        quat = [float(row[f"q{a}_world_cam"]) for a in "xyzw"]
+    except KeyError as exc:
+        raise SystemExit(f"{csv_path} has no q*_world_cam columns ({exc}); this "
+                         f"expects Ego-Exo4D's gopro_calibs.csv layout")
+
+    R = sRot.from_quat(quat)
+    up = R.apply([0.0, -1.0, 0.0])
+    print(f"using --from-calib {cam_uid}: camera-to-world rotation "
+          f"{np.round(R.as_quat(), 4)}")
+    print(f"  the camera's up maps to world {np.round(up, 3)} "
+          f"-- a well-conditioned fix has this close to a world axis")
+    return R
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -40,6 +95,15 @@ def main() -> int:
     parser.add_argument("pt_path", type=Path)
     parser.add_argument("--axis", choices=["x", "y", "z"], default=None)
     parser.add_argument("--degrees", type=float, default=None)
+    parser.add_argument("--from-calib", default=None, metavar="CSV:CAM_UID",
+                        help="Derive the rotation from camera calibration instead of "
+                             "guessing an axis and angle. CARI4D outputs in the "
+                             "camera's frame, so a humanoid's 'up' is wherever the "
+                             "camera's up happened to point and it falls over in sim. "
+                             "Ego-Exo4D's gopro_calibs.csv gives each camera's pose in "
+                             "a gravity-aligned world frame, which is exactly the "
+                             "rotation needed. Example: "
+                             "--from-calib trajectory/gopro_calibs.csv:cam04")
     parser.add_argument("--fix-frame-zero", action="store_true",
                         help="Compute the rotation that makes frame 0's root_rot "
                              "into the identity quaternion, then apply that rotation "
@@ -57,8 +121,13 @@ def main() -> int:
                         help="Output path. Default: overwrite input with <input>.bak backup.")
     args = parser.parse_args()
 
-    if not args.fix_frame_zero and (args.axis is None or args.degrees is None):
-        parser.error("specify either --fix-frame-zero, or both --axis and --degrees")
+    sources = [args.from_calib is not None, args.fix_frame_zero,
+               args.axis is not None or args.degrees is not None]
+    if sum(sources) != 1:
+        parser.error("specify exactly one of --from-calib, --fix-frame-zero, "
+                     "or both --axis and --degrees")
+    if args.axis is not None and args.degrees is None:
+        parser.error("--axis needs --degrees")
 
     src = args.pt_path.expanduser().resolve()
     if not src.is_file():
@@ -73,7 +142,9 @@ def main() -> int:
         print(f"unexpected channel count {data.shape[-1]} (want 591)", file=sys.stderr)
         return 2
 
-    if args.fix_frame_zero:
+    if args.from_calib:
+        R = rotation_from_calibration(args.from_calib)
+    elif args.fix_frame_zero:
         frame0_root_rot = data[0, 3:7].numpy()
         R = sRot.from_quat(frame0_root_rot).inv()
         print(f"using fix-frame-zero: inverse of frame 0 root_rot = {R.as_quat()}")
@@ -89,12 +160,16 @@ def main() -> int:
     root_pos = data[:, 0:3].clone()                               # (T, 3)
 
     def rot_positions(slice_):
-        flat = data[:, slice_].view(T, -1, 3)                     # (T, N, 3)
+        # .clone().reshape() instead of .view(): the .view() path silently
+        # failed to write body_pos (slice 162:318) back to `data` even though
+        # no exception was raised — the rotated tensor was computed but the
+        # assignment didn't persist. .clone().reshape() materializes a fresh
+        # contiguous tensor and the data[:, slice_] = ... assignment writes
+        # correctly.
+        flat = data[:, slice_].clone().reshape(T, -1, 3)          # (T, N, 3)
         if args.around_root:
-            # Per-frame rotation around root_pos[t]. Preserves figure-object
-            # relative geometry and keeps figure at its original world location.
-            centered = flat - root_pos.view(T, 1, 3)
-            rotated = centered @ R_mat.T + root_pos.view(T, 1, 3)
+            centered = flat - root_pos.unsqueeze(1)
+            rotated = centered @ R_mat.T + root_pos.unsqueeze(1)
         else:
             rotated = flat @ R_mat.T
         data[:, slice_] = rotated.reshape(T, -1)
