@@ -262,9 +262,10 @@ class SMPLXPoser:
         return R, p
 
     def skin(self, subject, R_glob, p_glob):
+        n_j = len(self.joint_names)   # 52 for SMPL-H, 55 for SMPL-X
         """Global-transform LBS: (R[52,3,3], p[52,3]) global -> posed verts (V,3) Z-up."""
         v0, J0, M = self._shape(subject)
-        G = np.tile(np.eye(4), (55, 1, 1))
+        G = np.tile(np.eye(4), (n_j, 1, 1))
         G[:, :3, 3] = J0
         for k, jid in enumerate(self.b2s):
             G[jid, :3, :3] = R_glob[k]
@@ -274,14 +275,14 @@ class SMPLXPoser:
         # head (was the main cause of a mangled render).
         parents = M["parents"]
         known = set(self.b2s)
-        for j in range(55):
+        for j in range(n_j):
             if j in known:
                 continue
             pa = parents[j]
             G[j, :3, :3] = G[pa, :3, :3]
             G[j, :3, 3] = G[pa, :3, 3] + G[pa, :3, :3] @ (J0[j] - J0[pa])
         Gp = G.copy()
-        for j in range(55):                                    # G'_j = G_j @ inv(rest_j)
+        for j in range(n_j):                                    # G'_j = G_j @ inv(rest_j)
             Gp[j, :3, 3] = G[j, :3, 3] - G[j, :3, :3] @ J0[j]
         Tv = np.einsum("vj,jab->vab", M["weights"], Gp)
         vh = np.concatenate([v0, np.ones((len(v0), 1))], 1)
@@ -332,16 +333,17 @@ class SMPLXPoser:
             torch.stack([z*x*C-y*s, z*y*C+x*s, c+z*z*C], 1)], 1)
 
     def _fk_joints_torch(self, subject, pose_aa, trans):
+        n_j = len(self.joint_names)   # 52 for SMPL-H, 55 for SMPL-X
         import torch
         tm = self._torch_model(self.gender[subject])
-        beta = torch.tensor(self.betas[subject].astype(np.float64)[:N_BETAS])
-        J0 = tm["J_reg"] @ (tm["v_template"] + tm["shapedirs"] @ beta)   # (55,3) Y-up
+        beta = torch.tensor(self.betas[subject].astype(np.float64)[:tm["shapedirs"].shape[2]])
+        J0 = tm["J_reg"] @ (tm["v_template"] + tm["shapedirs"] @ beta)   # (n_j,3) Y-up
         R = self._rodrigues(pose_aa)
         parents = tm["parents"]
-        G = [None] * 55
+        G = [None] * n_j
         g0 = torch.eye(4, dtype=torch.float64); g0[:3, :3] = R[0]; g0[:3, 3] = J0[0]
         G[0] = g0
-        for j in range(1, 55):
+        for j in range(1, n_j):
             T = torch.eye(4, dtype=torch.float64)
             T[:3, :3] = R[j]; T[:3, 3] = J0[j] - J0[parents[j]]
             G[j] = G[parents[j]] @ T
@@ -355,13 +357,14 @@ class SMPLXPoser:
         target_joints: (T,52,3) Z-up (clip body_pos or DUMP_TRAJ body_pos), ordered
         like the MJCF body order. Warm-starts each frame from the previous for speed;
         `smooth` regularizes toward it so the fit can't drift into an awkward pose
-        that matches the joints but mangles the surface. Returns (pose_aa[T,55,3],
+        that matches the joints but mangles the surface. Returns (pose_aa[T,n_j,3],
         trans[T,3])."""
         import torch
         b2s = torch.tensor(self.b2s)
         T = len(target_joints)
-        poses = np.zeros((T, 55, 3)); transl = np.zeros((T, 3))
-        prev = torch.zeros(55, 3, dtype=torch.float64)
+        n_j = len(self.joint_names)   # 52 for SMPL-H, 55 for SMPL-X
+        poses = np.zeros((T, n_j, 3)); transl = np.zeros((T, 3))
+        prev = torch.zeros(n_j, 3, dtype=torch.float64)
         for t in range(T):
             tgt = torch.tensor(np.asarray(target_joints[t], dtype=np.float64))
             pose = prev.clone().requires_grad_(True)
@@ -382,21 +385,22 @@ class SMPLXPoser:
         return poses, transl
 
     def verts_from_pose(self, subject, pose_aa, trans):
+        n_j = len(self.joint_names)   # 52 for SMPL-H, 55 for SMPL-X
         """Native SMPL-X forward (shape + pose blendshapes + LBS) -> verts (V,3)
         Z-up, faces. Clean surface -- it's the model's own pose space."""
         M = self._model(self.gender[subject])
         beta = self.betas[subject].astype(np.float64)[:M["shapedirs"].shape[2]]
         v = M["v_template"] + M["shapedirs"] @ beta
         J = M["J_reg"] @ v
-        R = np.stack([expmap(a) for a in np.asarray(pose_aa)])          # (55,3,3)
+        R = np.stack([expmap(a) for a in np.asarray(pose_aa)])          # (n_j,3,3)
         v = v + M["posedirs"] @ (R[1:] - np.eye(3)).reshape(-1)         # pose blendshapes
         parents = M["parents"]
-        G = np.zeros((55, 4, 4)); G[0, :3, :3] = R[0]; G[0, :3, 3] = J[0]; G[0, 3, 3] = 1
-        for j in range(1, 55):
+        G = np.zeros((n_j, 4, 4)); G[0, :3, :3] = R[0]; G[0, :3, 3] = J[0]; G[0, 3, 3] = 1
+        for j in range(1, n_j):
             Tm = np.eye(4); Tm[:3, :3] = R[j]; Tm[:3, 3] = J[j] - J[parents[j]]
             G[j] = G[parents[j]] @ Tm
         Gp = G.copy()
-        for j in range(55):
+        for j in range(n_j):
             Gp[j, :3, 3] = G[j, :3, 3] - G[j, :3, :3] @ J[j]
         Tv = np.einsum("vj,jab->vab", M["weights"], Gp)
         vh = np.concatenate([v, np.ones((len(v), 1))], 1)
