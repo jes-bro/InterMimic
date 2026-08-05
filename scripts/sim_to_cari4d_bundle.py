@@ -119,6 +119,12 @@ def parse_args():
                         help="SMPL model directory (default: $SMPLX_MODELS)")
     parser.add_argument("--model-type", default="smplh",
                         choices=["smplh", "smplx"])
+    parser.add_argument("--object-mesh", type=Path, default=None,
+                        help="the object .obj Isaac Gym loaded. CARI4D's "
+                             "pose_abs locates the mesh's CENTROID while the "
+                             "simulator locates its ORIGIN, so the offset "
+                             "between them is needed to convert. Omitting this "
+                             "assumes they coincide.")
     parser.add_argument("--ik-iters", type=int, default=100)
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args()
@@ -198,10 +204,32 @@ def main():
             f"smpl_pose came out {poses.shape[1]} wide; CARI4D expects 72 or "
             f"156, and anything else is read as one of them")
 
-    # The object: rotate and translate its pose into the same frame.
+    # The object. Two conventions have to be reconciled: Isaac Gym places the
+    # mesh by its ORIGIN, because the URDF references the .obj with no offset,
+    # while CARI4D subtracts the mesh centroid before posing (viz_pred.py:153,
+    # obj_base = verts - cent) so its pose_abs locates the CENTROID. A mesh
+    # whose origin is not its centroid therefore renders displaced by exactly
+    # that offset -- a figure that looks right and has the ball in the wrong
+    # place.
+    centroid = np.zeros(3)
+    if args.object_mesh is not None:
+        try:
+            import trimesh
+            mesh = trimesh.load(str(args.object_mesh), force="mesh", process=False)
+            centroid = np.asarray(mesh.vertices, dtype=np.float64).mean(axis=0)
+            print(f"object mesh centroid {np.round(centroid, 4)} "
+                  f"(|c| = {np.linalg.norm(centroid) * 100:.1f} cm)")
+        except ImportError:
+            print("trimesh unavailable; assuming the mesh origin is its centroid")
+    else:
+        print("no --object-mesh given; assuming the mesh origin is its centroid")
+
+    R_obj_cam = R_sb @ quat_to_mat(obj_rot)
     pose_abs = np.tile(np.eye(4), (len(obj_pos), 1, 1))
-    pose_abs[:, :3, :3] = R_sb @ quat_to_mat(obj_rot)
-    pose_abs[:, :3, 3] = obj_pos @ R_sb.T + t_sb
+    pose_abs[:, :3, :3] = R_obj_cam
+    # origin position in camera frame, then forward to the centroid.
+    origin_cam = obj_pos @ R_sb.T + t_sb
+    pose_abs[:, :3, 3] = origin_cam + np.einsum("nij,j->ni", R_obj_cam, centroid)
 
     n = len(poses)
 

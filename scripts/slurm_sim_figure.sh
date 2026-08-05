@@ -141,6 +141,7 @@ python -u scripts/sim_to_cari4d_bundle.py \
     --models "$SMPLX_MODELS" \
     --model-type "$MODEL_TYPE" \
     --ik-iters "$IK_ITERS" \
+    --object-mesh "$INTERMIMIC/isaacgym/src/intermimic/data/assets/objects/objects/${OBJECT_NAME}/${OBJECT_NAME}.obj" \
     --out "$PRED_PTH"
 
 if [ ! -s "$PRED_PTH" ]; then
