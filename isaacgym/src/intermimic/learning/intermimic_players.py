@@ -205,6 +205,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                     _before = _frames_written
                     for t in range(_pass_len):
                         self.env.task.play_dataset_step(t)
+                        # Record the sim's own body state. Same loop as the video
+                        # so a dump and a recording always describe the same
+                        # frames, and either can be produced without the other.
+                        if _traj is not None and len(_traj["body_rot"]) < _dump_max:
+                            _dump_step()
                         # Capture frame to RECORD_VIDEO if set (mirror of the
                         # inference branch's recording loop below).
                         if _writer is not None:
@@ -233,6 +238,8 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                     # frames left to capture) so we never loop forever.
                     if _frames_written >= _max_video_frames or _frames_written == _before:
                         break
+                    if _traj is not None and len(_traj["body_rot"]) >= _dump_max:
+                        break
 
                 if _writer is not None:
                     _writer.close()
@@ -246,9 +253,15 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             "/ CLIP so a real motion is selected.")
                     print(f"[player] wrote {_frames_written} frames to {_record_path}, video done", flush=True)
 
-                # play_dataset is a finite replay: when recording, exit the whole
-                # n_games loop -- don't fall through and keep replaying forever.
-                if _record_path is not None:
+                if _traj is not None:
+                    _dump_save()
+
+                # play_dataset is a finite replay: when recording OR dumping,
+                # exit the whole n_games loop -- don't fall through and keep
+                # replaying. Dumping was previously not a reason to stop, so a
+                # DUMP_TRAJ run with no RECORD_VIDEO replayed games_num *
+                # n_game_life * 10 times and never reached the save.
+                if _record_path is not None or _dump_path is not None:
                     import sys
                     sys.exit(0)
             else:
@@ -262,6 +275,15 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                     else:
                         action = self.get_action(obs_dict, is_determenistic)
                     obs_dict, r, done, info =  self.env_step(self.env, action)
+                    # A policy rollout dumps the same way a replay does, so the
+                    # two render identically and can be compared frame to frame.
+                    if _traj is not None:
+                        if len(_traj["body_rot"]) < _dump_max:
+                            _dump_step()
+                        else:
+                            _dump_save()
+                            import sys
+                            sys.exit(0)
                     cr += r
                     steps += 1
 
