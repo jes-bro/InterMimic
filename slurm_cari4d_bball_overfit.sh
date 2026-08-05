@@ -1,0 +1,58 @@
+#!/bin/bash
+#SBATCH --account=simurgh
+#SBATCH --partition=simurgh --qos=normal
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --gres=gpu:1
+
+#SBATCH --job-name="cari4d-bball-overfit"
+#SBATCH --output=cari4d-bball-overfit-%j.out
+
+#SBATCH --mail-user=jesb@stanford.edu
+#SBATCH --mail-type=ALL
+
+# OVERFIT: one EgoExo4D basketball reconstruction (sub100_bball_000.pt, 101
+# frames, dribble bounce + layup). Question: can a physics policy execute this
+# 4D reconstruction at all? Known data defects ride along on purpose (23cm
+# floor offset from monocular depth, last ~8 ball frames unreliable, no hoop)
+# -- if the run fails, the floor offset is the first suspect, and free-flight
+# reward gating is the first machinery to add.
+#
+# Saves to checkpoints/smplx_cari4d_bball_overfit/nn/.
+
+source ~/.bashrc
+conda deactivate
+conda activate intermimic-gym2
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
+
+# Env cfg is self-contained (one clip, one body); PhysX multiplier stays 20.0
+# because 2048 envs is half the footprint that OOM'd the 4096-env teachers.
+CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_train.yaml
+CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_train.yaml
+echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
+
+echo "[teacher] CARI4D BBALL OVERFIT: 1 clip x 1 body (sub100), numObs 3198 (no betas), density 86, restitution 0.85/0.85, MLP + normval + adaptive LR"
+echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_cari4d_bball_overfit/nn/"
+
+# --- auto-resume: continue from the latest checkpoint if one exists. resume_from
+# loads mimic.pth at agent-init BEFORE any new save, so it never clobbers progress.
+EXP=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$CFG_TRAIN" | awk '{print $2}')
+CKPT="checkpoints/${EXP}/nn/mimic.pth"
+if [ -f "$CKPT" ]; then
+    RESUME_TRAIN="/tmp/${EXP}_resume_${SLURM_JOB_ID}.yaml"
+    sed "s|resume_from: 'None'|resume_from: '${CKPT}'|" "$CFG_TRAIN" > "$RESUME_TRAIN"
+    CFG_TRAIN="$RESUME_TRAIN"
+    echo "[teacher] RESUMING from ${CKPT}"
+else
+    echo "[teacher] fresh start (no checkpoint at ${CKPT})"
+fi
+
+python -u -m intermimic.run \
+    --task InterMimic \
+    --cfg_env "$CFG_ENV" \
+    --cfg_train "$CFG_TRAIN" \
+    --headless \
+    --output checkpoints
