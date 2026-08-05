@@ -61,6 +61,13 @@ def main() -> int:
                         help="archive to start from (default: scripts/omomo_betas.npz)")
     parser.add_argument("--out", type=Path, default=Path("scripts/cari4d_betas.npz"),
                         help="archive to write (default: scripts/cari4d_betas.npz)")
+    parser.add_argument("--gender", default="male",
+                        choices=["male", "female", "neutral"],
+                        help="SMPL-H gender used during reconstruction "
+                             "(default: male). The archive carries a '_genders' "
+                             "entry the poser reads alongside the betas, and a "
+                             "subject missing from it fails with a bare KeyError "
+                             "much later, inside the fit.")
     parser.add_argument("--force", action="store_true",
                         help="allow overwriting an existing key")
     args = parser.parse_args()
@@ -104,6 +111,17 @@ def main() -> int:
         betas = betas[:width]
 
     entries[args.subject] = betas
+
+    # scripts/smplx_pose.py builds its gender map from this entry:
+    #   dict(x.split(":") for x in betas["_genders"])
+    # so betas alone are not enough to pose a body.
+    genders = [str(x) for x in entries.get("_genders", [])
+               if not str(x).startswith(f"{args.subject}:")]
+    genders.append(f"{args.subject}:{args.gender}")
+    entries["_genders"] = np.array(genders)
+    print(f"_genders: {len(genders)} entries, "
+          f"including '{args.subject}:{args.gender}'")
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     if args.out.is_file():
         backup = args.out.with_suffix(args.out.suffix + ".bak")
