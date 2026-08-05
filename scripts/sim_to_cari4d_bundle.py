@@ -203,14 +203,7 @@ def main():
     pose_abs[:, :3, :3] = R_sb @ quat_to_mat(obj_rot)
     pose_abs[:, :3, 3] = obj_pos @ R_sb.T + t_sb
 
-    betas = bundle["pr"]["betas"].detach().cpu().numpy().astype(np.float64)
     n = len(poses)
-    out_pr = {
-        "smpl_pose": torch.from_numpy(poses).float(),
-        "smpl_t": torch.from_numpy(trans).float(),
-        "betas": torch.from_numpy(betas[:n]).float(),
-        "pose_abs": torch.from_numpy(pose_abs).float(),
-    }
 
     def trim(block):
         """Cut a bundle sub-dict to the rollout's length, leaving other keys."""
@@ -219,6 +212,18 @@ def main():
             out[key] = value[:n] if hasattr(value, "__len__") and len(value) >= n \
                 else value
         return out
+
+    # Start from the original prediction and replace only what the simulator
+    # changed. viz_pred reads more than the four pose fields -- 'frames' among
+    # them -- and enumerating those would leave the next one to be discovered by
+    # a failed render.
+    out_pr = trim(bundle["pr"])
+    out_pr.update({
+        "smpl_pose": torch.from_numpy(poses).float(),
+        "smpl_t": torch.from_numpy(trans).float(),
+        "pose_abs": torch.from_numpy(pose_abs).float(),
+    })
+    print(f"prediction keys: {sorted(out_pr)}")
 
     # gt and in are carried through so viz_pred's other panels still populate;
     # only the prediction is replaced with what the simulator did.
