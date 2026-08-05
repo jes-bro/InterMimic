@@ -80,38 +80,22 @@ def quat_to_mat(q):
 
 
 def load_bundle(path):
-    """Load a CARI4D bundle, tolerating classes not importable here.
+    """Load a CARI4D bundle, reusing cari4d_to_interact's permissive unpickler.
+
+    Imported rather than reimplemented. The stub it substitutes for an
+    unimportable class has to accept __setstate__; returning a bare dict looks
+    equivalent and fails inside torch's unpickler, which is what a local copy of
+    this got wrong.
 
     Raises:
         SystemExit: if the file is missing.
     """
-    import pickle
-
     if not os.path.isfile(path):
         raise SystemExit(f"no bundle at {path}")
-
-    class _Unpickler(pickle.Unpickler):
-        """Substitute a dict for any class this process cannot import."""
-
-        def find_class(self, module, name):
-            """Return the real class, or dict when it cannot be imported."""
-            try:
-                return super().find_class(module, name)
-            except Exception:
-                return dict
-
-    class _PickleModule:
-        """Minimal pickle-module stand-in for torch.load."""
-        Unpickler = _Unpickler
-
-        @staticmethod
-        def load(fh, **kwargs):
-            """Load with the permissive unpickler."""
-            return _Unpickler(fh).load()
-
-    with open(path, "rb") as fh:
-        return torch.load(fh, map_location="cpu", weights_only=False,
-                          pickle_module=_PickleModule)
+    helper = load_module("cari4d_to_interact",
+                         os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "cari4d_to_interact.py"))
+    return helper._load_bundle(Path(path))
 
 
 def parse_args():
