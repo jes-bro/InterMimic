@@ -71,7 +71,10 @@ def main() -> int:
 
     entries = {}
     if args.base.is_file():
-        base = np.load(args.base)
+        # allow_pickle: the OMOMO archive stores object arrays, which numpy
+        # refuses to read without it. Entries are carried through untouched, so
+        # whatever they are they survive the round trip.
+        base = np.load(args.base, allow_pickle=True)
         entries = {k: base[k] for k in base.files}
         print(f"{args.base.name}: {len(entries)} existing subjects")
     else:
@@ -84,7 +87,13 @@ def main() -> int:
     # Match the width the archive already uses, so the renderer's model is built
     # with the number of coefficients it expects. CARI4D works in 10; OMOMO
     # entries may be wider, and a short vector would be read as a different body.
-    width = max((v.size for v in entries.values()), default=betas.size)
+    # Only entries that are plainly numeric vectors can say what width to match;
+    # an object array's size is the count of objects, not of coefficients, and
+    # padding to that would produce a body no one asked for.
+    widths = [v.size for v in entries.values()
+              if getattr(v, "dtype", None) is not None
+              and v.dtype != object and v.ndim == 1]
+    width = max(widths, default=betas.size)
     if betas.size < width:
         padded = np.zeros(width, dtype=np.float32)
         padded[:betas.size] = betas
