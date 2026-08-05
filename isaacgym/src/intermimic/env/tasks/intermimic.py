@@ -173,7 +173,14 @@ class InterMimic(Humanoid_SMPLX):
         # _parse_motion_subject also handles a hypothetical sub<src>to<tgt>_*
         # cross-body file format (no such files on disk today), but the body
         # actually simulated still comes from subjectBodies regardless.
-        all_files = os.listdir(self.motion_file)
+        # Only .pt files. os.listdir returns everything, and the subject filter
+        # below matches on the sub<N>_ prefix, so any sibling that keeps the
+        # stem is picked up as an additional motion -- rotate_pt.py's
+        # sub100_bball_000.pt.bak loaded alongside the real clip, giving the
+        # env two motions where one was intended. play_dataset_step then picks
+        # between them at random per env, so the same run replayed the edited
+        # clip or its pre-edit backup depending on the draw.
+        all_files = [f for f in os.listdir(self.motion_file) if f.endswith('.pt')]
         # `dataSub` in cfg is a list of strings like ['sub2', 'sub8'] — same
         # convention as before. Convert to a set of ints once for matching.
         data_sub_nums = {int(s[3:]) for s in cfg['env']['dataSub']}

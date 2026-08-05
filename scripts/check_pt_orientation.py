@@ -153,8 +153,12 @@ def main() -> int:
 
     other = args.compare
     if other is None:
-        cand = src.with_suffix(src.suffix + ".bak")
-        other = cand if cand.is_file() else None
+        other = None
+        for cand in (src.parent / ".rotate_pt_backups" / (src.name + ".bak"),
+                     src.with_suffix(src.suffix + ".bak")):
+            if cand.is_file():
+                other = cand
+                break
     if other is None:
         return 0
 

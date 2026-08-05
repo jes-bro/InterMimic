@@ -224,10 +224,17 @@ def main() -> int:
               f"shifted by {offset:+.3f} m")
 
     if dst == src:
-        backup = src.with_suffix(src.suffix + ".bak")
+        # Kept OUT of the motion directory. InterMimic enumerates that directory
+        # and matches on the sub<N>_ prefix, so a backup sitting beside the clip
+        # loads as a second motion and the replay picks between the two at
+        # random -- the edited clip and its pre-edit copy, alternating for no
+        # visible reason.
+        backup_dir = src.parent / ".rotate_pt_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / (src.name + ".bak")
         if not backup.exists():
             shutil.copy(str(src), str(backup))
-            print(f"backed up original to {backup.name}")
+            print(f"backed up original to {backup}")
 
     torch.save(data, str(dst))
     print(f"wrote rotated tensor to {dst}")

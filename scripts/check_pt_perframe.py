@@ -104,9 +104,13 @@ def main() -> int:
 
     paths = [p.expanduser().resolve() for p in args.pt_paths]
     if not args.no_bak and len(paths) == 1:
-        bak = paths[0].with_suffix(paths[0].suffix + ".bak")
-        if bak.is_file():
-            paths.append(bak)
+        # New location first: backups moved out of the motion directory so the
+        # sim stops loading them as extra clips. Old location still honoured.
+        for bak in (paths[0].parent / ".rotate_pt_backups" / (paths[0].name + ".bak"),
+                    paths[0].with_suffix(paths[0].suffix + ".bak")):
+            if bak.is_file():
+                paths.append(bak)
+                break
 
     for i, path in enumerate(paths):
         if i:
