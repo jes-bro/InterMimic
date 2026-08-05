@@ -59,6 +59,50 @@ def nearest_axis(v: np.ndarray) -> tuple:
     return best, float(np.degrees(np.arccos(np.clip(best_dot, -1.0, 1.0))))
 
 
+def describe_root_rot(data) -> None:
+    """Print where root_rot sends each local axis, and whether it agrees with body_pos.
+
+    This is the channel that matters for a replay: play_dataset_step
+    (intermimic.py:2064) drives the humanoid from root_pos, root_rot and
+    dof_pos, and never reads body_pos. A conclusion drawn from body_pos alone
+    can therefore describe data the render does not use.
+
+    The consistency check is the spread of the body's up direction expressed in
+    the root's own frame. If positions and rotations describe the same skeleton
+    that direction is a fixed local axis and the spread is small; a large spread
+    means the two halves of the tensor are in different frames, and only the
+    rotations govern what is drawn.
+    """
+    from scipy.spatial.transform import Rotation as sRot
+
+    T = data.shape[0]
+    root = sRot.from_quat(data[:, 3:7].numpy())
+    body = data[:, BODY_POS].clone().reshape(T, -1, 3).numpy()
+    up_world = body[:, HEAD] - body[:, PELVIS]
+    up_world /= (np.linalg.norm(up_world, axis=1, keepdims=True) + 1e-12)
+
+    print("  root_rot sends local")
+    for name, axis in (("+X", [1, 0, 0]), ("+Y", [0, 1, 0]), ("+Z", [0, 0, 1])):
+        w = root.apply(np.tile(axis, (T, 1))).mean(axis=0)
+        w = w / (np.linalg.norm(w) + 1e-12)
+        near, deg = nearest_axis(w)
+        print(f"    {name} -> world {np.round(w, 3)}  (nearest {near}, {deg:.1f} deg)")
+
+    local_up = root.inv().apply(up_world)
+    mean_local = local_up.mean(axis=0)
+    mean_local /= (np.linalg.norm(mean_local) + 1e-12)
+    spread = np.degrees(np.arccos(np.clip(local_up @ mean_local, -1.0, 1.0)))
+    near, deg = nearest_axis(mean_local)
+    print(f"  body up in root frame {np.round(mean_local, 3)} "
+          f"(nearest {near}, {deg:.1f} deg), spread {spread.mean():.1f} deg "
+          f"mean / {spread.max():.1f} max")
+    if spread.mean() > 20.0:
+        print("  -> positions and rotations DISAGREE. Trust root_rot: it is what "
+              "the replay renders.")
+    else:
+        print("  -> positions and rotations agree.")
+
+
 def describe(path: Path) -> np.ndarray:
     """Print the up-direction and ground-clearance of one tensor.
 
@@ -88,6 +132,7 @@ def describe(path: Path) -> np.ndarray:
         print(f"  -> lying down / rolled: up points along {axis}, not a vertical axis.")
     if feet_z.mean() > head_z.mean():
         print(f"  -> feet sit above the head on average, consistent with a flip.")
+    describe_root_rot(data)
     return up
 
 
