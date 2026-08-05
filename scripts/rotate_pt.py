@@ -199,7 +199,15 @@ def main() -> int:
 
     torch.save(data, str(dst))
     print(f"wrote rotated tensor to {dst}")
-    print(f"applied {args.degrees}° around {args.axis}-axis")
+    # Report the mode that actually ran: --axis/--degrees are None on the other
+    # two paths, and printing "applied None° around None-axis" after a
+    # successful calibration rotation reads like a failure.
+    if args.from_calib:
+        print(f"applied the camera-to-world rotation from {args.from_calib}")
+    elif args.fix_frame_zero:
+        print("applied the inverse of frame 0's root rotation")
+    else:
+        print(f"applied {args.degrees}° around {args.axis}-axis")
     return 0
 
 

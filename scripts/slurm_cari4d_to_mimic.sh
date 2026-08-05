@@ -168,6 +168,40 @@ log "installed artifacts:"
 ls -la "$INTERACT/$DATASET_TAG"/sub"$SUBJECT_ID"_*.pt 2>/dev/null || true
 ls -la "$INTERMIMIC/isaacgym/src/intermimic/data/assets/smplx/smplh_"*_sub"$SUBJECT_ID".xml 2>/dev/null || true
 
+# Step 3.5: put the motion in a gravity-aligned frame. CARI4D reconstructs in
+# the camera's frame, where 'up' is wherever that camera's up pointed -- for a
+# camera looking level at a scene that is roughly world -Z, which is why an
+# unrotated clip replays upside down. The calibration states the rotation
+# exactly, so this is not a guess-and-check flip.
+#
+#   ROTATE_CALIB=/path/to/trajectory/gopro_calibs.csv:cam04
+#
+# Runs after step 3 because that is what installs the .pt, and before step 4 so
+# the render shows the corrected motion. Re-running the whole job is safe: step
+# 3 reinstalls an unrotated file each time, so the rotation is never applied
+# twice.
+ROTATE_CALIB="${ROTATE_CALIB:-}"
+
+# Rotate about each frame's root rather than the world origin. Keeps the figure
+# where it was instead of swinging it below the floor. Set 0 when the goal is to
+# match a real camera's viewpoint -- that needs true world coordinates, and this
+# mode deliberately leaves translations alone.
+ROTATE_AROUND_ROOT="${ROTATE_AROUND_ROOT:-1}"
+
+if [ -n "$ROTATE_CALIB" ]; then
+    PT_PATH="$INTERMIMIC/InterAct/$DATASET_TAG/${SEQ_NAME}.pt"
+    if [ ! -f "$PT_PATH" ]; then
+        echo "ERROR: ROTATE_CALIB set but no motion tensor at $PT_PATH" >&2
+        exit 1
+    fi
+    AROUND_ROOT_FLAG=""
+    if [ "$ROTATE_AROUND_ROOT" = "1" ]; then AROUND_ROOT_FLAG="--around-root"; fi
+    log "step 3.5: rotate_pt --from-calib $ROTATE_CALIB"
+    python scripts/rotate_pt.py "$PT_PATH" \
+        --from-calib "$ROTATE_CALIB" \
+        $AROUND_ROOT_FLAG
+fi
+
 if [ "$REPLAY" != "1" ]; then
     log "REPLAY=0, stopping after install"
     exit 0
