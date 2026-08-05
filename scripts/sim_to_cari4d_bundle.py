@@ -51,20 +51,30 @@ def load_module(name, path):
 
 
 def rigid_fit(src, dst):
-    """Return (R, t, rms) mapping src onto dst by rotation and translation only.
+    """Return (R, t, rms, cond) mapping src onto dst by rotation and translation.
 
     Kabsch. Scale is deliberately not fitted: both frames are metric, so a scale
     away from 1 means something is wrong upstream and should surface in the
     residual rather than be absorbed here.
+
+    cond is the ratio of the smallest to the largest singular value of the
+    centred source. It matters more than the residual: a point set spread over
+    one line or one plane leaves a rotation undetermined, and every member of
+    that family fits with zero error. A trajectory of someone running in a
+    straight line is exactly such a set, and fitting to it returns an arbitrary
+    roll about the direction of travel -- with a residual of zero.
     """
     src_c, dst_c = src.mean(axis=0), dst.mean(axis=0)
-    H = (src - src_c).T @ (dst - dst_c)
+    centred = src - src_c
+    H = centred.T @ (dst - dst_c)
     U, _, Vt = np.linalg.svd(H)
     d = np.sign(np.linalg.det(Vt.T @ U.T))
     R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
     t = dst_c - R @ src_c
     rms = float(np.sqrt((((src @ R.T + t) - dst) ** 2).sum(axis=1).mean()))
-    return R, t, rms
+    sv = np.linalg.svd(centred, compute_uv=False)
+    cond = float(sv[-1] / (sv[0] + 1e-12))
+    return R, t, rms, cond
 
 
 def quat_to_mat(q):
@@ -152,14 +162,28 @@ def main():
         raise SystemExit(f"the bundle has {len(ref_t)} frames and the motion "
                          f"tensor {len(sim_root)}; these are not one clip")
 
-    # Recover the frame change, then invert it: the fit wants targets in the
-    # camera's frame, which is where the renderer's intrinsics apply.
-    R_bs, t_bs, rms = rigid_fit(ref_t, sim_root)
-    print(f"bundle -> sim alignment: RMS {rms * 100:.1f} cm over {len(ref_t)} frames")
+    # The object is included, and that is the point. A person running in a
+    # straight line gives a nearly collinear set of root positions, which pins
+    # down the transform except for a rotation about that line -- and every
+    # member of that family fits perfectly, so the residual says nothing. The
+    # ball arcs metres vertically, which breaks the degeneracy.
+    ref_obj = bundle["pr"]["pose_abs"].detach().cpu().numpy()[:, :3, 3].astype(np.float64)
+    sim_obj = pt[:, 318:321].numpy().astype(np.float64)
+    src = np.concatenate([ref_t, ref_obj], axis=0)
+    dst = np.concatenate([sim_root, sim_obj], axis=0)
+
+    R_bs, t_bs, rms, cond = rigid_fit(src, dst)
+    print(f"bundle -> sim alignment: RMS {rms * 100:.1f} cm over {len(src)} points "
+          f"(root + object), conditioning {cond:.3f}")
     if rms > 0.15:
         raise SystemExit(
             f"{rms * 100:.0f} cm is too large for the same motion in two frames. "
             f"Refusing to write a bundle whose frame change is not trustworthy.")
+    if cond < 0.02:
+        raise SystemExit(
+            f"conditioning {cond:.4f}: the points are nearly confined to a line "
+            f"or plane, so the rotation is not determined and a zero residual "
+            f"would mean nothing. Refusing to guess at it.")
     R_sb = R_bs.T
     t_sb = -R_sb @ t_bs
 
