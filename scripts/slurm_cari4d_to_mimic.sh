@@ -60,6 +60,16 @@ GENDER="${GENDER:-male}"
 # subjects coexist there and the env YAML's dataSub picks between them.
 DATASET_TAG="${DATASET_TAG:-behave_cari4d}"
 
+# MESH=1 builds per-bone convex-hull STLs instead of capsules. Off by default
+# for two reasons. It does not work on this branch at all: smpl_local_robot.py
+# :1505 passes zero_pose= to get_mesh_offsets for every non-smplx model, and
+# SMPLH_Parser.get_mesh_offsets (smpl_parser.py:20091) has no such parameter, so
+# SMPL-H plus hulls is a TypeError inside InterAct's vendored uhc. And capsules
+# are the better rig regardless: their bone lengths come from the subject's own
+# betas, so proportions still match, without the seam cracks and convex-hull
+# infill the hulls introduce at joint rotations.
+MESH="${MESH:-0}"
+
 # Env config for the replay smoke test. Written by hand, not generated here.
 CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball.yaml}"
 
@@ -127,13 +137,20 @@ python scripts/cari4d_to_interact.py \
     --object-name "$OBJECT_NAME" \
     --clip-idx "$((10#$CLIP_IDX))"
 
-# Step 2: InterAct -> InterMimic. --mesh builds per-bone convex hulls from the
-# subject's own shape, so the MJCF matches this body rather than a mean one.
-log "step 2/4: run_interact2mimic (--mesh)"
-python scripts/run_interact2mimic.py \
-    --interact-root "$INTERACT" \
-    --dataset-name "$DATASET_TAG" \
-    --mesh
+# Step 2: InterAct -> InterMimic. Either rig derives its proportions from the
+# subject's betas; see MESH above for why hulls are not the default.
+if [ "$MESH" = "1" ]; then
+    log "step 2/4: run_interact2mimic (--mesh, convex hulls)"
+    python scripts/run_interact2mimic.py \
+        --interact-root "$INTERACT" \
+        --dataset-name "$DATASET_TAG" \
+        --mesh
+else
+    log "step 2/4: run_interact2mimic (capsules)"
+    python scripts/run_interact2mimic.py \
+        --interact-root "$INTERACT" \
+        --dataset-name "$DATASET_TAG"
+fi
 
 # Step 3: install the .pt and MJCF into this repo under the sub<N> naming.
 # --subject-id takes the string form here; step 1 took the bare integer.
