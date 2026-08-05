@@ -103,6 +103,14 @@ def main() -> int:
                              "camera framed a whole court; the reconstruction is "
                              "one player, so the true position can sit far away "
                              "with the subject small (default: 0, exact).")
+    parser.add_argument("--center-subject", action="store_true",
+                        help="Aim at the subject rather than straight down the "
+                             "real camera's optical axis. The camera stays where "
+                             "it was, so the viewpoint is unchanged -- only what "
+                             "is centred in frame differs. The real camera framed "
+                             "a whole court, so its axis points wherever the "
+                             "operator wanted, and the player can sit well off "
+                             "to one side.")
     parser.add_argument("--target-distance", type=float, default=None,
                         help="override the look-at distance in metres. Default "
                              "is the subject's mean distance from the camera, "
@@ -127,7 +135,19 @@ def main() -> int:
     forward = R @ np.array([0.0, 0.0, 1.0])
     distance = (args.target_distance if args.target_distance is not None
                 else float(np.linalg.norm(dst - cam_pos, axis=1).mean()))
-    target = cam_pos + forward * distance
+
+    if args.center_subject:
+        # Centroid of every joint over every frame, not the root: the root is at
+        # the pelvis, so aiming there puts the head near the top of frame.
+        pt = torch.load(str(args.pt.expanduser().resolve()), map_location="cpu")
+        target = pt[:, 162:318].reshape(pt.shape[0], -1, 3).numpy().reshape(-1, 3).mean(axis=0)
+        off_axis = np.degrees(np.arccos(np.clip(
+            (target - cam_pos) / np.linalg.norm(target - cam_pos) @ forward,
+            -1.0, 1.0)))
+        print(f"# centring on the subject: {off_axis:.1f} deg off the real "
+              f"camera's axis")
+    else:
+        target = cam_pos + forward * distance
 
     if args.pull_back:
         cam_pos = cam_pos - forward * args.pull_back
