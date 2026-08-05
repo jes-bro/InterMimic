@@ -30,8 +30,8 @@
 # shot are free flight; if the run fails exactly there, that is the machinery to
 # build next -- see the contact_obj channel (ch 330) already in the data.
 env:
-  numEnvs: 2048          # one 101-frame clip; 4096 buys nothing and 2048 keeps
-                         # PhysX at half the footprint that OOM'd the teachers
+  numEnvs: 4096          # PhysX multiplier lowered to 12.0 below to keep the
+                         # 4096-env footprint off the 44G ceiling the teachers hit
   envSpacing: 2
   episodeLength: 300
   isFlagrun: False
@@ -104,7 +104,7 @@ sim:
     rest_offset: 0.0
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 100.0
-    default_buffer_size_multiplier: 20.0
+    default_buffer_size_multiplier: 12.0  # validated on normval_adlr: no PhysX warnings, results continuous
     max_gpu_contact_pairs: 34603008
 
   flex:

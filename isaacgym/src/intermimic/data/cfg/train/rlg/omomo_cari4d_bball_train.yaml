@@ -8,10 +8,6 @@ params:
     name: intermimic
 
   network:
-    # MLP builder (run.py:212) instead of intermimic_transformer (run.py:217).
-    # THE ONE KNOB vs _normval_adlr. Pairs with numObs 3230 + no useTransformerObs
-    # in omomo_teacher_src2_mlp_lowbuf.yaml -- the transformer builder requires
-    # that env flag, the MLP one must not get it.
     name: intermimic
     separate: True
 
@@ -37,71 +33,41 @@ params:
       regularizer:
         name: None
 
+  # load_checkpoint: True
   load_checkpoint: False
 
   config:
     name: mimic
-    # SOURCE-TEACHER (normval + adaptive-LR arm): the _normval A/B showed
-    # normalize_value learns FASTER mid-run but suffers recurring one-epoch
-    # catastrophic updates (KL spikes 36-155 at constant LR 2e-5) that erase the
-    # lead. This arm keeps normalize_value=True and adds the adaptive KL-based
-    # LR schedule (same knob as the _adlr variant) to suppress those blowups.
-    # Two knobs vs the src2_xf_aug baseline; single knob vs either A/B arm.
-    # MLP + normval + adaptive-LR, FRESH from epoch 0 (no warm start possible --
-    # 3230-dim obs is incompatible with the transformer arm's 6524-dim checkpoint).
-    #
-    # WHY: eval of the two old arms says the MLP is ahead despite LESS training --
-    # src2_aug @52,500 scored 90.5% in-dist / 69.9% held-out, vs src2_xf_aug
-    # @61,200 at 83.9% / 62.8%. Checked the obvious confound: the MLP arm trained
-    # on sub121 (0.34 from held-out sub13), but that can only inflate sub13, and
-    # sub13 is the SMALLER gap (+5.8) -- the big one is sub16 (+13.4), which sub121
-    # cannot touch, and in-dist (+6.6) is over the same 13 real bodies either way.
-    #
-    # But those were both the OLD recipe (constant LR, no normalize_value). This
-    # arm supplies the missing cell: does the MLP still win once both architectures
-    # get normval + adaptive LR? If it does, the transformer is the wrong horse. If
-    # the gap closes, the transformer was merely under-tuned -- plausible, since it
-    # carries 2x the obs width on hyperparameters inherited from the MLP, and it is
-    # the arm showing clip_frac 0.47-0.57 with lr throttled to 7.59e-6.
-    #
-    # Built from the TRANSFORMER arm's configs, not from src2_aug, so the body list
-    # (sub121 excluded), betas, PSI, reward terms and PhysX settings are identical
-    # and architecture is the only variable.
-    # OVERFIT run on the EgoExo4D bball reconstruction (one clip, one body).
-    # Train cfg is the MLP + normval + adaptive-LR recipe unchanged -- the
-    # network's input width comes from the env (3198 here, no betas), so the
-    # same cfg drives it. minibatch 16384 divides 2048 envs x 32 horizon = 65536
-    # into 4 minibatches.
+    # OVERFIT diagnostic on the EgoExo4D bball reconstruction. Train cfg is the
+    # STOCK upstream teacher config (constant 2e-5, normalize_value False, MLP
+    # [1024,1024,512]) -- the optimizer every released InterMimic teacher used.
+    # Deliberately NOT the normval+adlr recipe: that recipe has only been proven
+    # on the transformer, and a diagnostic run should not carry an untested
+    # optimizer combination in its suspect list. 4096 envs x 32 horizon = 131072
+    # = 8 minibatches of 16384.
     full_experiment_name: smplx_cari4d_bball_overfit
     env_name: rlgpu
     multi_gpu: False
     ppo: True
     mixed_precision: False
     normalize_input: True
-    normalize_value: True     # knob 1: critic value-target normalization (as in _normval)
+    normalize_value: False
     reward_shaper:
       scale_value: 1
     normalize_advantage: True
     gamma: 0.99
     tau: 0.95
     learning_rate: 2e-5
-    lr_schedule: adaptive         # knob 2: adapts LR to keep KL near kl_threshold (as in _adlr)
-    # kl_threshold is calibrated to the EXACT-KL scale (see exact_policy_kl in
-    # learning/common_agent.py; the biased rl_games estimator is not used).
-    # Healthy epochs at LR 2e-5 measure exact-KL ~= 0.06 over the 153-dim action
-    # space, so 0.06 keeps LR steady in the stable regime (band 0.03-0.12) and
-    # slams it down on the blowup epochs (KL 36-155) that collapsed the _normval
-    # run. Do NOT use rl_games' 0.008 default here -- that scale assumes both the
-    # (biased) stock estimator and a much smaller action space.
-    kl_threshold: 0.06
+    lr_schedule: constant
     score_to_win: 20000
     max_epochs: 100000
-    save_best_after: 100
-    save_frequency: 100
+    save_best_after: 500
+    save_frequency: 500
     print_stats: True
     grad_norm: 1.0
     entropy_coef: 0.0
     truncate_grads: False
+    ppo: True
     e_clip: 0.2
     horizon_length: 32
     minibatch_size: 16384
@@ -111,5 +77,5 @@ params:
     seq_len: 4
     bounds_loss_coef: 10
     enable_eps_greedy: False
-    save_intermediate: True
-    resume_from: 'None'
+    resume_from: checkpoints/smplx_teachers_new/sub2.pth
+    save_intermediate: False

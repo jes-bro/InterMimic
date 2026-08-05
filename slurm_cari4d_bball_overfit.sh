@@ -34,7 +34,7 @@ CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_train.yaml
 CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_train.yaml
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 
-echo "[teacher] CARI4D BBALL OVERFIT: 1 clip x 1 body (sub100), numObs 3198 (no betas), density 86, restitution 0.85/0.85, MLP + normval + adaptive LR"
+echo "[teacher] CARI4D BBALL OVERFIT: 1 clip x 1 body (sub100, no retargeting), 4096 envs, numObs 3198, density 86, restitution 0.85/0.85, STOCK upstream optimizer (constant 2e-5, no normval)"
 echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_cari4d_bball_overfit/nn/"
 
 # --- auto-resume: continue from the latest checkpoint if one exists. resume_from
