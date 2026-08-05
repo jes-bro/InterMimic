@@ -87,6 +87,12 @@ def main() -> int:
     parser.add_argument("--pt", type=Path, required=True)
     parser.add_argument("--mesh", type=Path, default=None,
                         help="the ball .obj, for its radius")
+    parser.add_argument("--max-contact-height", type=float, default=0.5,
+                        help="Ignore minima above this height, in metres "
+                             "(default: 0.5). Not every dip in the ball's height "
+                             "is a bounce -- during a shot the trajectory wobbles "
+                             "metres off the ground, and counting those as floor "
+                             "contacts makes the summary meaningless.")
     parser.add_argument("--fps", type=float, default=30.0,
                         help="source frame rate, used to work out how much of "
                              "the clearance sampling alone explains (default: 30)")
@@ -110,9 +116,21 @@ def main() -> int:
               f"(diameter {radius * 2:.3f} m)")
         print(f"  centre height at true contact would be {radius:.3f} m")
 
-    mins = local_minima(obj_z)
-    if not mins:
+    all_mins = local_minima(obj_z)
+    if not all_mins:
         print("  no local minima -- the ball never bounces in this clip")
+        return 0
+    mins = [i for i in all_mins if obj_z[i] <= args.max_contact_height]
+    airborne = len(all_mins) - len(mins)
+    if airborne:
+        print(f"  ignored {airborne} minima above "
+              f"{args.max_contact_height:.2f} m (trajectory dips in flight, "
+              f"not floor contacts)")
+    if not mins:
+        print(f"  NO minimum below {args.max_contact_height:.2f} m: the ball's "
+              f"lowest point in this clip is {obj_z.min():.3f} m, so it never "
+              f"comes near the floor at all. Either the clip contains no "
+              f"dribble, or the ball is tracked far too high throughout.")
         return 0
 
     print()
