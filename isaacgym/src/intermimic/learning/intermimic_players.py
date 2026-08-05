@@ -63,6 +63,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
 
         _record_path = os.environ.get("RECORD_VIDEO")
         _max_video_frames = int(os.environ.get("MAX_VIDEO_FRAMES", "1000"))
+        # Leading frames to discard before writing any. Counted separately from
+        # _frames_written so MAX_VIDEO_FRAMES still means the length of the
+        # finished video rather than the length before trimming.
+        _skip_video_frames = int(os.environ.get("SKIP_VIDEO_FRAMES", "0"))
+        _skipped = 0
         _frames_written = 0
         _writer = None
         _cam_handle = None
@@ -210,10 +215,18 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                                 task.sim, task.envs[0], _cam_handle, gymapi.IMAGE_COLOR
                             )
                             img = img.reshape(_cam_props.height, _cam_props.width, 4)[..., :3]
-                            _writer.append_data(img)
-                            _frames_written += 1
-                            if _frames_written >= _max_video_frames:
-                                break
+                            # play_dataset_step writes the root and dof tensors,
+                            # but they only reach the sim on the following step,
+                            # so the first image still shows the asset's default
+                            # T-pose rather than frame 0 of the motion.
+                            # SKIP_VIDEO_FRAMES drops those leading frames.
+                            if _skipped < _skip_video_frames:
+                                _skipped += 1
+                            else:
+                                _writer.append_data(img)
+                                _frames_written += 1
+                                if _frames_written >= _max_video_frames:
+                                    break
                     if _writer is None:
                         break  # not recording -> one pass is enough, don't loop
                     # Recording: done when full, OR when a pass added nothing (no

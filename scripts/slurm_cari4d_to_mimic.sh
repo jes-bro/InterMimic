@@ -85,6 +85,11 @@ RECORD_VIDEO="${RECORD_VIDEO:-$RECORD_DIR/sub${SUBJECT_ID}_${OBJECT_NAME}_${CLIP
 # a ceiling. Too low silently truncates the motion.
 MAX_VIDEO_FRAMES="${MAX_VIDEO_FRAMES:-600}"
 
+# Leading frames to drop. play_dataset_step sets the root and dof tensors, but
+# they only reach the sim on the following step, so the first captured image is
+# the asset's default T-pose rather than the motion. Set 0 to keep it.
+SKIP_VIDEO_FRAMES="${SKIP_VIDEO_FRAMES:-1}"
+
 # Camera, as "x,y,z". The default (3,3,2.5) looking at (0,0,1) frames a person
 # at the origin. A subject who walks -- or whose world transform is wrong, which
 # is the open question for this clip -- can leave frame entirely, so being able
@@ -263,7 +268,7 @@ export PYTHONPATH="$INTERMIMIC/isaacgym/src:$INTERMIMIC:${PYTHONPATH:-}"
 # variable but parses an empty string as a failed parse. `[ -n x ] && export`
 # would be shorter, but under set -e the false branch is the last command in the
 # list and would end the job.
-export RECORD_VIDEO MAX_VIDEO_FRAMES
+export RECORD_VIDEO MAX_VIDEO_FRAMES SKIP_VIDEO_FRAMES
 if [ -n "$RECORD_VIDEO_CAM_POS" ]; then export RECORD_VIDEO_CAM_POS; fi
 if [ -n "$RECORD_VIDEO_CAM_TARGET" ]; then export RECORD_VIDEO_CAM_TARGET; fi
 python -u -m intermimic.run \
