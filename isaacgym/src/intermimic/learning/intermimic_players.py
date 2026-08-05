@@ -177,9 +177,28 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                         fps=int(os.environ.get("RENDER_CLIPS_FPS", 30)))
                     return
                 # play dataset
-                _done_recording = False
-                while not _done_recording:
-                    for t in range(self.env.task.max_episode_length.max()):
+                # No-silent-fallback: RECORD_VIDEO was requested but no writer
+                # exists -> imageio (or imageio-ffmpeg) is missing in this env.
+                # Replaying with no video and "succeeding" hides the failure, so
+                # fail loudly instead of producing a video-less run.
+                if _record_path is not None and _writer is None:
+                    raise RuntimeError(
+                        f"RECORD_VIDEO={_record_path} is set but no video writer "
+                        "was created (imageio unavailable in this conda env). "
+                        "Install it, e.g.:  pip install imageio imageio-ffmpeg  "
+                        "into the env the replay script activates (intermimic-gym2).")
+
+                # One full pass over the loaded clip(s). When recording we keep
+                # replaying until _max_video_frames frames are captured, but we
+                # ALWAYS guarantee forward progress: if a pass captures zero new
+                # frames (e.g. max_episode_length == 0 for a clip that loaded with
+                # zero length), stop instead of spinning the while loop forever
+                # with no output. This is the bug that made replays hang and emit
+                # no mp4.
+                _pass_len = int(self.env.task.max_episode_length.max())
+                while True:
+                    _before = _frames_written
+                    for t in range(_pass_len):
                         self.env.task.play_dataset_step(t)
                         # Capture frame to RECORD_VIDEO if set (mirror of the
                         # inference branch's recording loop below).
@@ -194,15 +213,28 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             _writer.append_data(img)
                             _frames_written += 1
                             if _frames_written >= _max_video_frames:
-                                _writer.close()
-                                print(f"[player] wrote {_frames_written} frames to {_record_path}, video done")
-                                _writer = None
-                                _done_recording = True
                                 break
                     if _writer is None:
-                        break  # never set up recording → don't loop forever
-                # If we were recording, exit the n_games loop too — don't
-                # keep playing the dataset forever.
+                        break  # not recording -> one pass is enough, don't loop
+                    # Recording: done when full, OR when a pass added nothing (no
+                    # frames left to capture) so we never loop forever.
+                    if _frames_written >= _max_video_frames or _frames_written == _before:
+                        break
+
+                if _writer is not None:
+                    _writer.close()
+                    _writer = None
+                    if _frames_written == 0:
+                        # Loud, not a silent empty/zero-byte mp4.
+                        raise RuntimeError(
+                            f"RECORD_VIDEO={_record_path}: captured 0 frames "
+                            f"(max_episode_length.max()={_pass_len}). The clip(s) "
+                            "loaded with zero length -- check dataSub / motion_file "
+                            "/ CLIP so a real motion is selected.")
+                    print(f"[player] wrote {_frames_written} frames to {_record_path}, video done", flush=True)
+
+                # play_dataset is a finite replay: when recording, exit the whole
+                # n_games loop -- don't fall through and keep replaying forever.
                 if _record_path is not None:
                     import sys
                     sys.exit(0)
