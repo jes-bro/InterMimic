@@ -18,6 +18,7 @@ subjects apart.
 import argparse
 import importlib.util
 import os
+import re
 
 import numpy as np
 
@@ -51,12 +52,37 @@ def _ik_frames(P, subject, target_joints, obj_pos, obj_rot, warm):
         yield v, f, obj_pos[t], (None if obj_rot is None else obj_rot[t])
 
 
-def frames_from_dump(P, path, warm, stride):
+def subject_key(raw, available):
+    """Return the betas key a dump's subject string refers to.
+
+    The player records whatever names the body, and that is only sometimes a
+    bare subject id: with subjectBodies set it is 'sub4', but a config using
+    robotType records the MJCF path instead -- 'smplx/smplh_behave_sub100.xml'.
+    Both mean the same body, and neither the sim nor the archive is wrong, so
+    the sub<N> is pulled out of whichever form arrived.
+
+    Raises:
+        SystemExit: if no key matches, listing what is available -- a wrong
+            match would render a real person who is not this one.
+    """
+    if raw in available:
+        return raw
+    found = re.findall(r"sub\d+", raw)
+    for candidate in found:
+        if candidate in available:
+            print(f"[mesh-replay] dump names the body {raw!r}; using betas "
+                  f"entry {candidate!r}")
+            return candidate
+    raise SystemExit(
+        f"FATAL: dump subject {raw!r} has no betas entry. Available: "
+        f"{sorted(available)}. Pass --subject to say which one, or add it with "
+        f"scripts/add_subject_betas.py")
+
+
+def frames_from_dump(P, path, warm, stride, subject=None):
     """Frames from a simulator rollout: the sim's own global body state."""
     d = np.load(path, allow_pickle=True)
-    subject = str(d["subject"])
-    if subject not in P.betas.files:
-        raise SystemExit(f"FATAL: dump subject {subject!r} has no betas entry")
+    subject = subject_key(subject or str(d["subject"]), set(P.betas.files))
     rot = d["obj_rot"][::stride] if "obj_rot" in d.files else None
     return _ik_frames(P, subject, d["body_pos"][::stride], d["obj_pos"][::stride],
                       rot, warm)
@@ -143,7 +169,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dump", help="rollout npz from DUMP_TRAJ")
     ap.add_argument("--clip", help="raw OMOMO .pt clip (ground-truth motion)")
-    ap.add_argument("--subject", help="body to shape (required with --clip)")
+    ap.add_argument("--subject", help="body to shape. Required with --clip; with "
+                                      "--dump it overrides whatever the sim "
+                                      "recorded, which may be an MJCF path "
+                                      "rather than a subject id")
     ap.add_argument("--out", default="mesh_replay.mp4")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--models", default=None)
@@ -169,7 +198,7 @@ def main():
         raise SystemExit("FATAL: --clip needs --subject (which body to shape)")
 
     P = _poser(a.models, a.betas)
-    gen = (frames_from_dump(P, a.dump, a.ik_iters, a.stride) if a.dump
+    gen = (frames_from_dump(P, a.dump, a.ik_iters, a.stride, a.subject) if a.dump
            else frames_from_clip(P, a.clip, a.subject, a.ik_iters, a.stride))
 
     # Stride is applied BEFORE the IK fit (in the generators), so don't re-subsample.
