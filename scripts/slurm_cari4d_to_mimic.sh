@@ -14,11 +14,13 @@
 #SBATCH --mail-type=ALL
 
 # Carry a CARI4D reconstruction into Isaac Gym: convert, retarget, install, and
-# smoke-test the replay. The four steps documented at the top of
-# isaacgym/scripts/data_replay_cari4d.sh, run as one queued job.
+# record the replay. The four steps documented at the top of
+# isaacgym/scripts/data_replay_cari4d.sh, run as one queued job, ending in an
+# MP4 rather than a viewer nobody is sitting in front of.
 #
 #   sbatch scripts/slurm_cari4d_to_mimic.sh
 #   SUBJECT_ID=101 OBJECT_NAME=chair sbatch scripts/slurm_cari4d_to_mimic.sh
+#   RECORD_VIDEO_CAM_POS=8,8,5 sbatch scripts/slurm_cari4d_to_mimic.sh
 #
 # Queued rather than interactive because every step here imports scipy or torch
 # from /simurgh2, and a cold import of those on a login node takes minutes --
@@ -61,10 +63,24 @@ DATASET_TAG="${DATASET_TAG:-behave_cari4d}"
 # Env config for the replay smoke test. Written by hand, not generated here.
 CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball.yaml}"
 
-# Set REPLAY=0 to stop after installing. The replay runs headless, so it proves
-# the motion loads and the MJCF is valid but shows nothing -- watching it needs
-# a display, which a batch job does not have.
+# Set REPLAY=0 to stop after installing. Otherwise the replay runs headless and
+# records to RECORD_VIDEO, the same mechanism render_qualitative.sh uses -- so a
+# batch job with no display still produces something watchable.
 REPLAY="${REPLAY:-1}"
+RECORD_DIR="${RECORD_DIR:-$INTERMIMIC/renders}"
+RECORD_VIDEO="${RECORD_VIDEO:-$RECORD_DIR/sub${SUBJECT_ID}_${OBJECT_NAME}_${CLIP_IDX}.mp4}"
+
+# Frames to capture. The basketball clip is 101 frames, but the sim steps at a
+# different rate than the source video, so this is not the clip length -- it is
+# a ceiling. Too low silently truncates the motion.
+MAX_VIDEO_FRAMES="${MAX_VIDEO_FRAMES:-600}"
+
+# Camera, as "x,y,z". The default (3,3,2.5) looking at (0,0,1) frames a person
+# at the origin. A subject who walks -- or whose world transform is wrong, which
+# is the open question for this clip -- can leave frame entirely, so being able
+# to pull the camera back matters more here than usual.
+RECORD_VIDEO_CAM_POS="${RECORD_VIDEO_CAM_POS:-}"
+RECORD_VIDEO_CAM_TARGET="${RECORD_VIDEO_CAM_TARGET:-}"
 
 log() { echo "[c2m $(date -u +%H:%M:%S)] $*"; }
 
@@ -138,9 +154,9 @@ if [ "$REPLAY" != "1" ]; then
     exit 0
 fi
 
-# Step 4: headless replay. Proves the clip loads and the MJCF is valid. The
-# config is not generated here on purpose -- dataSub and robotType must name
-# sub<N>, and silently rewriting someone's env YAML is worse than failing.
+# Step 4: headless replay, recorded to MP4. The config is not generated here on
+# purpose -- dataSub and robotType must name sub<N>, and silently rewriting
+# someone's env YAML is worse than failing.
 if [ ! -f "$INTERMIMIC/$CFG_ENV" ]; then
     echo "ERROR: no env config at $CFG_ENV." >&2
     echo "  Copy one and point it at this subject, e.g.:" >&2
@@ -148,12 +164,31 @@ if [ ! -f "$INTERMIMIC/$CFG_ENV" ]; then
     exit 1
 fi
 
-log "step 4/4: headless replay smoke test ($CFG_ENV)"
+log "step 4/4: headless replay -> $RECORD_VIDEO"
+mkdir -p "$(dirname "$RECORD_VIDEO")"
 export PYTHONPATH="$INTERMIMIC/isaacgym/src:$INTERMIMIC:${PYTHONPATH:-}"
-python -m intermimic.run \
+
+# num_envs 1, not 16: the recording camera is attached to a single env
+# (RECORD_VIDEO_ENV_IDX, default 0) and each env's object mesh is fixed at
+# creation, so extra envs cost simulation time and appear in no frame.
+# Exported only when set: the player falls back to its own defaults on an unset
+# variable but parses an empty string as a failed parse. `[ -n x ] && export`
+# would be shorter, but under set -e the false branch is the last command in the
+# list and would end the job.
+export RECORD_VIDEO MAX_VIDEO_FRAMES
+if [ -n "$RECORD_VIDEO_CAM_POS" ]; then export RECORD_VIDEO_CAM_POS; fi
+if [ -n "$RECORD_VIDEO_CAM_TARGET" ]; then export RECORD_VIDEO_CAM_TARGET; fi
+python -u -m intermimic.run \
     --task InterMimic \
     --cfg_env "$CFG_ENV" \
     --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml \
-    --test --play_dataset --headless --num_envs 16
+    --test --play_dataset --headless --num_envs 1
 
+# The player errors rather than exiting quietly when RECORD_VIDEO is set and no
+# frames were captured, so reaching here with no file means something rarer.
+if [ ! -s "$RECORD_VIDEO" ]; then
+    echo "ERROR: replay finished but $RECORD_VIDEO is missing or empty" >&2
+    exit 1
+fi
 log "done"
+ls -lh "$RECORD_VIDEO"
