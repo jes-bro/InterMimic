@@ -128,7 +128,7 @@ def main() -> int:
           f"{'fit_rms':>8}")
     print("  " + "-" * 46)
 
-    fitted = []
+    fitted, rms_seen = [], []
     n = args.arc_frames
     for i in troughs:
         lo, hi = max(0, i - n), min(len(z) - 1, i + n)
@@ -148,13 +148,23 @@ def main() -> int:
             continue
         print(f"  {i:>7} {z[i]:>9.3f} {z_c:>8.3f} {z[i] - z_c:>+8.3f} {rms:>8.3f}")
         fitted.append(z_c)
+        rms_seen.append(rms)
 
     if not fitted:
         return 0
 
     f = np.array(fitted)
+    sampled_lows = np.array([z[i] for i in troughs[:len(f)]])
     print()
-    print(f"  fitted contact height: mean {f.mean():.3f} m over {len(f)} bounces")
+    print(f"  fitted contact height: mean {f.mean():.3f} m over {len(f)} bounce(s)")
+    print(f"  of the gap between the lowest SAMPLE and true contact:")
+    print(f"    {float((sampled_lows - f).mean()):.3f} m is sampling "
+          f"(frames missing the instant)")
+    if radius is not None:
+        print(f"    {float(f.mean() - radius):.3f} m is unexplained -- the arcs "
+              f"themselves say the ball turned around there")
+    if len(f) == 1:
+        print(f"  NOTE: one bounce only, so this rests on a single fit.")
     if radius is None:
         return 0
     if abs(f.mean() - radius) < 0.06:
@@ -168,8 +178,11 @@ def main() -> int:
               f"above contact. That is not a sampling artifact: the arcs either "
               f"side already imply where it bottomed out, and it is not the "
               f"floor. The tracking is high.")
-    print(f"  fit_rms well above a centimetre means the arcs are not free flight, "
-          f"and neither conclusion holds.")
+    worst = max(rms_seen) if rms_seen else 0.0
+    if worst > 0.01:
+        print(f"  CAUTION: worst fit_rms {worst:.3f} m. Free flight should fit to "
+              f"millimetres, so the arcs are carrying tracking noise and the "
+              f"fitted height is good to roughly that much either way.")
     return 0
 
 
