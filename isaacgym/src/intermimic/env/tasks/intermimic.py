@@ -102,7 +102,8 @@ class InterMimic(Humanoid_SMPLX):
         'keyBodies', 'keyIndex', 'localRootObs', 'maskDeadEnvs', 'maxClipsPerObject',
         'moreRigid', 'motion_file', 'motion_file_retarget', 'numActions', 'numDoF',
         'numDoFHand', 'numDoFWrist', 'numEnvs', 'numObs', 'numObsRetarget',
-        'numObservations', 'numStates', 'objectDensity', 'pairSampleCountsFile',
+        'numObservations', 'numStates', 'objectDensity', 'objectShapeProps',
+        'pairSampleCountsFile',
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'retargetedMotionDir', 'rewardTerms', 'rewardWeights',
         'robotType', 'rolloutLength',
@@ -974,11 +975,26 @@ class InterMimic(Humanoid_SMPLX):
         target_handle = self.gym.create_actor(env_ptr, self._target_asset[env_id % len(self.object_name)], default_pose, self.object_name[env_id % len(self.object_name)], col_group, col_filter, segmentation_id)
 
         props = self.gym.get_actor_rigid_shape_properties(env_ptr, target_handle)
+        # Object contact properties. These were hardcoded (restitution 0.05,
+        # friction 0.6, rolling/torsion 0.01) -- values tuned for OMOMO furniture,
+        # where nothing is supposed to bounce. That SILENTLY overrides whatever a
+        # URDF says, which surfaced with the CARI4D basketball: its URDF was
+        # edited to bounce and nothing changed, because these lines run after
+        # asset load. cfg['env']['objectShapeProps'] now overrides per-key
+        # (restitution/friction/rolling_friction/torsion_friction); absent keys
+        # keep the old hardcoded value, so existing configs are byte-identical.
+        # A basketball wants restitution ~0.85 (with the plane raised to match --
+        # PhysX averages the two by default).
+        _osp = self.cfg['env'].get('objectShapeProps') or {}
+        _unknown = set(_osp) - {'restitution', 'friction', 'rolling_friction', 'torsion_friction'}
+        if _unknown:
+            raise ValueError(f"[intermimic] unknown objectShapeProps key(s): {sorted(_unknown)} "
+                             f"(valid: restitution, friction, rolling_friction, torsion_friction)")
         for p_idx in range(len(props)):
-            props[p_idx].restitution = 0.05
-            props[p_idx].friction = 0.6
-            props[p_idx].rolling_friction = 0.01
-            props[p_idx].torsion_friction = 0.01
+            props[p_idx].restitution = float(_osp.get('restitution', 0.05))
+            props[p_idx].friction = float(_osp.get('friction', 0.6))
+            props[p_idx].rolling_friction = float(_osp.get('rolling_friction', 0.01))
+            props[p_idx].torsion_friction = float(_osp.get('torsion_friction', 0.01))
             if self.object_name[env_id % len(self.object_name)] == 'plasticbox' or self.object_name[env_id % len(self.object_name)] == 'trashcan':
                 props[p_idx].rest_offset = 0.015
             else:
