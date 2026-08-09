@@ -7,24 +7,21 @@
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 
-#SBATCH --job-name="tch-mlp-ret-nvadlr"
-#SBATCH --output=teacher-src2_mlp_retarget_nvadlr-%j.out
+#SBATCH --job-name="tch-mlp-ret"
+#SBATCH --output=teacher-src2_mlp_retarget-%j.out
 
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=ALL
 
-# MLP + RETARGET + cpuMotion + normalize_value + adaptive LR (kl 0.06).
-# The cell that combines the two winners: the MLP architecture (beat the
-# transformer 86.4/64.2 in-dist at matched 16.2k) and per-body contact
-# retargeting (the only method reaching sub16). Single-knob relations, verified
-# by semantic diff at creation:
-#   vs src2_xf_aug_retarget_nvadlr : architecture only (numObs 3230, no
-#                                    useTransformerObs)
-#   vs src2_mlp_normval_adlr       : retargeting only (+retargetedMotionDir,
-#                                    +cpuMotionData)
-# so arch and method can each be read off against a one-variable neighbour.
+# MLP + RETARGET, STOCK recipe (constant LR 2e-5, no normval) -- "just mlp +
+# retargeting". Same env cfg as the nvadlr sibling (retargetedMotionDir +
+# cpuMotionData + lowbuf 12.0 + sub121-free body list); the ONLY difference is
+# the train cfg's optimizer knobs:
+#   vs src2_mlp_retarget_nvadlr : recipe only (normval + adaptive LR off)
+#   vs src2_aug                 : retargeting under the recipe src2_aug used
+#                                 (but env package differs -- see train cfg note)
 #
-# Runs from repo root. Saves to checkpoints/smplx_teacher_src2_mlp_retarget_nvadlr/nn/.
+# Runs from repo root. Saves to checkpoints/smplx_teacher_src2_mlp_retarget/nn/.
 
 source ~/.bashrc
 conda deactivate
@@ -42,17 +39,21 @@ export TERM_REASON_EVERY=2000
 export POSE_REWARD_DEBUG=1          # [posechk] dof-alignment sanity (pose term is on)
 
 CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_teacher_src2_mlp_retarget_lowbuf.yaml
-CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src2_mlp_retarget_nvadlr.yaml
+CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_src2_mlp_retarget.yaml
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 
-echo "[teacher] MLP + RETARGET + nvadlr: numObs 3230, lowbuf 12.0, cpuMotionData"
-echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src2_mlp_retarget_nvadlr/nn/"
+echo "[teacher] MLP + RETARGET (stock recipe): numObs 3230, lowbuf 12.0, cpuMotionData"
+echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_src2_mlp_retarget/nn/"
 
-# Fail loudly rather than silently measuring the wrong thing: this test is
-# meaningless if the cfg it points at does not actually have the knob on.
+# Fail loudly rather than silently training the wrong cell: retargeting +
+# cpuMotionData must actually be on in the env cfg this script points at.
 if ! grep -qE '^\s*cpuMotionData:\s*[Tt]rue' "$CFG_ENV"; then
-    echo "[teacher] ERROR: cpuMotionData is not True in $CFG_ENV -- this run would" >&2
-    echo "[teacher]        just re-measure the baseline. Aborting." >&2
+    echo "[teacher] ERROR: cpuMotionData is not True in $CFG_ENV. Aborting." >&2
+    exit 1
+fi
+if ! grep -qE '^\s*retargetedMotionDir:' "$CFG_ENV"; then
+    echo "[teacher] ERROR: retargetedMotionDir missing in $CFG_ENV -- this would" >&2
+    echo "[teacher]        train plain MLP, not MLP+retarget. Aborting." >&2
     exit 1
 fi
 
