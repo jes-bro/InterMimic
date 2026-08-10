@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=simurgh
 #SBATCH --partition=simurgh --qos=normal
-#SBATCH --time=2-00:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -28,8 +28,16 @@ conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
-# Env cfg is self-contained (one clip, one body); PhysX multiplier stays 20.0
-# because 2048 envs is half the footprint that OOM'd the 4096-env teachers.
+# Reward diagnostics (print-only; none change training) -- same set as gen-2.
+export REWARD_BREAKDOWN=1
+export REWARD_BREAKDOWN_EVERY=1000
+export TERM_REASON=1
+export TERM_REASON_EVERY=2000
+export POSE_REWARD_DEBUG=1
+
+# Env cfg is self-contained (one clip, one body, 4096 envs) and already lowbuf
+# (default_buffer_size_multiplier 12.0 -- an earlier comment here wrongly said
+# 20.0). 24h walltime to fit the gen-2 rotation; resubmit to auto-resume.
 CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_train.yaml
 CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_train.yaml
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
