@@ -28,16 +28,24 @@ def main():
     assert abs(FLOOR - 2.106) < 0.01, FLOOR          # pin the calibration
     with tempfile.TemporaryDirectory() as tmp:
         written = g2.main(["--out-root", tmp])
-        assert len(written) == 48, len(written)      # 16 cells x (env, train, slurm)
+        assert len(written) == 60, len(written)      # (16+4 buf20) cells x 3 files
         names = set()
         roster = {}      # the shared synthetic roster, pinned by the first cell
-        for name, arch, refs, recipe, fold in g2.cells():
+        for name, arch, refs, recipe, fold, mult in g2.cells():
             cfgd = os.path.join(tmp, "isaacgym/src/intermimic/data/cfg")
             env = yaml.safe_load(open(os.path.join(cfgd, f"omomo_teacher_{name}.yaml")))["env"]
             tr = yaml.safe_load(open(os.path.join(cfgd, f"train/rlg/omomo_teacher_{name}.yaml")))
             cfgtr = tr["params"]["config"]
             slurm = open(os.path.join(tmp, f"slurm_teacher_{name}.sh")).read()
             test = g2.FOLDS[fold]
+            # buffer axis: satellite cells carry 20.0, main cells 12.0; the
+            # slurm guard must pin the same value the cfg has.
+            full = yaml.safe_load(open(os.path.join(cfgd, f"omomo_teacher_{name}.yaml")))
+            got = full["sim"]["physx"]["default_buffer_size_multiplier"]
+            assert abs(got - mult) < 1e-9, (name, got)
+            assert f"default_buffer_size_multiplier:\\s*{mult}\\.0" in slurm, name
+            if mult != 12:
+                assert name.endswith("_buf20__f0") and recipe == "stock" and fold == 0, name
             bodies = env["subjectBodies"]
 
             # fold axis: no test body trains; sub4 never trains; 13 reals; and
@@ -87,8 +95,8 @@ def main():
             exp = cfgtr["full_experiment_name"]
             assert exp == f"smplx_teacher_{name}" and exp not in names
             names.add(exp)
-        assert len(names) == 16
-    print("ALL GREEN: 16 cells, axes independent, floor-clean folds, uniform 2048 envs")
+        assert len(names) == 20
+    print("ALL GREEN: 20 cells (16 main + 4 buf20), axes independent, floor-clean folds, uniform 2048 envs")
 
 
 if __name__ == "__main__":
