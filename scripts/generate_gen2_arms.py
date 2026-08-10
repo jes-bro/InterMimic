@@ -49,6 +49,7 @@ BROKEN = "sub4"
 ENV_BASE = {
     ("mlp", "plain"): "omomo_teacher_src2_mlp_lowbuf.yaml",
     ("mlp", "ret"):   "omomo_teacher_src2_mlp_retarget_lowbuf.yaml",
+    ("mlp", "ret_gpu"): "omomo_teacher_src2_mlp_retarget_lowbuf.yaml",  # cpuMotionData flipped off below
     ("xf", "plain"):  "omomo_teacher_src2_xf_aug_lowbuf.yaml",
     ("xf", "ret"):    "omomo_teacher_src2_xf_aug_retarget_nvadlr_lowbuf.yaml",
 }
@@ -74,6 +75,14 @@ def cells():
     for arch in ("mlp", "xf"):
         for refs in ("plain", "ret"):
             yield (f"g2_{arch}_{refs}_stock_buf20__f0", arch, refs, "stock", 0, 20)
+    # gpumotion satellite (2026-08-10, Jess): MLP retarget with cpuMotionData
+    # OFF -- motion GPU-resident (~6.5G at 43 bodies, fits at 2048 envs). The
+    # flag streams identical bytes, so any RESULT difference vs the streaming
+    # twins is a training-draw effect; these cells double as two extra
+    # independent MLP+retarget draws for the sub16 replication, plus a
+    # throughput read (no streaming tax).
+    for recipe in ("stock", "nvadlr"):
+        yield (f"g2_mlp_ret_{recipe}_gpumotion__f0", "mlp", "ret_gpu", recipe, 0, 12)
 
 
 def shared_synthetics(betas, floor, log=lambda s: None):
@@ -159,6 +168,11 @@ def main(argv=None):
             if env.count(old) != 1:
                 raise SystemExit(f"FATAL: {env.count(old)} multiplier lines in {env_path}")
             env = env.replace(old, f"default_buffer_size_multiplier: {mult}.0")
+        if refs == "ret_gpu":
+            # gpumotion satellite: the ONE change vs its streaming twin
+            if env.count("cpuMotionData: true") != 1:
+                raise SystemExit(f"FATAL: expected one 'cpuMotionData: true' in {env_path}")
+            env = env.replace("cpuMotionData: true", "cpuMotionData: false")
         train, n = re.subn(r"full_experiment_name:\s*\S+",
                            f"full_experiment_name: smplx_teacher_{name}",
                            open(train_path).read())
@@ -171,7 +185,8 @@ def main(argv=None):
                   f"# arch={arch} refs={refs} recipe={recipe} fold=f{fold} "
                   f"buffer_mult={mult} (test={FOLDS[fold]}).\n"
                   f"# Bodies = 13 reals + synthetics beyond the {floor:.3f} leak floor.\n")
-        ret_guard = RET_GUARD if refs == "ret" else PLAIN_GUARD
+        ret_guard = {"ret": RET_GUARD, "ret_gpu": RET_GPU_GUARD,
+                     "plain": PLAIN_GUARD}[refs]
         slurm = SLURM_TMPL.format(name=name, arch=arch, refs=refs, recipe=recipe,
                                   fold=fold, mult=mult, test=" ".join(FOLDS[fold]),
                                   ret_guard=ret_guard)
@@ -197,6 +212,16 @@ if ! grep -qE '^\\s*cpuMotionData:\\s*[Tt]rue' "$CFG_ENV"; then
 fi
 if ! grep -qE '^\\s*retargetedMotionDir:' "$CFG_ENV"; then
     echo "[teacher] ERROR: retarget arm without retargetedMotionDir in $CFG_ENV" >&2; exit 1
+fi"""
+RET_GPU_GUARD = """\
+# gpumotion retarget arm: refs retargeted but GPU-resident -- cpuMotionData
+# must be OFF (that's the cell's one difference vs its streaming twin), and
+# no alloc-conf cap (no streaming churn to tame).
+if ! grep -qE '^\\s*cpuMotionData:\\s*[Ff]alse' "$CFG_ENV"; then
+    echo "[teacher] ERROR: gpumotion arm without 'cpuMotionData: false' in $CFG_ENV" >&2; exit 1
+fi
+if ! grep -qE '^\\s*retargetedMotionDir:' "$CFG_ENV"; then
+    echo "[teacher] ERROR: gpumotion arm without retargetedMotionDir in $CFG_ENV" >&2; exit 1
 fi"""
 PLAIN_GUARD = """\
 # Plain arm: original references; retargeting must NOT be configured.

@@ -28,7 +28,7 @@ def main():
     assert abs(FLOOR - 2.106) < 0.01, FLOOR          # pin the calibration
     with tempfile.TemporaryDirectory() as tmp:
         written = g2.main(["--out-root", tmp])
-        assert len(written) == 60, len(written)      # (16+4 buf20) cells x 3 files
+        assert len(written) == 66, len(written)      # (16+4 buf20+2 gpumotion) x 3 files
         names = set()
         roster = {}      # the shared synthetic roster, pinned by the first cell
         for name, arch, refs, recipe, fold, mult in g2.cells():
@@ -68,6 +68,11 @@ def main():
             if refs == "ret":
                 assert env.get("retargetedMotionDir") and env.get("cpuMotionData") is True, name
                 assert "max_split_size_mb" in slurm, name
+            elif refs == "ret_gpu":
+                # gpumotion satellite: retargeted refs, GPU-resident, no alloc cap
+                assert env.get("retargetedMotionDir") and env.get("cpuMotionData") is False, name
+                assert "max_split_size_mb" not in slurm, name
+                assert name.startswith("g2_mlp_ret_") and name.endswith("_gpumotion__f0"), name
             else:
                 assert "retargetedMotionDir" not in env, name
                 assert "max_split_size_mb" not in slurm, name
@@ -95,8 +100,8 @@ def main():
             exp = cfgtr["full_experiment_name"]
             assert exp == f"smplx_teacher_{name}" and exp not in names
             names.add(exp)
-        assert len(names) == 20
-    print("ALL GREEN: 20 cells (16 main + 4 buf20), axes independent, floor-clean folds, uniform 2048 envs")
+        assert len(names) == 22
+    print("ALL GREEN: 22 cells (16 main + 4 buf20 + 2 gpumotion), axes independent, floor-clean folds, uniform 2048 envs")
 
 
 if __name__ == "__main__":
