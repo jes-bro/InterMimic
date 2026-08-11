@@ -85,6 +85,9 @@ REUSE_DUMP="${REUSE_DUMP:-0}"
 log() { echo "[fig $(date -u +%H:%M:%S)] $*"; }
 
 export PYTHONUNBUFFERED=1
+# ~/.bashrc first (like every other slurm script here): sbatch only copies the
+# submitting shell's environment, so `conda` is not reliably on PATH without it.
+source ~/.bashrc
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # Saved so the second environment does not inherit the first's linker and module
