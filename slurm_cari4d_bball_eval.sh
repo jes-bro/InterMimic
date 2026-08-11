@@ -34,13 +34,16 @@ export TERM_REASON=1
 export TERM_REASON_EVERY=2000
 
 CHECKPOINT="${CHECKPOINT:-checkpoints/smplx_cari4d_bball_overfit/nn/mimic.pth}"
+# For the NORESET experiment: CFG_ENV=.../omomo_cari4d_bball_noreset_eval.yaml
+#                             CHECKPOINT=checkpoints/smplx_cari4d_bball_noreset/nn/mimic.pth
+CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_eval.yaml}"
 NUM_ENVS="${NUM_ENVS:-512}"
 [ -f "$CHECKPOINT" ] || { echo "[bball-eval] ERROR: checkpoint not found: $CHECKPOINT" >&2; exit 2; }
 
 echo "[bball-eval] ckpt=$CHECKPOINT num_envs=$NUM_ENVS host=$(hostname) job=$SLURM_JOB_ID"
 
 python -u -m intermimic.run --task InterMimic \
-    --cfg_env isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_eval.yaml \
+    --cfg_env "$CFG_ENV" \
     --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_train.yaml \
     --test --checkpoint "$CHECKPOINT" \
     --headless --num_envs "$NUM_ENVS"

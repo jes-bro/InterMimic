@@ -33,8 +33,24 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
 CHECKPOINT="${CHECKPOINT:-checkpoints/smplx_cari4d_bball_overfit/nn/mimic.pth}"
+# For the NORESET experiment: CFG_ENV=.../omomo_cari4d_bball_noreset_eval.yaml
+#                             CHECKPOINT=checkpoints/smplx_cari4d_bball_noreset/nn/mimic.pth
+CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_eval.yaml}"
 FRAMES="${FRAMES:-300}"
+# NO_TERM=1 (default): disable early termination for the RENDER so the episode
+# plays through the failure instead of resetting the instant divergence trips
+# -- the eval's reset is correct for metrics but hides the interesting seconds
+# from the video. NO_TERM=0 renders with training/eval termination behavior.
+NO_TERM="${NO_TERM:-1}"
 [ -f "$CHECKPOINT" ] || { echo "[bball-render] ERROR: checkpoint not found: $CHECKPOINT" >&2; exit 2; }
+
+if [ "$NO_TERM" = "1" ]; then
+    CFG_PATCHED="/tmp/bball_render_noterm_$$.yaml"
+    sed 's/enableEarlyTermination: [Tt]rue/enableEarlyTermination: False/' "$CFG_ENV" > "$CFG_PATCHED"
+    grep -q "enableEarlyTermination: False" "$CFG_PATCHED" || { echo "[bball-render] ERROR: NO_TERM patch failed" >&2; exit 2; }
+    CFG_ENV="$CFG_PATCHED"
+    echo "[bball-render] NO_TERM=1: early termination disabled -- episode plays through the failure"
+fi
 
 mkdir -p renders
 OUT="renders/policy_bball_$(basename "$CHECKPOINT" .pth).mp4"
@@ -61,7 +77,7 @@ fi
 
 RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
     python -u -m intermimic.run --task InterMimic \
-        --cfg_env isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_eval.yaml \
+        --cfg_env "$CFG_ENV" \
         --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_train.yaml \
         --test --checkpoint "$CHECKPOINT" --headless --num_envs 1
 

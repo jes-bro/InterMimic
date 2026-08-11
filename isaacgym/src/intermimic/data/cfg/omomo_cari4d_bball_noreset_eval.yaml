@@ -65,6 +65,15 @@ env:
   contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3", "L_Thumb3", "R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3", "R_Thumb3"]
   terminationHeight: 0.15
   enableEarlyTermination: True
+  # NORESET experiment: monocular-recon reference -- the ball flight is not
+  # physically executable, so the object/ig/contact divergence resets execute
+  # episodes for the reference's sins (baseline: best of 20,501 attempts died
+  # at frame 43). Disable those three; keep body-fall + human resets. Reward
+  # terms untouched. SEPARATE experiment from smplx_cari4d_bball_overfit.
+  resetThresholds:
+    object: false
+    igRatio: false
+    contactSteps: false
   enableEvaluation: true
 
   asset:

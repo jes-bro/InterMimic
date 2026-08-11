@@ -55,14 +55,20 @@ def test_disable_and_override():
 
 
 def test_bball_cfgs_carry_the_block():
-    train = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_train.yaml")))
-    ev = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_eval.yaml")))
+    # ORIGINAL experiment cfgs: untouched (no block) -- separate-run rule
+    for f in ("omomo_cari4d_bball_train.yaml", "omomo_cari4d_bball_eval.yaml"):
+        assert "resetThresholds" not in open(os.path.join(CFG, f)).read(), f
+    # NORESET experiment: block present in both, in lockstep
     want = {"object": False, "igRatio": False, "contactSteps": False}
+    train = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_noreset_train.yaml")))
+    ev = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_noreset_eval.yaml")))
     assert train["env"].get("resetThresholds") == want, train["env"].get("resetThresholds")
     assert ev["env"].get("resetThresholds") == want, "eval twin out of lockstep"
     out = parse(train["env"]["resetThresholds"])
     assert out["human"] == 0.5 and out["object"] is None
-    print("ok: bball train+eval cfgs disable object/ig/contact resets, keep human")
+    tr = open(os.path.join(CFG, "train/rlg/omomo_cari4d_bball_noreset_train.yaml")).read()
+    assert "full_experiment_name: smplx_cari4d_bball_noreset" in tr
+    print("ok: original cfgs untouched; noreset trio carries the block + own name")
 
 
 def test_no_other_cfg_sets_the_block():
