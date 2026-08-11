@@ -40,6 +40,25 @@ mkdir -p renders
 OUT="renders/policy_bball_$(basename "$CHECKPOINT" .pth).mp4"
 echo "[bball-render] ckpt=$CHECKPOINT frames=$FRAMES -> $OUT  (job=$SLURM_JOB_ID host=$(hostname))"
 
+# The recorder's camera is FIXED at (3,3,2.5) aimed at the ORIGIN -- right for
+# OMOMO clips, but this recon lives in the EgoExo4D camera's world frame, so
+# the subject can be metres from origin and out of shot. Aim the (still fixed)
+# camera at the clip's own mean root position instead; explicit
+# RECORD_VIDEO_CAM_POS/TARGET still win if exported by the caller.
+if [ -z "${RECORD_VIDEO_CAM_TARGET:-}" ]; then
+    read -r CX CY CZ <<< "$(python3 - <<'PY'
+import torch
+c = torch.load('InterAct/behave_cari4d/sub100_bball_000.pt', map_location='cpu')
+r = c[:, 0:3]  # root_pos over the clip
+m = r.mean(dim=0)
+print(f"{m[0]:.2f} {m[1]:.2f} {m[2]:.2f}")
+PY
+)"
+    export RECORD_VIDEO_CAM_TARGET="${CX},${CY},1.0"
+    export RECORD_VIDEO_CAM_POS="$(python3 -c "print(f'{${CX}+3.0},{${CY}+3.0},2.5')")"
+    echo "[bball-render] auto camera: pos=$RECORD_VIDEO_CAM_POS target=$RECORD_VIDEO_CAM_TARGET (clip mean root ${CX},${CY},${CZ})"
+fi
+
 RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
     python -u -m intermimic.run --task InterMimic \
         --cfg_env isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_eval.yaml \
