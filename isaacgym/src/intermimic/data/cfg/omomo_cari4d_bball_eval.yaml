@@ -65,6 +65,16 @@ env:
   contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3", "L_Thumb3", "R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3", "R_Thumb3"]
   terminationHeight: 0.15
   enableEarlyTermination: True
+  # Monocular-recon reference: the ball's flight is not physically
+  # executable, so the object/ig/contact divergence resets execute episodes
+  # for the reference's sins (eval: best of 20k attempts died at frame 43,
+  # object err 0.28m, while the rollout LOOKS fine). Disable those three;
+  # keep body-fall + human tracking resets (the human reference IS
+  # executable). Reward terms are untouched -- tracking incentives remain.
+  resetThresholds:
+    object: false
+    igRatio: false
+    contactSteps: false
   enableEvaluation: true
 
   asset:

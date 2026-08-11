@@ -105,7 +105,7 @@ class InterMimic(Humanoid_SMPLX):
         'numObservations', 'numStates', 'objectDensity', 'objectShapeProps',
         'pairSampleCountsFile',
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
-        'projtype', 'retargetedMotionDir', 'rewardTerms', 'rewardWeights',
+        'projtype', 'resetThresholds', 'retargetedMotionDir', 'rewardTerms', 'rewardWeights',
         'robotType', 'rolloutLength',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
@@ -459,6 +459,18 @@ class InterMimic(Humanoid_SMPLX):
         self._pose_lambda = float(pose_cfg.get('lambda', 0.02))
         # Env-var-gated dof-alignment sanity print (no effect on training).
         self._pose_reward_debug = os.environ.get('POSE_REWARD_DEBUG') == '1'
+
+        # --- Early-termination thresholds, cfg-driven (resetThresholds block). ---
+        # Defaults REPRODUCE the historical hardcoded values, so a cfg without the
+        # block behaves byte-identically. `false` disables that criterion (needed
+        # for monocular-recon references whose OBJECT trajectory is not physically
+        # executable -- e.g. the EgoExo4D basketball's flight frames -- where the
+        # object/ig/contact divergence resets execute episodes for the reference's
+        # sins, not the policy's). body-fall / NaN / human resets are separate and
+        # NOT controlled here: the human reference is executable, so those stay.
+        self._reset_thr = self._parse_reset_thresholds(cfg['env'].get('resetThresholds'))
+        if cfg['env'].get('resetThresholds') is not None:
+            print(f"[intermimic] resetThresholds override: {self._reset_thr}", flush=True)
         if self._pose_term_enable:
             print(f"[intermimic] pose reward (relative joint-angle) enabled; "
                   f"lambda={self._pose_lambda}", flush=True)
@@ -1506,11 +1518,34 @@ class InterMimic(Humanoid_SMPLX):
                          target_states, ig, contact, target_contact), dim=-1)
         return obs
     
+    @staticmethod
+    def _parse_reset_thresholds(block):
+        """resetThresholds cfg block -> {key: float | None}. None = criterion
+        DISABLED (cfg value `false`). Absent block/keys = historical hardcoded
+        values. Unknown keys are an error (no silent typo-tolerance)."""
+        defaults = {'human': 0.5,        # mean key-body error (m), compute_humanoid_reward
+                    'object': 0.5,       # mean object-point error (m), compute_obj_reward
+                    'igRatio': 2.0,      # relative ig error ratio, compute_ig_reward
+                    'contactSteps': 10}  # consecutive hand-contact-mismatch steps
+        block = block or {}
+        unknown = set(block) - set(defaults)
+        if unknown:
+            raise ValueError(f"resetThresholds: unknown key(s) {sorted(unknown)}; "
+                             f"valid: {sorted(defaults)}")
+        out = {}
+        for k, dflt in defaults.items():
+            v = block.get(k, dflt)
+            out[k] = None if v is False else float(v)
+        return out
+
     def _compute_reset(self):
         self.reset_buf[:], self._terminate_buf[:] = self.compute_hoi_reset(self.reset_buf, self.progress_buf, self.obs_buf,
                                                                            self._rigid_body_pos, self.max_episode_length[self.data_id],
                                                                            self._enable_early_termination, self._termination_heights, self.start_times,
-                                                                           self.rollout_length, self.kinematic_reset, torch.any(self.contact_reset > 10, dim=-1)
+                                                                           self.rollout_length, self.kinematic_reset,
+                                                                           (torch.any(self.contact_reset > self._reset_thr['contactSteps'], dim=-1)
+                                                                            if self._reset_thr['contactSteps'] is not None
+                                                                            else torch.zeros_like(self.reset_buf, dtype=torch.bool))
                                                                           )
 
         # Evaluation metrics update (assumes stateInit is "Start", so start_times is 0)
@@ -1929,8 +1964,10 @@ class InterMimic(Humanoid_SMPLX):
         energy = dof_diffacc.pow(2).mean(dim=-1).mul(-w['eg1']).exp()
 
         rb = rp*rr*rpv*rrv*energy
-        human_reset = (ref_key_pos - key_pos).norm(dim=-1).mean(dim=-1) > 0.5
-        
+        thr = self._reset_thr['human']
+        human_err = (ref_key_pos - key_pos).norm(dim=-1).mean(dim=-1)
+        human_reset = human_err > thr if thr is not None else torch.zeros_like(human_err, dtype=torch.bool)
+
         return rb, human_reset, key_pos, ref_key_pos
     
     def compute_obj_reward(self, w):
@@ -2003,7 +2040,9 @@ class InterMimic(Humanoid_SMPLX):
         
         obj_energy = (obj_diffacc.pow(2).mean(dim=-1).mul(-w['eg2']).exp()) * (obj_rot_diffacc.pow(2).mean(dim=-1).mul(-w['eg2']).exp())
         ro = rop*ror*ropv*rorv*obj_energy
-        object_reset = (obj_points - ref_obj_points).norm(dim=-1).mean(dim=-1) > 0.5
+        thr = self._reset_thr['object']
+        obj_err = (obj_points - ref_obj_points).norm(dim=-1).mean(dim=-1)
+        object_reset = obj_err > thr if thr is not None else torch.zeros_like(obj_err, dtype=torch.bool)
         return ro, object_reset, obj_points, ref_obj_points
     
     def compute_ig_reward(self, w, key_pos, ref_key_pos, obj_points, ref_obj_points):
@@ -2020,9 +2059,13 @@ class InterMimic(Humanoid_SMPLX):
 
         rig = torch.exp(-w['ig'] * (eig.sum(dim=-1).sum(dim=-1) * 0.5))
 
-        reset_ig_1 = (((ig - ref_ig)**2).sum(dim=-1).sqrt() / torch.clamp((ref_ig**2).sum(dim=-1).sqrt(), min=0.5)).max(dim=-1)[0].max(dim=-1)[0] > 2
-        reset_ig_2 = (((ig - ref_ig)**2).sum(dim=-1).sqrt() / torch.clamp((ig**2).sum(dim=-1).sqrt(), min=0.5)).max(dim=-1)[0].max(dim=-1)[0] > 2
-        reset_ig = torch.logical_or(reset_ig_1, reset_ig_2)
+        thr = self._reset_thr['igRatio']
+        if thr is None:
+            reset_ig = torch.zeros(ig.shape[0], dtype=torch.bool, device=ig.device)
+        else:
+            reset_ig_1 = (((ig - ref_ig)**2).sum(dim=-1).sqrt() / torch.clamp((ref_ig**2).sum(dim=-1).sqrt(), min=0.5)).max(dim=-1)[0].max(dim=-1)[0] > thr
+            reset_ig_2 = (((ig - ref_ig)**2).sum(dim=-1).sqrt() / torch.clamp((ig**2).sum(dim=-1).sqrt(), min=0.5)).max(dim=-1)[0].max(dim=-1)[0] > thr
+            reset_ig = torch.logical_or(reset_ig_1, reset_ig_2)
         return rig, reset_ig
     
     def compute_cg_reward(self, w):    
