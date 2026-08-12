@@ -68,7 +68,16 @@ def test_bball_cfgs_carry_the_block():
     assert out["human"] == 0.5 and out["object"] is None
     tr = open(os.path.join(CFG, "train/rlg/omomo_cari4d_bball_noreset_train.yaml")).read()
     assert "full_experiment_name: smplx_cari4d_bball_noreset" in tr
-    print("ok: original cfgs untouched; noreset trio carries the block + own name")
+    # LOOSETERM: noreset + human also off; own experiment name; eval in lockstep
+    want_lt = {"human": False, "object": False, "igRatio": False, "contactSteps": False}
+    lt = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_looseterm_train.yaml")))
+    lte = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_looseterm_eval.yaml")))
+    assert lt["env"].get("resetThresholds") == want_lt, lt["env"].get("resetThresholds")
+    assert lte["env"].get("resetThresholds") == want_lt, "looseterm eval twin out of lockstep"
+    assert all(v is None for v in parse(want_lt).values())
+    ltr = open(os.path.join(CFG, "train/rlg/omomo_cari4d_bball_looseterm_train.yaml")).read()
+    assert "full_experiment_name: smplx_cari4d_bball_looseterm" in ltr
+    print("ok: original untouched; noreset + looseterm trios each carry their block + own name")
 
 
 def test_no_other_cfg_sets_the_block():
