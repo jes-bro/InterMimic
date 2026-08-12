@@ -289,6 +289,15 @@ def main():
     
     vargs = vars(args)
 
+    import wandb
+    if os.environ.get('WANDB_PROJECT'):
+        wandb.init(project=os.environ['WANDB_PROJECT'],
+                   name=cfg_train['params']['config']['full_experiment_name'],
+                   group=os.environ.get('WANDB_GROUP', 'teachers'),
+                   config={'env': cfg, 'train': cfg_train})
+        wandb.define_metric("train/epoch")
+        wandb.define_metric("*", step_metric="train/epoch")
+
     algo_observer = RLGPUAlgoObserver()
 
     runner = build_alg_runner(algo_observer)

@@ -247,9 +247,9 @@ class InterMimicAgent(common_agent.CommonAgent):
                         f"fps step: {fps_step:.1f} fps total: {fps_total:.1f}"
                     )
 
-                self.writer.add_scalar('performance/total_fps', global_curr_frames / scaled_time, self.frame)
-                self.writer.add_scalar('performance/step_fps',  global_curr_frames / scaled_play_time, self.frame)
-                self.writer.add_scalar('info/epochs', epoch_num, self.frame)
+                self.writer.add_scalar('perf/fps_total', global_curr_frames / scaled_time, self.frame)
+                self.writer.add_scalar('perf/fps_step',  global_curr_frames / scaled_play_time, self.frame)
+                self.writer.add_scalar('train/epoch', epoch_num, self.frame)
                 self._log_train_info(train_info, self.frame)
 
                 self.algo_observer.after_print_stats(self.frame, epoch_num, total_time)
@@ -258,16 +258,24 @@ class InterMimicAgent(common_agent.CommonAgent):
                     mean_rewards = self._get_mean_rewards()
                     mean_lengths = self.game_lengths.get_mean()
 
-                    for i in range(self.value_size):
-                        self.writer.add_scalar(f'rewards{i}/frame', mean_rewards[i], self.frame)
-                        self.writer.add_scalar(f'rewards{i}/iter',  mean_rewards[i], epoch_num)
-                        self.writer.add_scalar(f'rewards{i}/time',  mean_rewards[i], total_time)
-
-                    self.writer.add_scalar('episode_lengths/frame', mean_lengths, self.frame)
-                    self.writer.add_scalar('episode_lengths/iter',  mean_lengths, epoch_num)
+                    self.writer.add_scalar('train/reward', mean_rewards[0], self.frame)
+                    self.writer.add_scalar('train/episode_length', mean_lengths, self.frame)
+                    self._wandb_pending['train/reward'] = float(mean_rewards[0])
+                    self._wandb_pending['train/episode_length'] = float(mean_lengths)
 
                     if self.has_self_play_config:
                         self.self_play_manager.update(self)
+
+                try:
+                    import wandb
+                    if wandb.run is not None and getattr(self, '_wandb_pending', None):
+                        self._wandb_pending['train/epoch'] = epoch_num
+                        self._wandb_pending['perf/fps_step'] = global_curr_frames / scaled_play_time
+                        self._wandb_pending['perf/fps_total'] = global_curr_frames / scaled_time
+                        wandb.log(self._wandb_pending)
+                        self._wandb_pending = {}
+                except Exception:
+                    pass
 
                 if self.save_freq > 0 and (epoch_num % self.save_freq == 0):
                     self.save(model_output_file)
@@ -849,7 +857,7 @@ class InterMimicAgent(common_agent.CommonAgent):
         return
     
     def get_cpu_usage(self):
-        return psutil.cpu_percent(interval=1)
+        return psutil.cpu_percent(interval=None)
 
     def get_cpu_memory_usage(self):
         return psutil.virtual_memory().percent
@@ -864,22 +872,21 @@ class InterMimicAgent(common_agent.CommonAgent):
         return torch.cuda.memory_allocated() / 1e9
 
     def _log_train_info(self, train_info, frame):
-        self.writer.add_scalar('performance/update_time', train_info['update_time'], frame)
-        self.writer.add_scalar('performance/play_time', train_info['play_time'], frame)
-        self.writer.add_scalar('losses/a_loss', torch_ext.mean_list(train_info['actor_loss']).item(), frame)
-        self.writer.add_scalar('losses/c_loss', torch_ext.mean_list(train_info['critic_loss']).item(), frame)
-        
-        self.writer.add_scalar('losses/bounds_loss', torch_ext.mean_list(train_info['b_loss']).item(), frame)
-        self.writer.add_scalar('losses/entropy', torch_ext.mean_list(train_info['entropy']).item(), frame)
-        self.writer.add_scalar('info/last_lr', train_info['last_lr'][-1] * train_info['lr_mul'][-1], frame)
-        self.writer.add_scalar('info/lr_mul', train_info['lr_mul'][-1], frame)
-        self.writer.add_scalar('info/e_clip', self.e_clip * train_info['lr_mul'][-1], frame)
-        self.writer.add_scalar('info/clip_frac', torch_ext.mean_list(train_info['actor_clip_frac']).item(), frame)
-        self.writer.add_scalar('info/kl', torch_ext.mean_list(train_info['kl']).item(), frame)
+        W = self.writer.add_scalar
+        m = torch_ext.mean_list
 
-        self.writer.add_scalar('usage/cpu', self.get_cpu_usage(), frame)
-        self.writer.add_scalar('usage/gpu', self.get_gpu_usage(), frame)
-        self.writer.add_scalar('usage/cpu_memory', self.get_cpu_memory_usage(), frame)
-        self.writer.add_scalar('usage/gpu_memory', self.get_gpu_memory_usage(), frame)
-
+        d = {
+            'losses/actor':     m(train_info['actor_loss']).item(),
+            'losses/critic':    m(train_info['critic_loss']).item(),
+            'losses/bounds':    m(train_info['b_loss']).item(),
+            'losses/entropy':   m(train_info['entropy']).item(),
+            'perf/lr':          train_info['last_lr'][-1] * train_info['lr_mul'][-1],
+            'perf/kl':          m(train_info['kl']).item(),
+            'perf/clip_frac':   m(train_info['actor_clip_frac']).item(),
+            'perf/update_time': train_info['update_time'],
+            'perf/play_time':   train_info['play_time'],
+        }
+        for k, v in d.items():
+            W(k, v, frame)
+        self._wandb_pending = d
         return
