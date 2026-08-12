@@ -21,9 +21,8 @@
 #
 # SEPARATE experiment: own cfgs, own checkpoint dir
 # (checkpoints/smplx_cari4d_bball_noreset/nn/) -- writes NOTHING into the
-# original run's directory. By default it WARM-STARTS from the original run's
-# policy (a read-only copy of its skills through frame 43); FRESH=1 trains
-# from scratch instead.
+# original run's directory. FRESH START only --
+# no warm-starting from other runs; resubmit to resume its own checkpoints.
 
 source ~/.bashrc
 conda deactivate
@@ -39,7 +38,6 @@ export POSE_REWARD_DEBUG=1
 
 CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_noreset_train.yaml
 CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_noreset_train.yaml
-WARM_CKPT="checkpoints/smplx_cari4d_bball_overfit/nn/mimic.pth"
 
 # Guard: this experiment IS the resets-off arm -- refuse to run without the block.
 if ! grep -qE '^\s*resetThresholds:' "$CFG_ENV"; then
@@ -49,17 +47,14 @@ fi
 echo "[bball-noreset] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 echo "[bball-noreset] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_cari4d_bball_noreset/nn/"
 
-# --- resume/warm-start resolution (never touches the original run's files):
-#   1. own checkpoint exists            -> RESUME this experiment
-#   2. else FRESH!=1 and original found -> WARM-START from it (read-only)
-#   3. else                             -> fresh start
+# --- resume resolution: own checkpoints only (walltime resubmits). ---
 EXP=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$CFG_TRAIN" | awk '{print $2}')
 CKPT="checkpoints/${EXP}/nn/mimic.pth"
+# NO warm-starting (Jess rule 2026-08-11: fresh start only; resuming is
+# permitted ONLY from this run's own checkpoints, for walltime resubmits).
 RESUME_FROM=""
 if [ -f "$CKPT" ]; then
     RESUME_FROM="$CKPT"; echo "[bball-noreset] RESUMING own run from ${CKPT}"
-elif [ "${FRESH:-0}" != "1" ] && [ -f "$WARM_CKPT" ]; then
-    RESUME_FROM="$WARM_CKPT"; echo "[bball-noreset] WARM-START from original run: ${WARM_CKPT} (read-only)"
 else
     echo "[bball-noreset] fresh start"
 fi
