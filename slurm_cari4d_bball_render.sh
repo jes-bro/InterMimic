@@ -53,7 +53,21 @@ if [ "$NO_TERM" = "1" ]; then
 fi
 
 mkdir -p renders
-OUT="renders/policy_bball_$(basename "$CHECKPOINT" .pth).mp4"
+# Name outputs by EXPERIMENT (from the checkpoint's dir) + timestamp -- never by
+# epoch alone (two arms at the same epoch would collide) and never a bare name
+# (successive peeks would overwrite). Jess rule: no overwriting, name by config.
+EXP=$(basename "$(dirname "$(dirname "$CHECKPOINT")")")
+STAMP=$(date +%Y%m%d-%H%M%S)
+OUT="renders/policy_${EXP}_${STAMP}.mp4"
+# The bball arms save only the ROLLING mimic.pth (save_intermediate: False), and
+# reading it while the training job rewrites it is a race. Render from a private
+# frozen copy, kept beside the video as its provenance.
+if [ "$(basename "$CHECKPOINT")" = "mimic.pth" ]; then
+    SNAP="renders/${EXP}_${STAMP}_frozen.pth"
+    cp "$CHECKPOINT" "$SNAP"
+    CHECKPOINT="$SNAP"
+    echo "[bball-render] rolling checkpoint frozen -> $SNAP"
+fi
 echo "[bball-render] ckpt=$CHECKPOINT frames=$FRAMES -> $OUT  (job=$SLURM_JOB_ID host=$(hostname))"
 
 # The recorder's camera is FIXED at (3,3,2.5) aimed at the ORIGIN -- right for
