@@ -78,7 +78,9 @@ CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball.yaml}"
 # batch job with no display still produces something watchable.
 REPLAY="${REPLAY:-1}"
 RECORD_DIR="${RECORD_DIR:-$INTERMIMIC/renders}"
-RECORD_VIDEO="${RECORD_VIDEO:-$RECORD_DIR/sub${SUBJECT_ID}_${OBJECT_NAME}_${CLIP_IDX}.mp4}"
+# Jess rule (2026-08-17, after debugging a stale same-named video): NEVER a
+# fixed output name -- dataset tag + timestamp make every recording unique.
+RECORD_VIDEO="${RECORD_VIDEO:-$RECORD_DIR/replay_${DATASET_TAG}_sub${SUBJECT_ID}_${OBJECT_NAME}_${CLIP_IDX}_$(date +%Y%m%d-%H%M%S).mp4}"
 
 # Frames to capture. The basketball clip is 101 frames, but the sim steps at a
 # different rate than the source video, so this is not the clip length -- it is
@@ -130,6 +132,18 @@ for required in "$BUNDLE" "$MESH" "$INTERACT/simulation/interact2mimic.py"; do
     fi
 done
 
+# REPLAY_ONLY=1: skip conversion/install entirely and just re-record the
+# already-installed clip (camera/naming iterations shouldn't redo the science).
+REPLAY_ONLY="${REPLAY_ONLY:-0}"
+if [ "$REPLAY_ONLY" = "1" ]; then
+    SEQ_NAME="sub${SUBJECT_ID}_${OBJECT_NAME}_${CLIP_IDX}"
+    PT_PATH="$INTERMIMIC/InterAct/$DATASET_TAG/${SEQ_NAME}.pt"
+    if [ ! -f "$PT_PATH" ]; then
+        echo "ERROR: REPLAY_ONLY=1 but no installed clip at $PT_PATH" >&2; exit 1
+    fi
+    log "REPLAY_ONLY=1: skipping steps 1-3.5, re-recording $PT_PATH"
+fi
+if [ "$REPLAY_ONLY" != "1" ]; then
 # Step 1: CARI4D bundle -> InterAct format (human.npz, object.npz, mesh).
 log "step 1/4: cari4d_to_interact"
 cd "$INTERMIMIC"
@@ -242,6 +256,8 @@ if [ -n "$ROTATE_CALIB" ] || [ -n "$ROTATE_AXIS" ]; then
     python scripts/check_pt_orientation.py "$PT_PATH" || true
 fi
 
+fi   # end of REPLAY_ONLY != 1 (conversion + install + rotate)
+
 if [ "$REPLAY" != "1" ]; then
     log "REPLAY=0, stopping after install"
     exit 0
@@ -269,6 +285,22 @@ export PYTHONPATH="$INTERMIMIC/isaacgym/src:$INTERMIMIC:${PYTHONPATH:-}"
 # variable but parses an empty string as a failed parse. `[ -n x ] && export`
 # would be shorter, but under set -e the false branch is the last command in the
 # list and would end the job.
+# Auto-aim the (fixed) recording camera at the clip's own mean root position:
+# this recon lives in the EgoExo4D camera's world frame, metres from the origin
+# the player's default camera stares at. Explicit CAM_POS/TARGET still win.
+PT_PATH="${PT_PATH:-$INTERMIMIC/InterAct/$DATASET_TAG/${SEQ_NAME}.pt}"
+if [ -z "$RECORD_VIDEO_CAM_TARGET" ] && [ -f "$PT_PATH" ]; then
+    read -r CX CY CZ <<< "$(python - "$PT_PATH" <<'PY'
+import sys, torch
+c = torch.load(sys.argv[1], map_location='cpu')
+m = c[:, 0:3].mean(dim=0)
+print(f"{m[0]:.2f} {m[1]:.2f} {m[2]:.2f}")
+PY
+)"
+    RECORD_VIDEO_CAM_TARGET="${CX},${CY},1.0"
+    RECORD_VIDEO_CAM_POS="$(python -c "print(f'{${CX}+3.0},{${CY}+3.0},2.5')")"
+    log "auto camera: pos=$RECORD_VIDEO_CAM_POS target=$RECORD_VIDEO_CAM_TARGET (clip mean root ${CX},${CY},${CZ})"
+fi
 export RECORD_VIDEO MAX_VIDEO_FRAMES SKIP_VIDEO_FRAMES
 if [ -n "$RECORD_VIDEO_CAM_POS" ]; then export RECORD_VIDEO_CAM_POS; fi
 if [ -n "$RECORD_VIDEO_CAM_TARGET" ]; then export RECORD_VIDEO_CAM_TARGET; fi
