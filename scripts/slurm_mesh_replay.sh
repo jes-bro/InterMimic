@@ -85,6 +85,7 @@ OUT_MP4="${OUT_MP4:-$RENDER_DIR/${TAG}_mesh.mp4}"
 log() { echo "[mesh $(date -u +%H:%M:%S)] $*"; }
 
 export PYTHONUNBUFFERED=1
+source ~/.bashrc
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${MIMIC_ENV:-intermimic-gym2}"
 

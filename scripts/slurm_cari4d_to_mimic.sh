@@ -109,6 +109,7 @@ mkdir -p "$HF_HOME" "$TORCH_HOME" "$TORCH_EXTENSIONS_DIR" "$XDG_CACHE_HOME"
 # Unbuffered, so a killed job still shows which step it reached.
 export PYTHONUNBUFFERED=1
 
+source ~/.bashrc
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${MIMIC_ENV:-intermimic-gym2}"
 

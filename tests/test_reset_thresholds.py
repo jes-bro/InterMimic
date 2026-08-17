@@ -77,7 +77,17 @@ def test_bball_cfgs_carry_the_block():
     assert all(v is None for v in parse(want_lt).values())
     ltr = open(os.path.join(CFG, "train/rlg/omomo_cari4d_bball_looseterm_train.yaml")).read()
     assert "full_experiment_name: smplx_cari4d_bball_looseterm" in ltr
-    print("ok: original untouched; noreset + looseterm trios each carry their block + own name")
+    # RECTINJ3: looseterm twin on the IMPROVED recon -- identical thresholds,
+    # own experiment name, and the ONLY env difference is the motion dir.
+    rt = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_rectinj3_train.yaml")))
+    rte = yaml.safe_load(open(os.path.join(CFG, "omomo_cari4d_bball_rectinj3_eval.yaml")))
+    assert rt["env"].get("resetThresholds") == want_lt, rt["env"].get("resetThresholds")
+    assert rte["env"].get("resetThresholds") == want_lt, "rectinj3 eval twin out of lockstep"
+    assert rt["env"]["motion_file"] == "InterAct/behave_cari4d_rectinj3", rt["env"]["motion_file"]
+    assert lt["env"]["motion_file"] == "InterAct/behave_cari4d", "looseterm motion dir changed?!"
+    rtr = open(os.path.join(CFG, "train/rlg/omomo_cari4d_bball_rectinj3_train.yaml")).read()
+    assert "full_experiment_name: smplx_cari4d_bball_rectinj3" in rtr
+    print("ok: original untouched; noreset/looseterm/rectinj3 trios each correct")
 
 
 def test_no_other_cfg_sets_the_block():
