@@ -123,7 +123,14 @@ if [ "$ARCH" = transformer ]; then BASE="$CFG/omomo_test_multibody_xf.yaml"
 else                               BASE="$CFG/omomo_test_multibody.yaml"; fi
 
 SOURCES="${SOURCES:-$SRC_DEFAULT}"
-HELDOUT="${HELDOUT:-sub10 sub16 sub13}"
+# Held-out default is FOLD-AWARE (same __fN filename rule as summarize_evals.py):
+# an __f1 run's test trio is sub5/sub7/sub12 -- the old fold0-only default would
+# have scored fold1 TRAINING bodies as "held-out" and skipped the real test trio.
+case "$texp" in
+  *__f1*) HELDOUT_DEFAULT="sub5 sub7 sub12" ;;
+  *)      HELDOUT_DEFAULT="sub10 sub16 sub13" ;;
+esac
+HELDOUT="${HELDOUT:-$HELDOUT_DEFAULT}"
 # BODIES="sub11 sub16" evaluates ONLY those bodies (e.g. one suspect + one control).
 # Honor it -- this used to be an unconditional assignment that silently clobbered
 # the caller's override and evaluated all 21 bodies anyway.
