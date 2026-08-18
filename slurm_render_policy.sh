@@ -40,7 +40,9 @@ SOURCE="${SOURCE:-sub2}"       # reference motion (dataSub)
 OBJECT="${OBJECT:-}"           # empty = all objects
 FRAMES="${FRAMES:-300}"
 BASE=isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml
-TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
+# TRAIN must match the checkpoint's recipe -- nvadlr checkpoints carry a value
+# normalizer (normalize_value: True) that the default cfg refuses to load.
+TRAIN="${TRAIN:-isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml}"
 
 [ -f "$CHECKPOINT" ] || { echo "[render] ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 
@@ -55,13 +57,19 @@ CFG="/tmp/render_policy_$TAG.yaml"
 sed "s|dataSub:.*|dataSub: ['$SOURCE']|; s|subjectBodies:.*|subjectBodies: ['$BODY']|; s|dataObjects:.*|$OBJLINE|" \
     "$BASE" > "$CFG"
 
-echo "[render] ckpt=$CHECKPOINT"
-echo "[render] body=$BODY source=$SOURCE object=${OBJECT:-ALL} frames=$FRAMES -> renders/policy_$TAG.mp4"
-RECORD_VIDEO="renders/policy_$TAG.mp4" MAX_VIDEO_FRAMES="$FRAMES" \
+# Name by RUN (checkpoint's experiment dir) + tag + timestamp -- never a bare
+# body/source tag: four arms rendered on the same body must not overwrite each
+# other, and successive peeks at one arm must not either (Jess rule).
+EXP=$(basename "$(dirname "$(dirname "$CHECKPOINT")")")
+STAMP=$(date +%Y%m%d-%H%M%S)
+OUT="renders/policy_${EXP}_${TAG}_${STAMP}.mp4"
+echo "[render] ckpt=$CHECKPOINT  train_cfg=$TRAIN"
+echo "[render] body=$BODY source=$SOURCE object=${OBJECT:-ALL} frames=$FRAMES -> $OUT"
+RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
     python -u -m intermimic.run --task InterMimic \
         --cfg_env "$CFG" --cfg_train "$TRAIN" \
         --test --checkpoint "$CHECKPOINT" --headless --num_envs 1
 
 echo
 echo "[render] done:"
-ls -lh "renders/policy_$TAG.mp4"
+ls -lh "$OUT"
