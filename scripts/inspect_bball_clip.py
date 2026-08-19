@@ -28,7 +28,8 @@ from smplx_pose import _parse_mjcf_tree  # noqa: E402  (the validated MJCF parse
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Clip layout (see retarget_contact.py header; verified against OMOMO_new):
-I_BODY = slice(162, 318)      # 52 bodies x 3, world frame
+I_ROOT = slice(0, 3)          # root position -- what the SIM actually drives FK from
+I_BODY = slice(162, 318)      # 52 bodies x 3, world frame (stored kinematics)
 I_OBJP = slice(318, 321)      # object position
 I_CONTACT_OBJ = 330           # 1.0 where the recon says object is in contact
 
@@ -91,6 +92,20 @@ def main():
     for i in range(0, T, args.every):
         print(f"  {i:5d} {hand_d[i]:12.3f} {lowest[i]:11.3f} {obj[i,2]:9.3f}  "
               f"{'CONTACT' if flags[i] else 'free'}")
+
+    # 5. FK-vs-stored consistency. The sim drives the humanoid by FK from
+    # root_pos+root_rot+dof_pos; hand-ball above is measured from the STORED
+    # body_pos channels. If a conversion transform (rotate / drop-to-floor)
+    # touched one set and not the other, body_pos can say "ball in hand" while
+    # the FK-driven reference stands somewhere else. root_pos vs body_pos[0]
+    # (the pelvis) catches the translation/rotation forms of that mismatch.
+    root_delta = (c[:, I_ROOT] - bp[:, 0, :]).norm(dim=-1)
+    print(f"\n== 5. root_pos vs stored pelvis (FK/body_pos consistency) ==")
+    print(f"  |root_pos - body_pos[0]|: mean {root_delta.mean():.3f} m  "
+          f"max {root_delta.max():.3f} m at frame {int(root_delta.argmax())}")
+    print(f"  read: ~0.0x m (fixed pelvis offset) = consistent; growing or")
+    print(f"        decimeter+ deltas = conversion transformed the channel sets")
+    print(f"        differently -- the sim's reference does NOT match these tables.")
 
     grounded = lowest[lowest < lowest.median() + 0.05]
     print(f"\n== summary ==")
