@@ -1,0 +1,151 @@
+# EVAL twin of omomo_cari4d_bball_train.yaml: stateInit Start + enableEvaluation
+# are the ONLY changes (metrics are undefined in Hybrid mode -- the task
+# force-disables evaluation there). Keep in lockstep with the train cfg.
+# OVERFIT-TRAINING config for the EgoExo4D basketball reconstruction.
+# One clip, one body: can a physics policy execute this 4D reconstruction at all?
+#
+# Clip: sub100_bball_000.pt, 101 frames @30fps (3.37s), Ego-Exo4D take
+# unc_basketball_03-31-23_02_9 cam04 frames 354-454. One dribble bounce
+# (frame ~15) then a layup. Object 'bball': reconstructed sphere, 0.26m diameter.
+#
+# Derived from the cluster's omomo_cari4d_bball.yaml (replay cfg) with the
+# training-relevant changes below. KNOWN DATA DEFECTS carried in on purpose --
+# this run is the measurement of whether they matter:
+#   * human global placement ~23cm too high (monocular depth scale; floor
+#     grounded on feet, so the BALL's low point sits 0.403m up where 0.16 would
+#     be right; ball is correct relative to the hands)
+#   * last ~8 frames of ball trajectory unreliable (triangulation dropout)
+#   * no net/backboard -- the shot is free flight after release
+# If training fails, the 23cm floor offset is the first thing to rule out.
+#
+# PHYSICS FIXES vs the replay cfg (the point of this file):
+#   objectDensity 200 -> 86:  mesh volume x 200 gave a 1.45kg ball; real is
+#       ~0.62kg (scripts/object_density.py --mesh bball.obj --mass 0.624 -> ~86).
+#   objectShapeProps.restitution 0.85 + plane.restitution 0.85: the runtime
+#       HARDCODED object restitution to 0.05 (furniture value) until commit
+#       0604830 made it cfg-driven. PhysX averages object and plane, so both are
+#       set; 0.05-vs-0.7 averaged to a ball that thuds.
+#   rolling_friction needs nothing: runtime already forces 0.01 (ball-correct);
+#       the URDF's 0.5 was never in effect.
+#
+# NOT implemented, deliberately: free-flight gating (neutralizing object
+# reward/reset during reference no-contact frames). The dribble bounce and the
+# shot are free flight; if the run fails exactly there, that is the machinery to
+# build next -- see the contact_obj channel (ch 330) already in the data.
+env:
+  numEnvs: 4096          # PhysX multiplier lowered to 12.0 below to keep the
+                         # 4096-env footprint off the 44G ceiling the teachers hit
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: False
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2  # 30 Hz
+  stateInit: "Start"
+  rolloutLength: 300
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub100']
+  ballSize: 1.
+  numObs: 3198            # no betas conditioning -- one body, nothing to condition on
+  motion_file: InterAct/behave_cari4d_rectinj3_t32
+  robotType: "smplx/smplh_behave_sub100.xml"
+  objectDensity: 86
+  objectShapeProps:
+    restitution: 0.85
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3", "L_Thumb3", "R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3", "R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+  # RECTINJ3_T32_WARM experiment: start at REAL CONTACT (old frame 32, ball
+  # 0.012m in the palm) -- the first genuinely in-hand frame of this recon.
+  # Jess 2026-08-19: guidance must start at a frame the humanoid can actually
+  # do; the recon's opening hold floats the ball 0.26-0.43m so no in-hand
+  # start exists before the dribble. This clip = catch-hold-layup, NO dribble;
+  # the dribble returns when the recon's hand contacts are fixed upstream.
+  # (old frame 10, first free-flight frame). The recon's opening hold (frames
+  # 0-9) places the ball 0.26-0.43m from the palm while flagged CONTACT --
+  # physically impossible to imitate, so those frames are a reward desert that
+  # blocked t4_warm's tracking terms. From frame 10 on the reference is
+  # physical: ballistic flight, real bounce (0.16m), tight re-catch (0.012m),
+  # layup. Supersedes the t4 trim rationale below:
+  # (scripts/trim_pt_start.py) so frame 0 is a ball-IN-HAND contact frame (0.27m)
+  # instead of a detached falling ball 0.72m from the hand -- Start-mode init
+  # copies frame 0 verbatim, so the untrimmed export made t=0 a catch problem.
+  # Otherwise identical to RECTINJ3_WARM: (rectinj3 data + EXPLICIT sub2-teacher warm start,
+  # chosen by Jess 2026-08-17: fresh-from-scratch falls instantly at ~2k epochs;
+  # the teacher init supplies body competence, the improved recon supplies the
+  # supervision). Original header: the IMPROVED 4D reconstruction (rectinj3 export --
+  # teleports fixed, median ball error ~0.11m, worst ~0.22m) converted into
+  # InterAct/behave_cari4d_rectinj3_t32. Termination config = looseterm twin, so
+  # recon version is the ONLY variable vs smplx_cari4d_bball_looseterm.
+  # (original loosterm header follows:) monocular-recon reference -- the ball flight is not
+  # physically executable, so the object/ig/contact divergence resets execute
+  # episodes for the reference's sins (baseline: best of 20,501 attempts died
+  # at frame 43). Disable those three; keep body-fall + human resets. Reward
+  # terms untouched. Episodes end ONLY on body-fall / NaN / clip end. Jess hypothesis
+  # 2026-08-11: termination (not reward sparsity) is the binding constraint --
+  # noreset showed 100% kinematic deaths (human reset, mislabeled ig_diverge)
+  # at ~34-step episodes. SEPARATE experiment; warm-starts from the ORIGINAL
+  # run like noreset did, so looseterm-vs-noreset isolates the human knob.
+  resetThresholds:
+    human: false
+    object: false
+    igRatio: false
+    contactSteps: false
+  enableEvaluation: true
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.85     # raised with the object's so the PhysX average is 0.85
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0  # validated on normval_adlr: no PhysX warnings, results continuous
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
