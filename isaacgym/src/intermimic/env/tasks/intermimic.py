@@ -108,6 +108,7 @@ class InterMimic(Humanoid_SMPLX):
         'projtype', 'resetThresholds', 'retargetedMotionDir', 'rewardTerms', 'rewardWeights',
         'robotType', 'rolloutLength',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
+        'staticScene',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
         'teacherPolicyCFG', 'terminationHeight', 'useTransformerObs',
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
@@ -927,6 +928,7 @@ class InterMimic(Humanoid_SMPLX):
 
         self._target_handles = []
         self._load_target_asset()
+        self._load_static_scene_assets()
         super()._create_envs(num_envs, spacing, num_per_row)
         return
 
@@ -934,7 +936,52 @@ class InterMimic(Humanoid_SMPLX):
         super()._build_env(env_id, env_ptr, humanoid_asset)
 
         self._build_target(env_id, env_ptr)
-        return   
+        # Static scene actors are created LAST per env on purpose: every
+        # downstream index is shape-derived (num_actors = root_states //
+        # num_envs; humanoid = slot 0, object = slot 1; contact slices take the
+        # FIRST num_bodies+1 bodies), so appending fixed actors after the
+        # object leaves all existing tensor addressing untouched.
+        self._build_static_scene(env_id, env_ptr)
+        return
+
+    def _load_static_scene_assets(self):
+        """cfg['env']['staticScene']: opt-in list of fixed scene geometry, e.g.
+            staticScene:
+              - asset: hoop_bball.urdf
+                pos: [2.001, 3.014, 3.034]
+                quat: [0, 0, 0.5762, 0.8173]   # xyzw; optional (identity)
+        Motivation: the bball reference contains ~20 frames of ball-rim rattle
+        (measured rim center = the rattle-segment centroid, 3.03m over the
+        floor -- regulation to 0.5%); without a hoop that segment is physically
+        inimitable and thrown balls fly through empty space."""
+        self._static_scene = []
+        for item in (self.cfg['env'].get('staticScene') or []):
+            asset_root = resolve_data_path("assets", "objects")
+            asset_file = item['asset']
+            if not os.path.isfile(os.path.join(str(asset_root), asset_file)):
+                raise FileNotFoundError(f"staticScene asset not found: "
+                                        f"{os.path.join(str(asset_root), asset_file)}")
+            opts = gymapi.AssetOptions()
+            opts.fix_base_link = True     # static: no dofs, never simulated free
+            asset = self.gym.load_asset(self.sim, str(asset_root), asset_file, opts)
+            pose = gymapi.Transform()
+            pose.p = gymapi.Vec3(*[float(v) for v in item['pos']])
+            q = [float(v) for v in item.get('quat', [0, 0, 0, 1])]
+            pose.r = gymapi.Quat(q[0], q[1], q[2], q[3])
+            self._static_scene.append((asset, pose, os.path.splitext(asset_file)[0]))
+        if self._static_scene:
+            print(f"[staticScene] {len(self._static_scene)} fixed actor(s) per env: "
+                  + ", ".join(n for _, _, n in self._static_scene))
+        return
+
+    def _build_static_scene(self, env_id, env_ptr):
+        col_group = env_id
+        col_filter = 0
+        segmentation_id = 0
+        for i, (asset, pose, name) in enumerate(self._static_scene):
+            self.gym.create_actor(env_ptr, asset, pose, f"static_{name}_{i}",
+                                  col_group, col_filter, segmentation_id)
+        return
 
     def _load_target_asset(self): # smplx
         asset_root = resolve_data_path("assets", "objects")
