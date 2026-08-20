@@ -38,7 +38,9 @@ def main():
     ap.add_argument("--every", type=int, default=5)
     args = ap.parse_args()
 
-    b = torch.load(args.bundle, map_location="cpu")
+    # weights_only=False: the bundle pickles CARI4D classes (TrainState); it is
+    # our collaborator's own export, and torch>=2.6 refuses it by default.
+    b = torch.load(args.bundle, map_location="cpu", weights_only=False)
     pr = b["pr"] if "pr" in b else b
     print(f"bundle keys: {sorted(b.keys()) if hasattr(b, 'keys') else type(b)}")
     print(f"pr keys:     {sorted(pr.keys())}")
