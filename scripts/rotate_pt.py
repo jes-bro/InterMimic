@@ -272,6 +272,8 @@ def main() -> int:
         print(f"applied the camera-to-world rotation from {args.from_calib}")
     elif args.fix_frame_zero:
         print("applied the inverse of frame 0's root rotation")
+    elif args.align_gravity:
+        print("applied gravity alignment (see tilt line above)")
     else:
         print(f"applied {args.degrees}° around {args.axis}-axis")
     return 0
