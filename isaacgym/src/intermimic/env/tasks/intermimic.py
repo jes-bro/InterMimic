@@ -127,9 +127,14 @@ class InterMimic(Humanoid_SMPLX):
                 f"wrong thing. If a key is genuinely new, add it to "
                 f"InterMimic.KNOWN_ENV_KEYS.")
         rt = env_cfg.get('rewardTerms') or {}
-        bad = sorted(k for k in rt if k != 'pose')
+        bad = sorted(k for k in rt if k not in ('pose', 'freeFlightGate'))
         if bad:
-            raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} (only 'pose').")
+            raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} "
+                             f"(only 'pose', 'freeFlightGate').")
+        badf = sorted(k for k in (rt.get('freeFlightGate') or {}) if k != 'enable')
+        if badf:
+            raise ValueError(f"[intermimic] unknown rewardTerms.freeFlightGate key(s) "
+                             f"{badf} (only 'enable').")
         badp = sorted(k for k in (rt.get('pose') or {}) if k not in ('enable', 'lambda'))
         if badp:
             raise ValueError(f"[intermimic] unknown rewardTerms.pose key(s) {badp} "
@@ -460,6 +465,20 @@ class InterMimic(Humanoid_SMPLX):
         self._pose_lambda = float(pose_cfg.get('lambda', 0.02))
         # Env-var-gated dof-alignment sanity print (no effect on training).
         self._pose_reward_debug = os.environ.get('POSE_REWARD_DEBUG') == '1'
+        # rewardTerms.freeFlightGate.enable: neutralize the OBJECT reward on
+        # frames where the REFERENCE says no hand-object contact (contact_obj
+        # channel). Rationale: with a free-flying reference ball (a dribble's
+        # flight, a shot's arc -- 60% of the bball clip) the sim ball is
+        # ballistic and the policy's only influence was the release instant; an
+        # ungated ro collapses the reward product for dozens of frames after
+        # any release error, starving learning on the frames the policy CAN
+        # control. rcg already gates this way; this extends it to ro. Default
+        # OFF => reward byte-identical to stock.
+        ffg_cfg = (cfg['env'].get('rewardTerms', {}) or {}).get('freeFlightGate', {}) or {}
+        self._free_flight_gate = bool(ffg_cfg.get('enable', False))
+        if self._free_flight_gate:
+            print("[intermimic] freeFlightGate enabled: object reward neutral on "
+                  "reference no-contact frames")
 
         # --- Early-termination thresholds, cfg-driven (resetThresholds block). ---
         # Defaults REPRODUCE the historical hardcoded values, so a cfg without the
@@ -1889,6 +1908,14 @@ class InterMimic(Humanoid_SMPLX):
         ro, object_reset, obj_points, ref_obj_points = self.compute_obj_reward(self.reward_weights)
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
+        if self._free_flight_gate:
+            # reference contact flag for the CURRENT ref frame: 1 = held, 0 = free
+            ref_contact = self.extract_data_component(
+                'contact_obj', obs=self._curr_ref_obs).squeeze(-1)
+            ro = ro * ref_contact + (1.0 - ref_contact)   # neutral (1.0) when free
+            # a divergence reset on a free-flying ball is the same trap in reset
+            # form; only relevant when object resets are enabled at all
+            object_reset = torch.logical_and(object_reset, ref_contact > 0.5)
         reward = rb * ro * rig * rcg
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
