@@ -58,16 +58,30 @@ def clip_dof_in_smpl_order(clip):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bundle", required=True)
+    ap.add_argument("--bundle", help="CARI4D export .pth to compare against")
+    ap.add_argument("--ref-clip", help="OR: another installed .pt to compare against "
+                    "(stale-intermediate hunt: ~0 deg vs an OLD clip = the conversion "
+                    "reused that clip's human)")
     ap.add_argument("--clip", required=True)
     ap.add_argument("--every", type=int, default=5)
     args = ap.parse_args()
+    if bool(args.bundle) == bool(args.ref_clip):
+        raise SystemExit("pass exactly one of --bundle / --ref-clip")
 
-    b = torch.load(args.bundle, map_location="cpu", weights_only=False)
-    pr = b["pr"] if "pr" in b else b
-    smpl_pose = np.asarray(pr["smpl_pose"]).astype(np.float64)     # (T,72)
     clip = torch.load(args.clip, map_location="cpu")
     dof_smpl = clip_dof_in_smpl_order(clip)
+    if args.bundle:
+        b = torch.load(args.bundle, map_location="cpu", weights_only=False)
+        pr = b["pr"] if "pr" in b else b
+        smpl_pose = np.asarray(pr["smpl_pose"]).astype(np.float64)   # (T,72)
+    else:
+        ref = torch.load(args.ref_clip, map_location="cpu")
+        ref_dof = clip_dof_in_smpl_order(ref)
+        # synthesize a (T,72)-style array from the ref clip's SMPL-order dof
+        smpl_pose = np.zeros((len(ref_dof), 72))
+        for j in range(1, 22):
+            smpl_pose[:, 3 * j:3 * j + 3] = ref_dof[:, j - 1, :]
+        ref_ball = ref[:, 318:321].double().numpy()
 
     T = min(len(smpl_pose), len(dof_smpl))
     print(f"frames: bundle {len(smpl_pose)} | clip {len(dof_smpl)} (comparing {T})")
@@ -98,7 +112,10 @@ def main():
 
     # Ball trajectory: rigid-invariant speed profile (same check as
     # verify_bundle_vs_clip.py, repeated here so one run = full verdict).
-    ball_b = np.asarray(pr["pose_abs"])[:T, :3, 3].astype(np.float64)
+    if args.bundle:
+        ball_b = np.asarray(pr["pose_abs"])[:T, :3, 3].astype(np.float64)
+    else:
+        ball_b = ref_ball[:T]
     ball_c = clip[:T, 318:321].double().numpy()
     sp_b = np.linalg.norm(np.diff(ball_b, axis=0), axis=1)
     sp_c = np.linalg.norm(np.diff(ball_c, axis=0), axis=1)
