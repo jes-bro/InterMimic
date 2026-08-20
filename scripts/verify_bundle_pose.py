@@ -122,8 +122,12 @@ def main():
     d = np.abs(sp_b - sp_c)
     print(f"\n== ball trajectory (rigid-invariant speed profile) ==")
     print(f"  max |speed diff| {d.max():.4f} m/frame at frame {int(d.argmax())} | "
-          f"path length bundle {sp_b.sum():.2f} m vs clip {sp_c.sum():.2f} m")
-    print("  read: <0.01 = ball preserved; larger = converter changed the ball's motion")
+          f"path length ref {sp_b.sum():.2f} m vs clip {sp_c.sum():.2f} m")
+    print(f"  {'frame':>5s} {'ref v':>7s} {'clip v':>7s} {'|diff|':>7s}   (m/frame; ~0 diff = same ball motion THERE)")
+    for i in range(0, len(d), args.every):
+        print(f"  {i:5d} {sp_b[i]:7.3f} {sp_c[i]:7.3f} {d[i]:7.3f}")
+    print("  read: <0.01 everywhere = same ball; a window of ~0 diffs vs an OLD clip = "
+          "that stretch of the ball is the old trajectory")
 
 
 if __name__ == "__main__":
