@@ -104,6 +104,15 @@ def main() -> int:
                              "a gravity-aligned world frame, which is exactly the "
                              "rotation needed. Example: "
                              "--from-calib trajectory/gopro_calibs.csv:cam04")
+    parser.add_argument("--align-gravity", type=int, nargs=2, metavar=("A", "Z"),
+                        help="Derive the rotation from the clip's own physics: the "
+                             "object's mean free-flight acceleration over frames A..Z "
+                             "IS gravity, so rotate the whole scene to map it onto "
+                             "world -z. No calibration, no axis guessing -- this is "
+                             "the fix for residual tilt left by the fixed x-flip when "
+                             "an export's frame differs from the assumed inversion "
+                             "(measured 12.55 deg on the optj3d install). Pair with "
+                             "--drop-to-floor and --out <new file>.")
     parser.add_argument("--fix-frame-zero", action="store_true",
                         help="Compute the rotation that makes frame 0's root_rot "
                              "into the identity quaternion, then apply that rotation "
@@ -137,10 +146,11 @@ def main() -> int:
     args = parser.parse_args()
 
     sources = [args.from_calib is not None, args.fix_frame_zero,
+               args.align_gravity is not None,
                args.axis is not None or args.degrees is not None]
     if sum(sources) != 1:
         parser.error("specify exactly one of --from-calib, --fix-frame-zero, "
-                     "or both --axis and --degrees")
+                     "--align-gravity, or both --axis and --degrees")
     if args.axis is not None and args.degrees is None:
         parser.error("--axis needs --degrees")
 
@@ -157,7 +167,24 @@ def main() -> int:
         print(f"unexpected channel count {data.shape[-1]} (want 591)", file=sys.stderr)
         return 2
 
-    if args.from_calib:
+    if args.align_gravity:
+        import numpy as _np
+        a, z = args.align_gravity
+        obj = data[:, 318:321].double().numpy()
+        acc = _np.diff(obj, n=2, axis=0)[a:z - 1]
+        g = acc.mean(0)
+        g = g / _np.linalg.norm(g)
+        target = _np.array([0.0, 0.0, -1.0])
+        tilt = _np.degrees(_np.arccos(_np.clip(g @ target, -1, 1)))
+        axis = _np.cross(g, target)
+        n = _np.linalg.norm(axis)
+        if n < 1e-8:
+            R = sRot.identity()
+        else:
+            R = sRot.from_rotvec(axis / n * _np.radians(tilt))
+        print(f"align-gravity: flight frames {a}-{z}, measured g dir {_np.round(g,3)}, "
+              f"tilt {tilt:.2f} deg -> rotating onto -z")
+    elif args.from_calib:
         R = rotation_from_calibration(args.from_calib)
     elif args.fix_frame_zero:
         frame0_root_rot = data[0, 3:7].numpy()
