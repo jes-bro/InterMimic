@@ -13,16 +13,23 @@
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=ALL
 
-# BBALL_R2_WARM bball experiment: identical to smplx_cari4d_bball_overfit EXCEPT the
-# object/ig/contact divergence resets are disabled (resetThresholds block) --
-# noreset + HUMAN reset also off: episodes end only on body-fall / NaN / clip
-# end. Tests the termination-is-the-binding-constraint hypothesis after noreset
-# died 100% by the human reset (~34-step episodes) with object/ig/contact off.
+# BBALL_R2_WARM bball experiment (see f7826fb). Round 2 after the fully-resets-off
+# noreset arm: keep the OBJECT-side divergence resets off (object / igRatio /
+# contactSteps false -- they re-create the free-flight wall on imperfect releases)
+# but RESTORE the human divergence reset at 0.5m, which is what executes the crawl
+# exploit that resets-off enabled. Bundles the post-mortem fixes: initVel True (all
+# 39 bball cfgs had inherited initVel False, zeroing frame-0 object velocity so
+# every spawn dropped a dead ball) and the relabeled contact-flag data
+# (InterAct/behave_cari4d_optj3d_cf). PSI key dropped -- proven inert on short clips.
 #
 # SEPARATE experiment: own cfgs, own checkpoint dir
 # (checkpoints/smplx_cari4d_bball_r2_warm/nn/) -- writes NOTHING into the
-# original run's directory. FRESH START only --
-# no warm-starting from other runs; resubmit to resume its own checkpoints.
+# original run's directory.
+#
+# NOT a fresh start: the train cfg carries an EXPLICIT, Jess-approved warm start
+# from checkpoints/smplx_teachers_new/sub2.pth (resume_from, read at
+# intermimic_agent.py:177 regardless of load_checkpoint). Once this run has its own
+# mimic.pth, resubmits resume from that instead -- never from another run.
 
 source ~/.bashrc
 conda deactivate
@@ -43,9 +50,21 @@ CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_cari4d_bball_r2_warm_
 if ! grep -qE '^\s*resetThresholds:' "$CFG_ENV"; then
     echo "[bball-r2_warm] ERROR: resetThresholds block missing from $CFG_ENV" >&2; exit 1
 fi
-if ! grep -qE '^\s*human:\s*[Ff]alse' "$CFG_ENV"; then
-    echo "[bball-r2_warm] ERROR: human reset not disabled in $CFG_ENV -- this IS the r2_warm knob" >&2; exit 1
+# r2 inverts the family default: the HUMAN divergence reset is restored (0.5m) to
+# execute the crawl exploit that the fully-resets-off arms enabled. Object-side
+# resets stay off, so a cloned 'human: false' would silently make this a repeat
+# of noreset -- refuse to run unless the threshold is actually there.
+if ! grep -qE '^\s*human:\s*0\.5' "$CFG_ENV"; then
+    echo "[bball-r2_warm] ERROR: human reset not set to 0.5 in $CFG_ENV -- restoring it IS the r2_warm knob" >&2; exit 1
 fi
+# The other half of the arm: the object-side resets must stay OFF. If one gets
+# flipped back on, the free-flight wall returns on imperfect releases and the run
+# is no longer this experiment -- fail loudly rather than train the wrong thing.
+for KNOB in object igRatio contactSteps; do
+    if ! grep -qE "^\s*${KNOB}:\s*[Ff]alse" "$CFG_ENV"; then
+        echo "[bball-r2_warm] ERROR: resetThresholds.${KNOB} not false in $CFG_ENV -- object-side resets must stay off" >&2; exit 1
+    fi
+done
 
 echo "[bball-r2_warm] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
 echo "[bball-r2_warm] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_cari4d_bball_r2_warm/nn/"
