@@ -212,11 +212,58 @@ def test_parse_progress():
                       "epoch_num:15907 mean_rewards:[0.31] fps step: 20000.0 fps total: 16600.0\n")
         r = summarise("smplx_cari4d_bball_r2_warm", {"17021158": a, "17030000": b}, {})
         # baseline is the FIRST job's 12970, not the resubmit's 14304
-        check("epochs spans both jobs (15907-12970=2937)", r["epochs"] == 2937,
+        check("epochs sums both jobs' deltas (1334+1603=2937)", r["epochs"] == 2937,
               f"(got {r['epochs']})")
         check("latest_job is the newer id", r["latest_job"] == "17030000")
         check("reward comes from the LATEST job", r["reward"] == "0.310",
               f"(got {r['reward']})")
+
+
+def test_non_monotonic_epochs():
+    """The rectinj3 case: one job resumes high, another runs a separate range.
+
+    max(last_epoch) - first_baseline gave 35 epochs for 24h of compute, because
+    the second job's entire range was invisible to max(). Per-job deltas are
+    immune: each job's advance is well-defined no matter what the others did.
+    """
+    print("\n10. non-monotonic epoch counters across jobs (the rectinj3 bug):")
+    with tempfile.TemporaryDirectory() as d:
+        # job A resumed at 13000, advanced 35 epochs, then died
+        a = write_log(d, "cari4d-bball-rectinj3-16864000.out",
+                      "[warm-start] Successfully restored from checkpoints/x/nn/mimic.pth; "
+                      "resuming at epoch 13000\n"
+                      "[bball-rectinj3] host=x job=16864000 -> checkpoints/smplx_cari4d_bball_rectinj3/nn/\n"
+                      "epoch_num:13035 mean_rewards:[1.40] fps step: 22000.0 fps total: 18500.0\n")
+        # job B started FRESH and ran to 12000 -- a lower number than job A's end
+        b = write_log(d, "cari4d-bball-rectinj3-16864697.out",
+                      "[bball-rectinj3] host=x job=16864697 -> checkpoints/smplx_cari4d_bball_rectinj3/nn/\n"
+                      "epoch_num:12000 mean_rewards:[1.48] fps step: 22100.0 fps total: 18561.0\n")
+        r = summarise("smplx_cari4d_bball_rectinj3",
+                      {"16864000": a, "16864697": b}, {})
+        # old logic: max(13035,12000) - 13000 = 35.  new: 35 + 12000 = 12035.
+        check("epochs sums per-job deltas (12035, not 35)", r["epochs"] == 12035,
+              f"(got {r['epochs']})")
+        check("raw epoch_num still shows the max seen", r["epoch_num"] == 13035)
+        check("warm_from still reports the first job's baseline",
+              r["warm_from"] == 13000)
+        # Job B began at 0 while job A had already ended at 13035 -- the chain is
+        # not one run. RESTART is the stronger, more accurate flag here.
+        check("flagged RESTART (cfg changed mid-experiment)",
+              r["epoch_flag"] == "RESTART", f"(got {r['epoch_flag']!r})")
+
+    print("\n11. a clean resubmit chain is unaffected by the fix:")
+    with tempfile.TemporaryDirectory() as d:
+        a = write_log(d, "cari4d-bball-r2_warm-17021158.out", PROGRESS_LOG)
+        b = write_log(d, "cari4d-bball-r2_warm-17030000.out",
+                      "[warm-start] Successfully restored from checkpoints/x/nn/mimic.pth; "
+                      "resuming at epoch 14304\n"
+                      "epoch_num:15907 mean_rewards:[0.31] fps step: 20000.0 fps total: 16600.0\n")
+        r = summarise("smplx_cari4d_bball_r2_warm", {"17021158": a, "17030000": b}, {})
+        # 1334 + 1603 = 2937, same as the old final-minus-baseline answer
+        check("monotonic chain still gives 2937", r["epochs"] == 2937,
+              f"(got {r['epochs']})")
+        check("no SUSPECT flag when every job has a baseline",
+              r["epoch_flag"] == "", f"(got {r['epoch_flag']!r})")
 
 
 def main():
@@ -226,6 +273,7 @@ def main():
     test_missing_sacct_is_flagged()
     test_running_job()
     test_parse_progress()
+    test_non_monotonic_epochs()
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")

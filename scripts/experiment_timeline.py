@@ -216,8 +216,43 @@ def summarise(exp, jobs, sacct):
     span = (last - first).total_seconds() if (first and last) else None
 
     latest_job = max(jobs, key=int) if jobs else "-"
-    # epoch_num is inflated by the warm start: subtract the epoch the FIRST job
-    # resumed at. A fresh run has no warm-start line and starts at 0.
+    # Epochs trained = SUM of each job's own advance (last_epoch - the epoch that
+    # job resumed at). NOT max(last_epoch) - first job's baseline: that assumes
+    # the counter rises monotonically across the chain, which breaks the moment
+    # one job restarts from a different point (a fresh start after a warm one, a
+    # rollback to an older checkpoint, or an earlier job whose log is gone). On
+    # rectinj3 that assumption produced 35 epochs for 24h of compute.
+    # Each job's delta is well-defined regardless of what the others did.
+    epochs_trained, jobs_no_baseline = 0, []
+    for jid, _ in ordered:
+        pr = prog_by_job.get(jid)
+        if not pr:
+            continue
+        base = pr["warm_epoch"] or 0
+        epochs_trained += max(0, pr["last_epoch"] - base)
+        # A job with no warm-start line is ASSUMED fresh. If it actually resumed
+        # (log truncated before the line, or a launcher that does not print it)
+        # its delta is overstated -- say so rather than quietly overcounting.
+        if pr["warm_epoch"] is None and jid != ordered[0][0]:
+            jobs_no_baseline.append(jid)
+    # RESTART: a later job began at or below where an earlier job ENDED. A
+    # continuous run always resumes forward from its own checkpoint, so this
+    # means the chain is not one training run -- typically the cfg changed
+    # mid-experiment and a job started fresh into the same checkpoint dir
+    # (rectinj3, 2026-08-17: job A warm-started to 13035, resume_from was then
+    # set to None, job B started from 0). Summing such jobs' epochs reports a
+    # continuous run that never existed, so flag it and let a human decide which
+    # job the arm actually is.
+    restart = False
+    prev_end = None
+    for jid, _ in ordered:
+        pr = prog_by_job.get(jid)
+        if not pr:
+            continue
+        began = pr["warm_epoch"] or 0
+        if prev_end is not None and began < prev_end:
+            restart = True
+        prev_end = pr["last_epoch"]
     firstjob = ordered[0][0] if ordered else None
     baseline = (prog_by_job.get(firstjob, {}) or {}).get("warm_epoch") or 0
     finals = [p["last_epoch"] for p in prog_by_job.values()]
@@ -227,7 +262,10 @@ def summarise(exp, jobs, sacct):
         "experiment": exp,
         "jobs": len(jobs),
         "latest_job": latest_job,
-        "epochs": (last_epoch - baseline) if last_epoch is not None else "-",
+        "epochs": epochs_trained if prog_by_job else "-",
+        "epoch_flag": ("RESTART" if restart else
+                       ("SUSPECT:" + ",".join(jobs_no_baseline)) if jobs_no_baseline
+                       else ""),
         "epoch_num": last_epoch if last_epoch is not None else "-",
         "warm_from": baseline if baseline else "",
         "reward": (f"{latest_prog['reward_tail']:.3f}" if latest_prog else "-"),
@@ -293,7 +331,18 @@ def main():
     print("compute   = sum of the jobs' Elapsed (actual GPU time)")
     print("approx=YES means sacct had no record for >=1 job; its end time is the "
           "log file mtime, NOT accounting data")
-    print("epochs    = epochs ACTUALLY TRAINED = final epoch_num - warm_from.")
+    print("epochs    = epochs ACTUALLY TRAINED = SUM over jobs of")
+    print("            (that job's last epoch_num - the epoch it resumed at).")
+    print("            Summed per job, NOT max-minus-first: the counter does not")
+    print("            rise monotonically across a chain if any job restarts from")
+    print("            a different point.")
+    print("epoch_flag= RESTART means a later job began at or below where an")
+    print("            earlier one ended: the chain is NOT one continuous run (the")
+    print("            cfg changed mid-experiment and a job started fresh into the")
+    print("            same checkpoint dir). The summed epochs describe a run that")
+    print("            never existed -- inspect the jobs and pick the real one.")
+    print("            SUSPECT means a non-first job had no warm-start line, so it")
+    print("            was assumed fresh and its epochs may be OVERSTATED.")
     print("warm_from = epoch the first job resumed at. resume_from restores the")
     print("            checkpoint's epoch counter, so an arm warm-started from the")
     print("            sub2 teacher begins at the TEACHER's epoch, not 0. Blank =")
