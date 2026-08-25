@@ -40,6 +40,50 @@ JOB_LINE = re.compile(r"job=(\d+)\s*->\s*checkpoints/(\S+?)/nn/")
 # fallback for logs that only name the experiment (run.py's own banner)
 EXP_LINE = re.compile(r"experiment=(\S+)\s")
 JOBID_FROM_NAME = re.compile(r"-(\d+)\.out$")
+# "epoch_num:14304 mean_rewards:[0.29] fps step: 20167.8 fps total: 16551.5"
+PROGRESS = re.compile(r"epoch_num:(\d+)\s+mean_rewards:\[([-\d.eE]+)\]"
+                      r"(?:.*?fps total:\s*([\d.]+))?")
+# "[warm-start] Successfully restored from ...; resuming at epoch 12970"
+WARMSTART = re.compile(r"\[warm-start\].*resuming at epoch (\d+)")
+
+
+def parse_progress(path, tail_n=50):
+    """Last epoch, reward (last value and mean of the last tail_n), fps, and the
+    warm-start epoch this job began from.
+
+    epoch_num is NOT epochs-trained: resume_from restores the checkpoint's epoch
+    counter (intermimic_agent.py:186), so a run warm-started from a teacher
+    begins at the TEACHER's epoch. The warm-start line is what lets us subtract
+    it off instead of reporting an inflated number.
+    """
+    epochs, rewards, fps, warm = [], [], [], None
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                m = PROGRESS.search(line)
+                if m:
+                    epochs.append(int(m.group(1)))
+                    rewards.append(float(m.group(2)))
+                    if m.group(3):
+                        fps.append(float(m.group(3)))
+                    continue
+                if warm is None:
+                    w = WARMSTART.search(line)
+                    if w:
+                        warm = int(w.group(1))
+    except OSError:
+        return None
+    if not epochs:
+        return None
+    tail = rewards[-tail_n:]
+    return {
+        "last_epoch": max(epochs),
+        "reward_last": rewards[-1],
+        "reward_tail": sum(tail) / len(tail),
+        "tail_n": len(tail),
+        "fps_total": (sum(fps[-tail_n:]) / len(fps[-tail_n:])) if fps else None,
+        "warm_epoch": warm,
+    }
 
 SACCT_FMT = ["JobID", "JobName", "Start", "End", "Elapsed", "State", "ExitCode"]
 
@@ -142,7 +186,12 @@ def humanise(seconds):
 def summarise(exp, jobs, sacct):
     """One row per experiment, stitched across its jobs."""
     starts, ends, compute, states, approx = [], [], 0, [], False
-    for jobid, logpath in sorted(jobs.items(), key=lambda kv: int(kv[0])):
+    prog_by_job, ordered = {}, sorted(jobs.items(), key=lambda kv: int(kv[0]))
+    for jobid, logpath in ordered:
+        pr = parse_progress(logpath)
+        if pr:
+            prog_by_job[jobid] = pr
+    for jobid, logpath in ordered:
         rec = sacct.get(jobid)
         if rec:
             st, en = parse_time(rec["Start"]), parse_time(rec["End"])
@@ -165,9 +214,25 @@ def summarise(exp, jobs, sacct):
     first = min(starts) if starts else None
     last = max(ends) if ends else None
     span = (last - first).total_seconds() if (first and last) else None
+
+    latest_job = max(jobs, key=int) if jobs else "-"
+    # epoch_num is inflated by the warm start: subtract the epoch the FIRST job
+    # resumed at. A fresh run has no warm-start line and starts at 0.
+    firstjob = ordered[0][0] if ordered else None
+    baseline = (prog_by_job.get(firstjob, {}) or {}).get("warm_epoch") or 0
+    finals = [p["last_epoch"] for p in prog_by_job.values()]
+    last_epoch = max(finals) if finals else None
+    latest_prog = prog_by_job.get(latest_job)
     return {
         "experiment": exp,
         "jobs": len(jobs),
+        "latest_job": latest_job,
+        "epochs": (last_epoch - baseline) if last_epoch is not None else "-",
+        "epoch_num": last_epoch if last_epoch is not None else "-",
+        "warm_from": baseline if baseline else "",
+        "reward": (f"{latest_prog['reward_tail']:.3f}" if latest_prog else "-"),
+        "fps": (f"{latest_prog['fps_total']:.0f}"
+                if latest_prog and latest_prog["fps_total"] else "-"),
         "first_start": first.strftime("%Y-%m-%d %H:%M") if first else "-",
         "last_end": last.strftime("%Y-%m-%d %H:%M") if last else "(running?)",
         "wall_span": humanise(span) if span is not None else "-",
@@ -213,8 +278,10 @@ def main():
         rows.append(summarise(exp, found[exp], sacct))
     rows.sort(key=lambda r: (r["first_start"] == "-", r["first_start"]))
 
-    cols = [("experiment", 42), ("jobs", 5), ("first_start", 17),
-            ("last_end", 17), ("wall_span", 10), ("compute", 9), ("approx", 7)]
+    cols = [("experiment", 40), ("jobs", 4), ("latest_job", 10),
+            ("epochs", 8), ("warm_from", 9), ("reward", 7), ("fps", 7),
+            ("first_start", 17), ("last_end", 17), ("wall_span", 9),
+            ("compute", 8), ("approx", 6)]
     print()
     print("  ".join(h.upper().ljust(w) for h, w in cols))
     print("  ".join("-" * w for _, w in cols))
@@ -226,6 +293,15 @@ def main():
     print("compute   = sum of the jobs' Elapsed (actual GPU time)")
     print("approx=YES means sacct had no record for >=1 job; its end time is the "
           "log file mtime, NOT accounting data")
+    print("epochs    = epochs ACTUALLY TRAINED = final epoch_num - warm_from.")
+    print("warm_from = epoch the first job resumed at. resume_from restores the")
+    print("            checkpoint's epoch counter, so an arm warm-started from the")
+    print("            sub2 teacher begins at the TEACHER's epoch, not 0. Blank =")
+    print("            fresh start. Reading raw epoch_num overstates training by")
+    print("            this much.")
+    print("reward    = mean of the last 50 mean_rewards lines in the LATEST job")
+    print("            (single-value reward is noisy; r3 swings 0.25-0.35).")
+    print("fps       = mean 'fps total' over the same window.")
 
     if missing:
         print()

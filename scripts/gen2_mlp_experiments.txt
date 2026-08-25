@@ -1,0 +1,17 @@
+# GEN-2 MLP arms (network name 'intermimic' -> InterMimicBuilder, run.py:212).
+# The xf arms use 'intermimic_transformer' (run.py:217) and are NOT listed here.
+smplx_teacher_g2_mlp_plain_nvadlr__f0
+smplx_teacher_g2_mlp_plain_nvadlr__f1
+smplx_teacher_g2_mlp_plain_stock__f0
+smplx_teacher_g2_mlp_plain_stock__f1
+smplx_teacher_g2_mlp_plain_stock_buf20__f0
+smplx_teacher_g2_mlp_ret_nvadlr__f0
+smplx_teacher_g2_mlp_ret_nvadlr__f1
+smplx_teacher_g2_mlp_ret_nvadlr_gpumotion__f0
+smplx_teacher_g2_mlp_ret_stock__f0
+smplx_teacher_g2_mlp_ret_stock__f1
+smplx_teacher_g2_mlp_ret_stock_buf20__f0
+smplx_teacher_g2_mlp_ret_stock_gpumotion__f0
+smplx_teacher_g2_mlp_ret_stock_syn0__f0
+smplx_teacher_g2_mlp_ret_stock_syn130__f0
+smplx_teacher_g2_mlp_ret_stock_syn60__f0

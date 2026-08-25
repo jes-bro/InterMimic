@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "scripts"))
 from experiment_timeline import (  # noqa: E402
     parse_sacct, parse_elapsed, parse_time, scan_logs, summarise, humanise,
+    parse_progress,
 )
 
 failures = []
@@ -158,12 +159,73 @@ def test_running_job():
           f"(got {r['compute']})")
 
 
+PROGRESS_LOG = """[warm-start] Successfully restored from checkpoints/smplx_teachers_new/sub2.pth; resuming at epoch 12970
+[bball-r3_roll30] host=x job=17037568 -> checkpoints/smplx_cari4d_bball_r3_roll30/nn/
+epoch_num:12971 mean_rewards:[0.10] fps step: 20000.0 fps total: 16000.0
+epoch_num:12972 mean_rewards:[0.20] fps step: 20100.0 fps total: 16200.0
+epoch_num:14304 mean_rewards:[0.30] fps step: 20167.8 fps total: 16551.5
+"""
+
+FRESH_LOG = """[bball-rectinj3] host=x job=16000002 -> checkpoints/smplx_cari4d_bball_rectinj3/nn/
+epoch_num:1 mean_rewards:[0.01] fps step: 19000.0 fps total: 15000.0
+epoch_num:2000 mean_rewards:[0.05] fps step: 19500.0 fps total: 15500.0
+"""
+
+
+def test_parse_progress():
+    print("\n7. progress parsing -- epochs must not be inflated by the warm start:")
+    with tempfile.TemporaryDirectory() as d:
+        p = write_log(d, "cari4d-bball-r3_roll30-17037568.out", PROGRESS_LOG)
+        pr = parse_progress(p)
+        check("last epoch_num read", pr["last_epoch"] == 14304, f"(got {pr['last_epoch']})")
+        check("warm-start epoch captured", pr["warm_epoch"] == 12970,
+              f"(got {pr['warm_epoch']})")
+        check("reward is the tail MEAN, not one noisy value",
+              abs(pr["reward_tail"] - 0.20) < 1e-9, f"(got {pr['reward_tail']})")
+        check("fps total parsed", abs(pr["fps_total"] - 16250.5) < 1e-6,
+              f"(got {pr['fps_total']})")
+
+        r = summarise("smplx_cari4d_bball_r3_roll30", {"17037568": p}, {})
+        # 14304 - 12970 = 1334 epochs actually trained, NOT 14304.
+        check("epochs = final - warm_from (1334, not 14304)", r["epochs"] == 1334,
+              f"(got {r['epochs']})")
+        check("raw epoch_num still reported", r["epoch_num"] == 14304)
+        check("warm_from surfaced so the offset is visible", r["warm_from"] == 12970)
+        check("latest_job is the job id", r["latest_job"] == "17037568")
+
+    print("\n8. a FRESH run has no warm-start offset:")
+    with tempfile.TemporaryDirectory() as d:
+        p = write_log(d, "cari4d-bball-rectinj3-16000002.out", FRESH_LOG)
+        r = summarise("smplx_cari4d_bball_rectinj3", {"16000002": p}, {})
+        check("epochs == epoch_num when never warm-started", r["epochs"] == 2000,
+              f"(got {r['epochs']})")
+        check("warm_from blank for a fresh run", r["warm_from"] == "",
+              f"(got {r['warm_from']!r})")
+
+    print("\n9. resubmits: epochs measured from the FIRST job's baseline:")
+    with tempfile.TemporaryDirectory() as d:
+        a = write_log(d, "cari4d-bball-r2_warm-17021158.out", PROGRESS_LOG)
+        # the resubmit resumes from the run's OWN checkpoint at a later epoch
+        b = write_log(d, "cari4d-bball-r2_warm-17030000.out",
+                      "[warm-start] Successfully restored from checkpoints/x/nn/mimic.pth; "
+                      "resuming at epoch 14304\n"
+                      "epoch_num:15907 mean_rewards:[0.31] fps step: 20000.0 fps total: 16600.0\n")
+        r = summarise("smplx_cari4d_bball_r2_warm", {"17021158": a, "17030000": b}, {})
+        # baseline is the FIRST job's 12970, not the resubmit's 14304
+        check("epochs spans both jobs (15907-12970=2937)", r["epochs"] == 2937,
+              f"(got {r['epochs']})")
+        check("latest_job is the newer id", r["latest_job"] == "17030000")
+        check("reward comes from the LATEST job", r["reward"] == "0.310",
+              f"(got {r['reward']})")
+
+
 def main():
     test_scan_logs()
     test_parsers()
     test_summarise_stitches_jobs()
     test_missing_sacct_is_flagged()
     test_running_job()
+    test_parse_progress()
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
