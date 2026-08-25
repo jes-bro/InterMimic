@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Fixture tests for scripts/experiment_timeline.py.
+
+The script's whole job is stitching many slurm jobs into one experiment row, so
+the things worth pinning are the stitching and the honesty of the fallbacks:
+
+  1. a job id is tied to an experiment by the launcher's OWN output line, not by
+     guessing from the abbreviated job name (bball-r2_warm != smplx_..._r2_warm)
+  2. several jobs collapse into ONE row: earliest start, latest end, summed
+     compute -- and wall span must include the gap between resubmits, because
+     that gap is real elapsed time the experiment was not running
+  3. a job sacct has forgotten is flagged approx=YES, never silently dropped and
+     never quietly mixed in with real accounting data
+  4. an experiment with no logs is reported as NO LOGS, not omitted -- a typo'd
+     name must be visible, since silently returning 16 rows for 17 requested
+     names is exactly how a missing run goes unnoticed
+
+Fixtures are written to a temp dir; nothing touches the real repo or sacct.
+
+Run:  python tests/test_experiment_timeline.py   (exit 0 = all green)
+"""
+import os
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "scripts"))
+from experiment_timeline import (  # noqa: E402
+    parse_sacct, parse_elapsed, parse_time, scan_logs, summarise, humanise,
+)
+
+failures = []
+
+
+def check(label, condition, detail=""):
+    if condition:
+        print(f"  PASS  {label}")
+    else:
+        print(f"  FAIL  {label} {detail}")
+        failures.append(label)
+
+
+def write_log(d, name, body):
+    p = os.path.join(d, name)
+    with open(p, "w") as fh:
+        fh.write(body)
+    return p
+
+
+LAUNCH = ("[bball-{tag}] invocation: python -u -m intermimic.run ...\n"
+          "[bball-{tag}] host=simurgh2.stanford.edu job={job} "
+          "-> checkpoints/{exp}/nn/\n"
+          "Setting seed: 9198\n")
+
+
+def test_scan_logs():
+    print("1. scan_logs -- job id tied to experiment by the log's own line:")
+    with tempfile.TemporaryDirectory() as d:
+        write_log(d, "cari4d-bball-r2_warm-17021158.out",
+                  LAUNCH.format(tag="r2_warm", job="17021158",
+                                exp="smplx_cari4d_bball_r2_warm"))
+        write_log(d, "cari4d-bball-r2_warm-17030000.out",
+                  LAUNCH.format(tag="r2_warm", job="17030000",
+                                exp="smplx_cari4d_bball_r2_warm"))
+        write_log(d, "cari4d-bball-r3_roll30-17037568.out",
+                  LAUNCH.format(tag="r3_roll30", job="17037568",
+                                exp="smplx_cari4d_bball_r3_roll30"))
+        # a log that is not an experiment launch at all
+        write_log(d, "bball-render-17040000.out", "[bball-render] done:\n")
+        found = scan_logs(d)
+
+        check("two experiments discovered", set(found) == {
+            "smplx_cari4d_bball_r2_warm", "smplx_cari4d_bball_r3_roll30"},
+            f"(got {sorted(found)})")
+        check("r2_warm's TWO resubmits grouped under one experiment",
+              set(found.get("smplx_cari4d_bball_r2_warm", {})) ==
+              {"17021158", "17030000"})
+        check("a render log is not mistaken for an experiment",
+              all("render" not in e for e in found))
+
+    print("\n2. scan_logs -- job id recovered from the filename if the line lacks it:")
+    with tempfile.TemporaryDirectory() as d:
+        write_log(d, "cari4d-bball-old-16000001.out",
+                  "[run] task=InterMimic experiment=smplx_cari4d_bball_looseterm "
+                  "-> checkpoints/...\n")
+        found = scan_logs(d)
+        check("experiment found via the run.py banner",
+              "smplx_cari4d_bball_looseterm" in found, f"(got {sorted(found)})")
+        check("job id taken from the filename",
+              set(found.get("smplx_cari4d_bball_looseterm", {})) == {"16000001"})
+
+
+def test_parsers():
+    print("\n3. sacct parsing:")
+    text = ("17021158|bball-r2_warm|2026-08-24T14:01:33|2026-08-24T14:02:10|"
+            "00:00:37|FAILED|1:0\n"
+            "17030000|bball-r2_warm|2026-08-24T16:00:00|2026-08-25T16:00:00|"
+            "1-00:00:00|TIMEOUT|0:0\n")
+    rows = parse_sacct(text)
+    check("both rows parsed", set(rows) == {"17021158", "17030000"})
+    check("elapsed 00:00:37 -> 37s", parse_elapsed("00:00:37") == 37)
+    check("elapsed 1-00:00:00 -> 86400s", parse_elapsed("1-00:00:00") == 86400)
+    check("running job's End=Unknown -> None", parse_time("Unknown") is None)
+    check("humanise(86400) == 24h00m", humanise(86400) == "24h00m",
+          f"(got {humanise(86400)})")
+
+
+def test_summarise_stitches_jobs():
+    print("\n4. summarise -- many jobs, one row:")
+    sacct = parse_sacct(
+        "17021158|bball-r2_warm|2026-08-24T14:00:00|2026-08-24T15:00:00|"
+        "01:00:00|FAILED|1:0\n"
+        "17030000|bball-r2_warm|2026-08-24T20:00:00|2026-08-25T02:00:00|"
+        "06:00:00|TIMEOUT|0:0\n")
+    jobs = {"17021158": "/tmp/a.out", "17030000": "/tmp/b.out"}
+    r = summarise("smplx_cari4d_bball_r2_warm", jobs, sacct)
+
+    check("job count is 2", r["jobs"] == 2)
+    check("first_start is the EARLIER job's start",
+          r["first_start"] == "2026-08-24 14:00", f"(got {r['first_start']})")
+    check("last_end is the LATER job's end",
+          r["last_end"] == "2026-08-25 02:00", f"(got {r['last_end']})")
+    # 14:00 -> 02:00 next day = 12h wall, but only 7h of it was computing:
+    # the 5h queue gap between resubmits is real and must not be hidden.
+    check("wall_span spans the queue gap (12h)", r["wall_span"] == "12h00m",
+          f"(got {r['wall_span']})")
+    check("compute is the SUM of Elapsed (7h), not the span",
+          r["compute"] == "7h00m", f"(got {r['compute']})")
+    check("not flagged approximate when sacct knew every job", r["approx"] == "")
+
+
+def test_missing_sacct_is_flagged():
+    print("\n5. a job sacct forgot is flagged, not dropped:")
+    with tempfile.TemporaryDirectory() as d:
+        p = write_log(d, "cari4d-bball-old-16000001.out", "x\n")
+        # sacct knows nothing about this job
+        r = summarise("smplx_cari4d_bball_rectinj3", {"16000001": p}, {})
+        check("row still produced (not silently dropped)", r["jobs"] == 1)
+        check("flagged approx=YES", r["approx"] == "YES", f"(got {r['approx']!r})")
+        check("job state records NO-SACCT", "NO-SACCT" in r["job_states"],
+              f"(got {r['job_states']})")
+        check("end time falls back to the log mtime", r["last_end"] != "(running?)")
+        # No start time can be honestly invented, so it must stay blank rather
+        # than being guessed from the mtime.
+        check("start time is NOT invented", r["first_start"] == "-",
+              f"(got {r['first_start']})")
+
+
+def test_running_job():
+    print("\n6. a still-running job:")
+    sacct = parse_sacct("17037568|bball-r3_roll30|2026-08-24T14:01:00|Unknown|"
+                        "06:23:00|RUNNING|0:0\n")
+    r = summarise("smplx_cari4d_bball_r3_roll30", {"17037568": "/tmp/x.out"}, sacct)
+    check("start is known", r["first_start"] == "2026-08-24 14:01")
+    check("end shows as still running", r["last_end"] == "(running?)",
+          f"(got {r['last_end']})")
+    check("compute still counted from Elapsed", r["compute"] == "6h23m",
+          f"(got {r['compute']})")
+
+
+def main():
+    test_scan_logs()
+    test_parsers()
+    test_summarise_stitches_jobs()
+    test_missing_sacct_is_flagged()
+    test_running_job()
+    print()
+    if failures:
+        print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
+        return 1
+    print("all green")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
