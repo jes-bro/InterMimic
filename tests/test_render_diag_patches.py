@@ -81,15 +81,21 @@ def test_diag_cfgs():
     mid = env(DIAG_MID)
     check("midclip: stateInit -> Hybrid", mid.get("stateInit") == "Hybrid",
           f"(got {mid.get('stateInit')})")
-    check("midclip: rolloutLength -> 30", mid.get("rolloutLength") == 30,
+    check("midclip: rolloutLength -> 50", mid.get("rolloutLength") == 50,
           f"(got {mid.get('rolloutLength')})")
     check("midclip: human reset disabled",
           mid.get("resetThresholds", {}).get("human") is False,
           f"(got {mid.get('resetThresholds', {}).get('human')})")
-    # The point of the instrument: randint(0, 101 - L) must span the takeoff.
-    bound = max(1, 101 - mid.get("rolloutLength", 300))
-    check("midclip: start range reaches the takeoff (~35-70)", bound > 70,
+    # The point of the instrument: randint(0, 101 - L) must be able to open a
+    # window BEFORE the takeoff (~frame 40-50) and still run long enough to
+    # reach it. Starting AT frame 70 is mid-flight and teaches nothing, which is
+    # why this is a band and not "as late as possible" -- see the cfg header.
+    L = mid.get("rolloutLength", 300)
+    bound = max(1, 101 - L)
+    check("midclip: starts can open before the takeoff (~40-50)", bound > 40,
           f"(bound {bound})")
+    check("midclip: the window outlives a start placed just before the takeoff",
+          L >= 40, f"(rolloutLength {L} is shorter than the run-up it must cover)")
     changed = {k for k in set(src) | set(mid) if src.get(k) != mid.get(k)}
     check("midclip: only the 4 intended keys differ from the eval twin",
           changed == {"stateInit", "rolloutLength", "resetThresholds",
@@ -143,7 +149,11 @@ def test_verify_guards():
             (MIDCLIP, DIAG_MID, "midclip", "init_back_to_start",
              r'^  stateInit: "Hybrid".*$', '  stateInit: "Start"'),
             (MIDCLIP, DIAG_MID, "midclip", "rollout_back_to_300",
-             r"^  rolloutLength: 30.*$", "  rolloutLength: 300"),
+             r"^  rolloutLength: 50.*$", "  rolloutLength: 300"),
+            # r3's old value must ALSO be refused: it is the instrument silently
+            # reverting to a regime no live arm trains on.
+            (MIDCLIP, DIAG_MID, "midclip", "rollout_back_to_30",
+             r"^  rolloutLength: 50.*$", "  rolloutLength: 30"),
             (MIDCLIP, DIAG_MID, "midclip", "object_reset_on",
              r"^    object: false.*$", "    object: 0.3"),
             (PLAYTHRU, DIAG_PLAY, "playthru", "human_back_on",

@@ -21,13 +21,31 @@
 #
 # MIDCLIP: "did this arm learn the layup, given a running start?"
 #   stateInit     Start -> Hybrid   the start-frame sampler actually runs
-#   rolloutLength 300   -> 30       randint(0, 101-30) = starts over frames 0-71
-#   human         0.5   -> false    a 30-frame window plays through
+#   rolloutLength 300   -> 50       randint(0, 101-50) = starts over frames 0-50
+#   human         0.5   -> false    a 50-frame window plays through
 #   enableEvaluation    -> False    metrics are undefined outside Start init
-# Each episode is a 30-frame window from a random start, so a 600-frame video is
-# ~20 independent windows and several land inside the takeoff (~frames 35-70).
-# This is the ONLY instrument that tests what r3 actually changed: r3's fix was
-# to training's START distribution, and a frame-0 eval render never exercises it.
+# Each episode is a 50-frame window from a random start, so a 600-frame video is
+# ~12 independent windows.
+# This is the ONLY instrument that tests what r3/r5 actually changed: their fix
+# was to training's START distribution, and a frame-0 eval render never
+# exercises it.
+#
+# rolloutLength TRACKS THE ARM UNDER TEST -- 30 when this file was written for
+# r3_roll30, 50 now that r5_roll50 is the live arm. That matters because the
+# point of the instrument is to show the policy the distribution it actually
+# practised; rendering a different one inspects a regime it never trained on.
+# Watching r3's checkpoint through this file is therefore a GENERALIZATION read
+# (r3 trained on 30-frame episodes, shown a 50-frame one), not r3's own
+# distribution. If you want the strict r3 read back, copy this file to a
+# _midclip_roll30 twin rather than editing this one, so both instruments stay
+# committed and the guard in slurm_cari4d_bball_render_midclip.sh keeps
+# asserting a known value.
+#
+# WHY 50 AND NOT 30 (Jess's read of r3's mid-clip render, 2026-08-25): of ~20
+# sampled 30-frame windows, only ONE opened before the takeoff -- the rest began
+# already airborne. Starts drawn from 0..50 instead of 0..70 concentrate the
+# draws on the pre-takeoff half of the clip, and a 50-frame (1.67s) window is
+# long enough to contain crouch->extend->flight rather than bisecting it.
 #
 # BBALL R3_ROLL30 -- the coverage arm. Cloned from omomo_cari4d_bball_r2_warm_*
 # and identical to it EXCEPT rolloutLength (300 -> 30 in the train cfg; the eval
@@ -93,13 +111,13 @@ env:
   powerScale: 1.0
   controlFrequencyInv: 2  # 30 Hz
   stateInit: "Hybrid"    # DIAG: sampler must actually run
-  rolloutLength: 30      # DIAG: randint(0, 101-30) -> starts 0-71
-                          # train cfg drops this to 30 to fix start sampling, but
-                          # rolloutLength ALSO ends the episode (humanoid.py:553),
-                          # so a 30 here would cap every eval episode at 30 frames
-                          # and silently redefine success. Eval keeps measuring
-                          # full-clip execution from frame 0, exactly as r2_warm's
-                          # eval did, or the two arms are not comparable.
+  rolloutLength: 50      # DIAG: randint(0, 101-50) -> starts 0-50, and each
+                          # window then runs 50 frames (rolloutLength also ends
+                          # the episode, humanoid.py:553). Matches r5_roll50's
+                          # TRAIN regime on purpose -- see the header. Bumping
+                          # this without bumping the guard in
+                          # slurm_cari4d_bball_render_midclip.sh is the drift
+                          # that guard exists to catch.
   hybridInitProb: 0.1
   dataFPS: 30
   dataFramesScale: 1

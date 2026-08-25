@@ -26,13 +26,20 @@
 # WHAT THIS DOES. Renders a COMMITTED diagnostic cfg,
 # omomo_cari4d_bball_diag_midclip.yaml, which differs from the arms' eval twin in:
 #   stateInit     -> "Hybrid"   so the start-frame sampler actually runs
-#   rolloutLength -> 30         so randint(0, 101-30) = starts over frames 0-71
-#   human         -> false      so a 30-frame window PLAYS THROUGH instead of
+#   rolloutLength -> 50         so randint(0, 101-50) = starts over frames 0-50
+#   human         -> false      so a 50-frame window PLAYS THROUGH instead of
 #                               being cut the moment divergence trips
 #   enableEvaluation -> False   metrics are undefined outside Start init
-# Each episode is then exactly 30 frames from a random start, so a 600-frame
-# video is ~20 independent windows spanning the clip, several of them landing
-# inside the takeoff. Watch for windows that begin mid-air or just before it.
+# Each episode is then exactly 50 frames from a random start, so a 600-frame
+# video is ~12 independent windows. Watch for windows that begin mid-air or just
+# before it.
+#
+# The 50 tracks r5_roll50's TRAIN regime (it was 30 while r3_roll30 was the live
+# arm). The instrument is only honest if it shows the policy the start
+# distribution it actually practised, so this value follows the arm under test --
+# and watching an r3 checkpoint through it is a generalization read rather than
+# r3's own distribution. The guard below asserts the value so the cfg and this
+# script cannot drift apart silently.
 #
 # WHY human -> false AND NOT NO_TERM=1. NO_TERM only flips
 # enableEarlyTermination, and that flag does not reach the reset: `reset` is
@@ -62,8 +69,9 @@ export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
 CHECKPOINT="${CHECKPOINT:-checkpoints/smplx_cari4d_bball_r3_roll30/nn/mimic.pth}"
 CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball_diag_midclip.yaml}"
-# 600 frames = ~20 windows of 30. Fewer and you may not draw a start near the
-# takeoff at all; the starts are uniform over frames 0-71.
+# 600 frames = ~12 windows of 50. Fewer and you may not draw a start near the
+# takeoff at all; the starts are uniform over frames 0-50. Raise FRAMES to 1000
+# for ~20 windows, the sample size the 30-frame version used to give.
 FRAMES="${FRAMES:-600}"
 [ -f "$CHECKPOINT" ] || { echo "[midclip] ERROR: checkpoint not found: $CHECKPOINT" >&2; exit 2; }
 [ -f "$CFG_ENV" ]    || { echo "[midclip] ERROR: cfg not found: $CFG_ENV" >&2; exit 2; }
@@ -74,14 +82,14 @@ FRAMES="${FRAMES:-600}"
 # stock eval cfg by mistake reproduces the dribble-reset loop this script exists
 # to replace, and looks like it worked.
 grep -qE '^\s*stateInit:\s*"Hybrid"'   "$CFG_ENV" || { echo "[midclip] ERROR: $CFG_ENV is not Hybrid-init -- the start sampler would not run" >&2; exit 2; }
-grep -qE '^\s*rolloutLength:\s*30\b'   "$CFG_ENV" || { echo "[midclip] ERROR: $CFG_ENV rolloutLength is not 30 -- starts would not span the takeoff" >&2; exit 2; }
+grep -qE '^\s*rolloutLength:\s*50\b'   "$CFG_ENV" || { echo "[midclip] ERROR: $CFG_ENV rolloutLength is not 50 -- starts would not concentrate on the pre-takeoff half, and the window would not match r5_roll50's training regime" >&2; exit 2; }
 grep -qE '^\s*human:\s*[Ff]alse'       "$CFG_ENV" || { echo "[midclip] ERROR: $CFG_ENV still has the human reset on -- windows would be cut" >&2; exit 2; }
 for KNOB in object igRatio contactSteps; do
     grep -qE "^\s*${KNOB}:\s*[Ff]alse" "$CFG_ENV" || { echo "[midclip] ERROR: resetThresholds.${KNOB} is not false -- window would still be cut" >&2; exit 2; }
 done
 # --- VERIFY END ---
 echo "[midclip] instrument cfg: $CFG_ENV"
-echo "[midclip] start frames drawn uniformly from 0..71 (clip 101, rolloutLength 30)"
+echo "[midclip] start frames drawn uniformly from 0..50 (clip 101, rolloutLength 50)"
 
 mkdir -p renders
 EXP=$(basename "$(dirname "$(dirname "$CHECKPOINT")")")
