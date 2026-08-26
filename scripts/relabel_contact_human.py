@@ -27,12 +27,19 @@ By default contact_obj is re-derived from the SAME criterion, so the two channel
 agree by construction; that inconsistency is half the reported problem. Pass
 --keep-contact-obj to leave channel 330 alone.
 
-THE TRI-STATE. contact_human is not boolean: compute_cg_reward's ecg_all keys on
-`ref_human_contact < -contact_thres`, i.e. negative means "should be free" and
-positive "should be in contact". Rather than hardcode +1/-1, this script reads
-the values ALREADY PRESENT in the source clip's hand channels and writes those
-same values back, so whatever convention the data uses is preserved. --census
-prints what it found without writing anything.
+THE TRI-STATE. contact_human is not boolean. The bball clip's hand channels
+carry [-1.0, 0.0, 1.0], and compute_cg_reward reads them differently:
+    +1  rcg_hand's `> contact_thres`  -> "should be in contact"
+    -1  ecg_all's  `< -contact_thres` -> "must NOT be in contact", actively
+        penalized if the sim touches anything there
+     0  matches neither -> don't care, ignored entirely
+-1 and 0 are interchangeable for rcg_hand (the term being fixed) but NOT for
+rcg_all. So the default --free-value 'minimal' rewrites only where the source
+made a claim geometry contradicts: a false +1 is cleared to 0, and existing
+-1 / 0 channels are left exactly as found. Writing -1 everywhere the hand is not
+touching would invent must-not-touch constraints the recon never asserted --
+available as --free-value negative, opt in deliberately. --census prints the
+values found without writing anything.
 
 THE GUARD (Jess, 2026-08-26). Relabelling is only the right fix if the recon
 actually achieves contact somewhere. If no frame has any hand body within the
@@ -106,19 +113,30 @@ def majority_smooth(x, window=3):
 
 
 def observed_levels(t):
-    """The 'in contact' and 'free' values ALREADY used by this clip's hand
-    channels, so the tri-state convention is preserved rather than guessed.
+    """The values ALREADY used by this clip's hand channels, so the tri-state
+    convention is preserved rather than guessed.
 
-    Returns (contact_value, free_value, sorted_distinct_values)."""
+    contact_human is NOT boolean. Measured on the bball clip the values present
+    are [-1.0, 0.0, 1.0], and compute_cg_reward treats them differently:
+        +1  rcg_hand's `> contact_thres` test -> "should be in contact"
+        -1  ecg_all's `< -contact_thres` test -> "must NOT be in contact",
+            actively penalized if the sim touches anything there
+         0  matches neither test -> don't care, ignored
+    So -1 and 0 are interchangeable for rcg_hand (the term being fixed) but very
+    much not for rcg_all. Writing -1 onto channels that held 0 would invent
+    constraints that were never in the data.
+
+    Returns (contact_value, clear_value, sorted_distinct_values), where
+    clear_value is the LEAST committal value the clip already uses."""
     ch = t[:, I_CONTACT_HUMAN][:, HAND_BODY_IDS]
     vals = sorted({round(float(v), 4) for v in torch.unique(ch)})
     pos = [v for v in vals if v > 0.1]
-    neg = [v for v in vals if v < -0.1]
-    # Fall back to the convention compute_cg_reward implies (+ = should touch,
-    # - = should be free) only if the clip itself shows no example.
     contact_v = max(pos) if pos else 1.0
-    free_v = min(neg) if neg else (0.0 if 0.0 in vals else -1.0)
-    return contact_v, free_v, vals
+    # Prefer 0 ("don't care") over -1 ("must not touch") when clearing a false
+    # claim: it fixes rcg_hand without changing what rcg_all measures.
+    clear_v = 0.0 if any(abs(v) < 0.1 for v in vals) else (
+        min([v for v in vals if v < -0.1], default=-1.0))
+    return contact_v, clear_v, vals
 
 
 def census(t, ball_radius, threshold):
@@ -127,14 +145,14 @@ def census(t, ball_radius, threshold):
     ch = t[:, I_CONTACT_HUMAN][:, HAND_BODY_IDS]
     old_any = (ch > 0.1).any(dim=1)
     new_any = (gap < threshold).any(dim=1)
-    contact_v, free_v, vals = observed_levels(t)
+    contact_v, clear_v, vals = observed_levels(t)
     claimed = int(old_any.sum())
     unearnable = int(((gap.min(dim=1).values > 0) & old_any).sum())
     return {
         'frames': t.shape[0],
         'distinct_values': vals,
         'contact_value': contact_v,
-        'free_value': free_v,
+        'clear_value': clear_v,
         'claimed_contact_frames': claimed,
         'unearnable_frames': unearnable,
         'ever_touches': bool((gap < threshold).any()),
@@ -144,18 +162,35 @@ def census(t, ball_radius, threshold):
     }
 
 
-def relabel(t, ball_radius, threshold, smooth, keep_contact_obj):
+def relabel(t, ball_radius, threshold, smooth, keep_contact_obj,
+            free_value="minimal"):
     """Return a NEW tensor with hand contact_human (and optionally contact_obj)
-    re-derived from geometry. Positions and non-hand bodies untouched."""
+    re-derived from geometry. Positions and non-hand bodies untouched.
+
+    free_value controls what happens where geometry says NOT touching:
+      'minimal'  (default) clear a false +1 to the clip's least-committal value
+                 (0 = don't care), and LEAVE existing -1 / 0 exactly as found.
+                 Fixes rcg_hand without perturbing what rcg_all measures.
+      'negative' assert "must not be in contact" everywhere the hand is not
+                 touching. Stricter, and it ADDS constraints the source never
+                 had -- opt in deliberately.
+    """
     out = t.clone()
     gap = surface_gap(t, ball_radius)
     touching = majority_smooth(gap < threshold, smooth)          # [T, 32] bool
-    contact_v, free_v, _ = observed_levels(t)
+    contact_v, clear_v, vals = observed_levels(t)
+    neg_v = min([v for v in vals if v < -0.1], default=-1.0)
 
     ch = out[:, I_CONTACT_HUMAN].clone()
-    hand = ch[:, HAND_BODY_IDS]
+    hand = ch[:, HAND_BODY_IDS].clone()
+    if free_value == "negative":
+        hand[~touching] = neg_v
+    else:
+        # Only rewrite where the source made a claim geometry contradicts; every
+        # other not-touching channel keeps whatever it already said.
+        false_claim = (~touching) & (hand > 0.1)
+        hand[false_claim] = clear_v
     hand[touching] = contact_v
-    hand[~touching] = free_v
     ch[:, HAND_BODY_IDS] = hand
     out[:, I_CONTACT_HUMAN] = ch
 
@@ -184,6 +219,15 @@ def main():
     ap.add_argument("--keep-contact-obj", action="store_true",
                     help="leave channel 330 alone (default: re-derive it from "
                          "the same criterion so the channels agree)")
+    ap.add_argument("--free-value", choices=["minimal", "negative"],
+                    default="minimal",
+                    help="what to write where the hand is NOT touching. "
+                         "'minimal' (default) clears a false +1 to the clip's "
+                         "don't-care value and leaves existing -1/0 alone -- "
+                         "fixes rcg_hand without changing what rcg_all "
+                         "measures. 'negative' asserts must-not-touch "
+                         "everywhere, which ADDS constraints the source never "
+                         "had.")
     ap.add_argument("--census", action="store_true",
                     help="report the source's convention and what would change; "
                          "write nothing")
@@ -221,7 +265,9 @@ def main():
         stats[f.name] = st
         print(f"\n{f.name}: {st['frames']} frames")
         print(f"  contact_human hand values present: {st['distinct_values']}")
-        print(f"  -> writing contact={st['contact_value']}  free={st['free_value']}")
+        print(f"  -> writing contact={st['contact_value']}; clearing false "
+              f"claims to {st['clear_value']} "
+              f"(-1 = must-not-touch, 0 = don't care -- see --free-value)")
         print(f"  frames claiming hand contact (source): {st['claimed_contact_frames']}")
         print(f"  of those, UNEARNABLE (no hand body touching): {st['unearnable_frames']}")
         print(f"  closest any hand body ever gets to the surface: {st['min_gap']:+.3f} m")
@@ -253,7 +299,7 @@ def main():
     for f in clips:
         t = torch.load(f, map_location="cpu", weights_only=False).detach()
         out, touching = relabel(t, args.ball_radius, args.threshold, args.smooth,
-                                args.keep_contact_obj)
+                                args.keep_contact_obj, args.free_value)
         # Positions must be byte-identical: this script relabels, never moves.
         assert torch.equal(out[:, I_BODY], t[:, I_BODY]), "positions changed!"
         assert torch.equal(out[:, I_OBJP], t[:, I_OBJP]), "object moved!"

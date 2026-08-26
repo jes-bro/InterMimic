@@ -89,24 +89,53 @@ def test_geometry():
 
 
 def test_levels():
-    print("\n2. the clip's own tri-state convention is preserved:")
-    # compute_cg_reward's ecg_all keys on `< -contact_thres`, so a naive 0/1
-    # rewrite would silently change what rcg_all measures.
+    print("\n2. the tri-state is preserved, and -1 is never invented:")
+    # The real clip carries [-1, 0, 1]. compute_cg_reward reads them differently:
+    # +1 = should touch (rcg_hand), -1 = must NOT touch and is PENALIZED in
+    # ecg_all, 0 = ignored. Writing -1 where the source had 0 would add
+    # must-not-touch constraints the recon never asserted.
     t = make_clip(contact_v=1.0, free_v=-1.0)
-    cv, fv, vals = rc.observed_levels(t)
-    check("reads contact=+1 / free=-1 from the data", (cv, fv) == (1.0, -1.0),
-          f"(got {cv}, {fv}; values {vals})")
-    out, _ = rc.relabel(t, R, 0.02, 1, False)
-    written = sorted({round(float(v), 4)
-                      for v in torch.unique(out[:, rc.I_CONTACT_HUMAN][:, rc.HAND_BODY_IDS])})
-    check("writes only values the source already used", set(written) <= {1.0, -1.0},
-          f"(wrote {written})")
+    # give some hand channels the third value, as the real clip does
+    ch = t[:, rc.I_CONTACT_HUMAN].clone()
+    ch[:, 25] = 0.0
+    t[:, rc.I_CONTACT_HUMAN] = ch
+    cv, clear_v, vals = rc.observed_levels(t)
+    check("sees all three values", vals == [-1.0, 0.0, 1.0], f"(got {vals})")
+    check("clears to 0 (don't care), NOT -1 (must-not-touch)",
+          (cv, clear_v) == (1.0, 0.0), f"(got contact={cv}, clear={clear_v})")
 
-    # A clip using a different convention must be followed, not overridden.
-    t2 = make_clip(contact_v=1.0, free_v=0.0)
-    cv2, fv2, _ = rc.observed_levels(t2)
-    check("follows a 1/0 clip instead of forcing -1", (cv2, fv2) == (1.0, 0.0),
-          f"(got {cv2}, {fv2})")
+    out, _ = rc.relabel(t, R, 0.02, 1, False)
+    hand_out = out[:, rc.I_CONTACT_HUMAN][:, rc.HAND_BODY_IDS]
+    hand_in = t[:, rc.I_CONTACT_HUMAN][:, rc.HAND_BODY_IDS]
+    written = sorted({round(float(v), 4) for v in torch.unique(hand_out)})
+    check("writes only values the source already used",
+          set(written) <= {-1.0, 0.0, 1.0}, f"(wrote {written})")
+    # THE property this change exists for: no channel gains a -1 it did not have.
+    gained_neg = ((hand_out < -0.1) & ~(hand_in < -0.1)).any().item()
+    check("no channel is newly asserted must-not-touch", not gained_neg)
+    # A don't-care channel that is not touching must be left exactly alone.
+    j = rc.HAND_BODY_IDS.index(25)
+    check("existing 0 (don't care) channels are untouched",
+          torch.equal(hand_out[:, j], hand_in[:, j]),
+          f"(became {sorted({float(v) for v in torch.unique(hand_out[:, j])})})")
+    # An existing -1 that is still not touching must also survive verbatim.
+    k = rc.HAND_BODY_IDS.index(21)
+    check("existing -1 channels survive verbatim",
+          torch.equal(hand_out[:, k], hand_in[:, k]))
+
+    # --free-value negative is the opt-in stricter mode.
+    out_n, _ = rc.relabel(t, R, 0.02, 1, False, free_value="negative")
+    hn = out_n[:, rc.I_CONTACT_HUMAN][:, rc.HAND_BODY_IDS]
+    check("--free-value negative DOES assert must-not-touch everywhere",
+          bool(((hn < -0.1) & ~(hand_in < -0.1)).any()))
+    check("...and still marks the genuine contact frames",
+          float(hn[3, rc.HAND_BODY_IDS.index(20)]) > 0)
+
+    # A clip with no 0 at all falls back to its negative value.
+    t2 = make_clip(contact_v=1.0, free_v=-1.0)
+    _, clear2, vals2 = rc.observed_levels(t2)
+    check("a clip with no don't-care value falls back to -1",
+          clear2 == -1.0 and 0.0 not in vals2, f"(clear={clear2}, vals={vals2})")
 
 
 def test_scope():
