@@ -9,10 +9,12 @@
   3. floor offset       -- lowest body point per frame (grounded frames at
                            z ~= 0.23 = the known monocular floor offset is live)
   4. ball height        -- ball z per frame (bounce profile vs the sim floor)
-  6. floor penetration  -- WHICH body goes below z=0 and how deep. A single limb
-                           dipping is a local IK artifact; the pelvis dropping
-                           with it means the whole body sank, and the two want
-                           different corrections. Frames below the floor are
+  6. floor penetration  -- WHICH body goes below z=0, how deep, and whether the
+                           pelvis drop is rigid TRANSLATION (a placement error a
+                           root offset could fix) or body COMPRESSION (a real
+                           crouch, which is not an error at all). Pelvis height
+                           alone cannot tell those apart; pelvis-minus-lowest
+                           can. The two want different fixes. Frames below the floor are
                            unreachable in sim (PhysX pushes the humanoid out),
                            so they are a reward desert wherever they land inside
                            the training start range.
@@ -205,15 +207,37 @@ def main():
         print("  none -- no body point goes below z=0. Nothing to correct here.")
     else:
         pelvis_ref = float(pelvis_z.median())
+        # Pelvis drop ALONE cannot tell a sink from a crouch -- someone catching
+        # a ball and dropping into a dribble lowers their pelvis too, and an
+        # earlier version of this verdict called that a sink. The discriminator
+        # is the body's OWN height, pelvis minus lowest body: rigid translation
+        # leaves it unchanged, a crouch compresses it. Split the pelvis drop into
+        # those two parts and report both, because a real clip has some of each.
+        body_h = pelvis_z - lowest
+        h_ref = float(body_h.median())
         for s, e, depth, jf in pens:
             culprits = sorted({names[int(lowest_body[i])] for i in range(s, e + 1)})
             pelvis_drop = pelvis_ref - float(pelvis_z[s:e + 1].min())
+            compression = h_ref - float(body_h[s:e + 1].min())   # the crouch part
+            translation = pelvis_drop - compression               # the sink part
             print(f"  frames {s:3d}-{e:3d} ({e-s+1:3d}f): max depth {depth:.3f} m "
                   f"at frame {jf}, body '{names[int(lowest_body[jf])]}'")
             print(f"      bodies on the floor during the span: {', '.join(culprits)}")
-            print(f"      pelvis dips {pelvis_drop:+.3f} m below its own median "
-                  f"({pelvis_ref:.3f} m) -> "
-                  f"{'WHOLE BODY sank (root-offset fix)' if pelvis_drop > depth * 0.5 else 'LIMB-local artifact (pelvis stayed put)'}")
+            print(f"      pelvis drops {pelvis_drop:+.3f} m below its median "
+                  f"({pelvis_ref:.3f} m), of which:")
+            print(f"        {translation:+.3f} m rigid TRANSLATION (body height "
+                  f"{h_ref:.3f} -> {float(body_h[s:e+1].min()):.3f} m)")
+            print(f"        {compression:+.3f} m body COMPRESSION (a crouch, not "
+                  f"a placement error)")
+            if translation > 2 * max(compression, 1e-6):
+                v = ("mostly a rigid SINK -- a root vertical offset is the right "
+                     "tool, but see the generality caveat before building one")
+            elif compression > 2 * max(translation, 1e-6):
+                v = ("mostly a CROUCH -- the body genuinely bends here; only the "
+                     f"{depth:.3f} m of foot penetration is a placement error")
+            else:
+                v = "MIXED -- comparable sink and crouch; neither fix is clean"
+            print(f"      read: {v}")
         print(f"  read: these frames are a reward desert wherever they fall inside")
         print(f"        the training start range -- the policy is graded against a")
         print(f"        pose it cannot reach. Compare the span to rolloutLength's")

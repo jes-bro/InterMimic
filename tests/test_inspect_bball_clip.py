@@ -132,6 +132,54 @@ def test_crouch_discrimination():
     print(f"ok: crouch vs rigid separate ({dip_c:.2f} m vs {dip_r:.2f} m)")
 
 
+def test_sink_vs_crouch_discrimination():
+    """The verdict must separate a rigid SINK from a CROUCH.
+
+    Pelvis drop alone cannot: someone catching a ball and dropping into a
+    dribble lowers their pelvis too, and the first version of this verdict
+    called that a sink. The discriminator is the body's OWN height (pelvis minus
+    lowest body) -- rigid translation leaves it unchanged, a crouch compresses
+    it. That matters because the two want different fixes, and one of them
+    (a per-clip root offset) is not a general treatment.
+    """
+    T = 6
+    # Case A: pure rigid sink -- everything translates down 0.10 m together.
+    bp = torch.zeros(T, 52, 3)
+    bp[:, :, 2] = 1.0
+    bp[:, 0, 2] = 0.95            # pelvis
+    bp[:, 7, 2] = 0.03            # foot
+    bp[2:4, 0, 2] = 0.85
+    bp[2:4, 7, 2] = -0.07
+    pelvis, lowest = bp[:, 0, 2], bp[:, :, 2].min(dim=1).values
+    h = pelvis - lowest
+    drop = float(pelvis.median()) - float(pelvis[2:4].min())
+    comp = float(h.median()) - float(h[2:4].min())
+    trans = drop - comp
+    assert abs(comp) < 1e-5, f"a rigid sink must not compress the body ({comp})"
+    assert trans > 0.09, trans
+    assert trans > 2 * max(comp, 1e-6)          # -> "mostly a rigid SINK"
+
+    # Case B: pure crouch -- pelvis drops, feet stay planted on the floor.
+    bp2 = torch.zeros(T, 52, 3)
+    bp2[:, :, 2] = 1.0
+    bp2[:, 0, 2] = 0.95
+    bp2[:, 7, 2] = 0.03
+    bp2[2:4, 0, 2] = 0.80         # pelvis only
+    pelvis2, lowest2 = bp2[:, 0, 2], bp2[:, :, 2].min(dim=1).values
+    h2 = pelvis2 - lowest2
+    drop2 = float(pelvis2.median()) - float(pelvis2[2:4].min())
+    comp2 = float(h2.median()) - float(h2[2:4].min())
+    trans2 = drop2 - comp2
+    assert abs(trans2) < 1e-5, f"a pure crouch must show no translation ({trans2})"
+    assert comp2 > 2 * max(trans2, 1e-6)        # -> "mostly a CROUCH"
+
+    # The old test -- pelvis drop alone -- cannot tell these apart, which is the
+    # bug: both cases drop the pelvis, only one is a placement error.
+    assert drop > 0.09 and drop2 > 0.14, (drop, drop2)
+    print(f"ok: sink vs crouch separate (sink: {trans:.3f}m trans / {comp:.3f}m comp; "
+          f"crouch: {trans2:.3f}m / {comp2:.3f}m)")
+
+
 def test_lowest_body_identification():
     """Whole-body sink vs one limb dipping want different corrections, so the
     report must name the offending body and track the pelvis independently."""
@@ -279,7 +327,8 @@ def test_end_to_end_report():
     # the affirmative one -- if this flips, the threshold moved.
     assert "CROUCH PRESENT" in out, f"crouch not detected:\n{out}"
     # And the limb-vs-sink discriminator must say limb: pelvis held at 0.95.
-    assert "LIMB-local artifact" in out, f"wrong penetration verdict:\n{out}"
+    assert "rigid TRANSLATION" in out and "body COMPRESSION" in out, \
+        f"penetration verdict lost its split:\n{out}"
     print("ok: end-to-end report renders, both verdicts fire correctly")
 
 
@@ -293,6 +342,7 @@ if __name__ == "__main__":
     test_named_indices()
     test_crouch_discrimination()
     test_lowest_body_identification()
+    test_sink_vs_crouch_discrimination()
     test_hand_contact_geometry()
     test_hand_body_ids_match_the_reward()
     test_end_to_end_report()
