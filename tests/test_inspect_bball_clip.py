@@ -83,15 +83,24 @@ def test_penetration_spans():
 
 
 def test_flight_spans():
-    # A jump: grounded, climb through the 0.10 threshold, apex, land.
+    # A jump: grounded, climb through the 0.10 threshold, apex, land. The span
+    # must START at the takeoff (frame 2), not partway up the climb -- that is
+    # why the entry threshold stays low while the APEX filter does the rejecting.
     lowest = torch.tensor([0.02, 0.03, 0.12, 0.30, 0.54, 0.31, 0.09, 0.02])
     assert ib.flight_spans(lowest) == [(2, 5)]
-    # Foot-lift jitter (a 2-frame blip) must NOT register as a jump, or the
-    # crouch report would anchor on noise.
+    # Foot-lift jitter (a 2-frame blip) must NOT register as a jump.
     assert ib.flight_spans(torch.tensor([0.0, 0.15, 0.15, 0.0])) == []
-    # ...but a 3-frame excursion does.
-    assert ib.flight_spans(torch.tensor([0.0, 0.15, 0.15, 0.15, 0.0])) == [(1, 3)]
-    print("ok: flight spans (threshold + min length)")
+    # A 3-frame excursion that never gets high is ALSO not a jump: the bball
+    # clip's unreliable tail produced two of these (apex 0.200 and 0.187) and
+    # they reported nonsense crouches, including a 0.572 m "pelvis dip".
+    assert ib.flight_spans(torch.tensor([0.0, 0.15, 0.15, 0.15, 0.0])) == []
+    assert ib.flight_spans(torch.tensor([0.0, 0.20, 0.19, 0.20, 0.0])) == []
+    # ...but a 3-frame excursion that DOES clear the apex bar is kept.
+    assert ib.flight_spans(torch.tensor([0.0, 0.15, 0.30, 0.15, 0.0])) == [(1, 3)]
+    # And the apex bar is tunable rather than baked in.
+    assert ib.flight_spans(torch.tensor([0.0, 0.15, 0.15, 0.15, 0.0]),
+                           min_apex=0.10) == [(1, 3)]
+    print("ok: flight spans (low entry threshold, apex filter, min length)")
 
 
 def test_named_indices():
@@ -178,8 +187,13 @@ def test_hand_contact_geometry():
     assert abs(g[0]) < 1e-5, g[0]              # on the surface
     assert abs(g[1] - 0.10) < 1e-5, g[1]       # 10 cm short -> unearnable
     assert abs(g[2] + 0.04) < 1e-5, g[2]       # interpenetrating -> fine
-    unreachable = int((g > 0).sum())
-    assert unreachable == 1, unreachable
+    # The bar is PhysX's contact_offset (0.02), not zero: a hand 1.2 cm off the
+    # surface still generates a contact in sim, so rcg_hand IS earnable there.
+    # Testing gap > 0 made a correctly relabelled clip read 8/40 instead of 0/40.
+    assert int((g > 0.02).sum()) == 1, g
+    assert abs(g[1] - 0.10) < 1e-5          # 10 cm out: beyond any tolerance
+    near = torch.tensor([0.012])            # inside contact_offset
+    assert int((near > 0.02).sum()) == 0, "a 1.2 cm gap must NOT count as unearnable"
     # The unflagged far frame must be excluded, or every free-flight frame would
     # be counted as a data defect and the verdict would always say DATA PROBLEM.
     # (gap is the MIN over all 32 hand bodies, so the untouched ones at 1.0 m

@@ -110,15 +110,23 @@ def penetration_spans(lowest, floor=0.0):
     return spans
 
 
-def flight_spans(lowest, thr=0.10, min_len=3):
+def flight_spans(lowest, thr=0.10, min_len=3, min_apex=0.25):
     """Runs where the lowest body point is clearly airborne.
 
-    `thr` is well above the recon's grounded noise (median ~0.05) and well below
-    a real jump apex (~0.54), so it separates flight from foot-lift jitter.
-    `min_len` drops 1-2 frame blips that are IK noise, not a jump.
+    Two thresholds on purpose, because one cannot do both jobs:
+      `thr`      LOW (just above the recon's grounded noise, median ~0.05) so
+                 the span's START is the actual takeoff frame rather than some
+                 point already well into the climb.
+      `min_apex` HIGH, applied to the run's PEAK, so only a real jump qualifies.
+    On the bball clip the true jump peaks at 0.541 m while the unreliable tail
+    produces excursions peaking at 0.200 and 0.187 -- with a single 0.10
+    threshold all three registered, and the two phantoms then reported nonsense
+    crouches (a 0.572 m "pelvis dip"). Raising the single threshold to 0.25
+    would have rejected them but moved the reported takeoff from frame 50 to 53.
+    `min_len` still drops 1-2 frame blips that are IK noise rather than flight.
     """
     return [(s, e) for s, e in runs_where([float(z) > thr for z in lowest])
-            if e - s + 1 >= min_len]
+            if e - s + 1 >= min_len and float(lowest[s:e + 1].max()) >= min_apex]
 
 
 def main():
@@ -130,6 +138,10 @@ def main():
         help="the clip subject's MJCF (for wrist indices by NAME)")
     ap.add_argument("--every", type=int, default=4,
                     help="print every Nth frame in the per-frame tables")
+    ap.add_argument("--contact-offset", type=float, default=0.02,
+                    help="PhysX contact_offset from the env cfg's sim.physx "
+                         "block -- bodies within this distance generate "
+                         "contacts, so it is the bar for 'is rcg_hand earnable'")
     ap.add_argument("--ball-radius", type=float, default=0.13,
                     help="object radius in m, for hand-to-SURFACE gaps "
                          "(bball recon sphere is 0.26 m diameter)")
@@ -265,15 +277,24 @@ def main():
         print("  so the contact term carries no signal at all on this clip.")
     else:
         g = hand_gap[says_contact]
-        unreachable = int((g > 0).sum())
+        # The bar is PhysX's contact_offset, not zero. PhysX generates contacts
+        # when bodies come within contact_offset of each other (sim.physx.
+        # contact_offset in the env cfg, 0.02 in every bball arm), so a hand a
+        # centimetre off the surface DOES register contact and rcg_hand IS
+        # earnable there. Testing gap > 0 flagged those as defects and made a
+        # correctly relabelled clip read 8/40 instead of 0/40.
+        tol = args.contact_offset
+        unreachable = int((g > tol).sum())
         print(f"  gap on those frames: median {g.median():+.3f}  min {g.min():+.3f}  "
               f"max {g.max():+.3f} m")
-        print(f"  frames claiming contact with NO hand body touching (gap > 0): "
+        print(f"  frames claiming contact with NO hand body within PhysX's "
+              f"contact_offset ({tol:.3f} m): "
               f"{unreachable}/{n_claim} ({100.0*unreachable/n_claim:.0f}%)")
         if unreachable:
             worst = int(torch.where(says_contact)[0][int(g.argmax())])
             print(f"  worst offender: frame {worst}, nearest hand body "
-                  f"{g.max():+.3f} m from the ball surface while flagged CONTACT")
+                  f"{g.max():+.3f} m from the ball surface while flagged CONTACT "
+                  f"({g.max() - tol:+.3f} m beyond the contact_offset)")
         # A real hand extends ~0.08-0.10 m past the wrist, but HAND_BODY_IDS
         # already includes the finger bodies -- so a positive gap here is not
         # explained away by wrist-vs-fingertip. It is the fingertips missing.
