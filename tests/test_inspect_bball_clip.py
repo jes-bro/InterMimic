@@ -144,6 +144,71 @@ def test_lowest_body_identification():
     print("ok: lowest-body identity and pelvis-independent tracking")
 
 
+def test_hand_contact_geometry():
+    """The check that separates a data problem from a policy problem.
+
+    rcg_hand grades the sim's per-body contact against the reference's
+    contact_human channel. If the reference flags hand contact on a frame where
+    no hand body is near the ball surface, rcg_hand is unearnable there -- the
+    policy would have to be where the reference says AND touching the ball, and
+    those are different places. That is a relabel/data fix, not a training knob.
+    """
+    R = 0.13                                   # ball radius
+    T = 4
+    bp = torch.zeros(T, 52, 3)
+    bp[:, :, 2] = 1.0
+    obj = torch.zeros(T, 3)
+    # frame 0: a finger body ON the surface while flagged -> earnable
+    bp[0, 20] = torch.tensor([R, 0.0, 0.0])
+    # frame 1: nearest hand body 0.10 m OUTSIDE the surface while flagged
+    bp[1, 20] = torch.tensor([R + 0.10, 0.0, 0.0])
+    # frame 2: hand inside the ball (interpenetrating) while flagged
+    bp[2, 20] = torch.tensor([R - 0.04, 0.0, 0.0])
+    # frame 3: hand far away, NOT flagged -> must not count against the data
+    bp[3, 20] = torch.tensor([2.0, 0.0, 0.0])
+    ch = torch.zeros(T, 52)
+    ch[0:3, 20] = 1.0                          # frames 0-2 claim contact
+
+    hand_flags = ch[:, ib.HAND_BODY_IDS] > ib.CONTACT_THRES
+    says = hand_flags.any(dim=1)
+    gap = ((bp[:, ib.HAND_BODY_IDS, :] - obj[:, None, :]).norm(dim=-1) - R).min(dim=1).values
+
+    assert says.tolist() == [True, True, True, False]
+    g = gap[says]
+    assert abs(g[0]) < 1e-5, g[0]              # on the surface
+    assert abs(g[1] - 0.10) < 1e-5, g[1]       # 10 cm short -> unearnable
+    assert abs(g[2] + 0.04) < 1e-5, g[2]       # interpenetrating -> fine
+    unreachable = int((g > 0).sum())
+    assert unreachable == 1, unreachable
+    # The unflagged far frame must be excluded, or every free-flight frame would
+    # be counted as a data defect and the verdict would always say DATA PROBLEM.
+    # (gap is the MIN over all 32 hand bodies, so the untouched ones at 1.0 m
+    # set the floor here -- the assertion is "far and unflagged", not a value.)
+    assert gap[3] > 0.5 and not bool(says[3])
+    print("ok: hand-contact geometry separates earnable from unearnable frames")
+
+
+def test_hand_body_ids_match_the_reward():
+    """HAND_BODY_IDS must be compute_cg_reward's own lists, or the diagnostic
+    grades different bodies than the reward does."""
+    src = open(os.path.join(
+        REPO, "isaacgym/src/intermimic/env/tasks/intermimic.py")).read()
+    assert "left_contact_hand_ids = list(range(17, 33))" in src
+    assert "right_contact_hand_ids = list(range(36, 52))" in src
+    assert ib.HAND_BODY_IDS == list(range(17, 33)) + list(range(36, 52))
+    # ...and body 17/36 really are the wrists, per the MJCF itself.
+    import glob
+    mjcfs = glob.glob(os.path.join(
+        REPO, "isaacgym/src/intermimic/data/assets/smplx/smplx_omomo_sub*.xml"))
+    if mjcfs:
+        idx, _ = ib.wrist_indices(mjcfs[0])
+        assert idx == [17, 36], idx
+    # contact_human's channel slice must match the task's own loader.
+    assert "loaded_dict['contact_human'] = torch.round(loaded_dict['hoi_data'][:, 331:331+52]" in src
+    assert ib.I_CONTACT_HUMAN == slice(331, 383)
+    print("ok: hand body ids and contact_human slice agree with the task")
+
+
 def test_end_to_end_report():
     """Run the real script on a fabricated clip. The unit tests above cover the
     math; this covers the PRINT path, where a formatting slip (or a None knee
@@ -173,6 +238,13 @@ def test_end_to_end_report():
     c[:, ib.I_BODY] = bp.view(T, -1)
     c[:, ib.I_OBJP] = torch.tensor([0.0, 0.0, 1.2])
     c[5:20, ib.I_CONTACT_OBJ] = 1.0
+    # section 8 needs contact_human: claim hand contact on the same frames, with
+    # a hand body placed well OFF the ball surface -> the DATA PROBLEM verdict.
+    ch = torch.zeros(T, 52)
+    ch[5:20, 20] = 1.0
+    c[:, ib.I_CONTACT_HUMAN] = ch
+    bp[:, 20] = torch.tensor([0.0, 0.0, 1.6])       # 0.27 m from a 0.13 m ball
+    c[:, ib.I_BODY] = bp.view(T, -1)
 
     with tempfile.TemporaryDirectory() as tmp:
         clip = os.path.join(tmp, "sub100_bball_000.pt")
@@ -185,7 +257,9 @@ def test_end_to_end_report():
     assert proc.returncode == 0, f"script exited {proc.returncode}:\n{proc.stderr}"
     out = proc.stdout
     for expected in ("== 6. floor penetration", "== 7. crouch before takeoff",
-                     "max depth 0.060 m", "lowest body", "pelvis z(m)"):
+                     "== 8. reference hand-contact vs geometry",
+                     "max depth 0.060 m", "lowest body", "pelvis z(m)",
+                     "DATA PROBLEM"):
         assert expected in out, f"missing {expected!r} in report:\n{out}"
     # The fabricated pelvis dips 0.15 m over the run-up, so the verdict must be
     # the affirmative one -- if this flips, the threshold moved.
@@ -205,5 +279,7 @@ if __name__ == "__main__":
     test_named_indices()
     test_crouch_discrimination()
     test_lowest_body_identification()
+    test_hand_contact_geometry()
+    test_hand_body_ids_match_the_reward()
     test_end_to_end_report()
     print("ALL GREEN")

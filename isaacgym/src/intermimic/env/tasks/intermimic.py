@@ -1884,6 +1884,11 @@ class InterMimic(Humanoid_SMPLX):
         for g, (ids, names) in self._rbd_specs.items():
             self._rbd_sums[g] = torch.zeros((len(names), 5), device=self.device)  # rb,ro,rig,rcg,reward
             self._rbd_cnts[g] = torch.zeros(len(names), device=self.device)
+        # rcg's four factors, split free/held. Kept in its OWN accumulator rather
+        # than widening the 5-column group arrays, so the existing groups and
+        # their print path are untouched.
+        self._rbd_rcg_sums = torch.zeros((2, 4), device=self.device)  # hand,other,all,energy
+        self._rbd_rcg_cnts = torch.zeros(2, device=self.device)
         self._rbd_steps = 0
 
     def _log_reward_breakdown(self, rb, ro, rig, rcg, ref_contact=None, ro_raw=None):
@@ -1913,6 +1918,16 @@ class InterMimic(Humanoid_SMPLX):
             for k in range(5):
                 self._rbd_sums['ref-contact'][:, k] += torch.bincount(
                     ids, weights=Traw[:, k], minlength=2)
+
+            # rcg's factors on the same free/held split. This is what separates
+            # "the grip is failing" from "the contact-force or non-hand terms
+            # are dragging rcg down" -- rcg alone cannot distinguish them.
+            parts = getattr(self, '_rcg_parts', None)
+            if parts is not None:
+                self._rbd_rcg_cnts += torch.bincount(ids, minlength=2).float()
+                for k, p in enumerate(parts):
+                    self._rbd_rcg_sums[:, k] += torch.bincount(
+                        ids, weights=p.reshape(-1).float(), minlength=2)
         self._rbd_steps += 1
         if self._rbd_steps >= self._rbd_every:
             print("\n[reward-breakdown] over %d steps  (rb=body ro=object rig=interaction rcg=contact)"
@@ -1935,6 +1950,31 @@ class InterMimic(Humanoid_SMPLX):
                     m = self._rbd_sums[g][j] / c
                     print("     %-14s %4.0f%%  rb=%.3f ro=%.3f rig=%.3f rcg=%.3f  reward=%.3f"
                           % (names[j], 100 * c / tot, m[0], m[1], m[2], m[3], m[4]), flush=True)
+
+            # rcg = rcg_hand * rcg_other * rcg_all * contact_energy. Split it,
+            # because a low rcg has four possible causes that want different
+            # fixes, and because rcg_hand is 1.0 BY CONSTRUCTION on free frames
+            # (so only the 'held' row measures grip at all).
+            if self._rbd_rcg_cnts.sum().item() > 0:
+                print("  by rcg-factor (rcg = hand * other * all * energy;"
+                      " hand is 1.000 by construction on free frames):", flush=True)
+                for j, nm in enumerate(['free', 'held']):
+                    c = self._rbd_rcg_cnts[j].item()
+                    if c <= 0:
+                        continue
+                    m = self._rbd_rcg_sums[j] / c
+                    print("     %-14s      hand=%.3f other=%.3f all=%.3f energy=%.3f"
+                          % (nm, m[0], m[1], m[2], m[3]), flush=True)
+                held = self._rbd_rcg_cnts[1].item()
+                if held > 0:
+                    h = self._rbd_rcg_sums[1] / held
+                    # rcg_hand floors at 0.25 (both hands flagged) or 0.5 (one).
+                    # At/near the floor the grip is simply not being made.
+                    worst = ['hand', 'other', 'all', 'energy'][int(h.argmin())]
+                    print("     -> on HELD frames the weakest factor is '%s' (%.3f). "
+                          "hand near its 0.25/0.5 floor = the grip is not being made; "
+                          "another factor lowest = the grip is not the problem."
+                          % (worst, float(h.min())), flush=True)
             self._rbd_reset_accum()
 
     def _compute_reward(self, actions):
@@ -2237,6 +2277,16 @@ class InterMimic(Humanoid_SMPLX):
         contact_energy = contact_all.pow(2).mul(-w['eg3']).exp()
 
         rcg = rcg_hand*rcg_other*rcg_all*contact_energy
+        # Stash the factors for the REWARD_BREAKDOWN diagnostic. rcg is a product
+        # of four very different things, and a collapsed rcg says nothing about
+        # WHICH one collapsed -- notably rcg_hand is pinned to exactly 1.0 on
+        # frames where the reference says no hand contact (the (1 - ref_any) term
+        # above), so a clip-average of rcg is dominated by frames carrying no
+        # grip information at all. Print-only; costs nothing when the env var is
+        # off.
+        if os.environ.get('REWARD_BREAKDOWN') == '1':
+            self._rcg_parts = (rcg_hand.detach(), rcg_other.detach(),
+                               rcg_all.detach(), contact_energy.detach())
         return rcg, contact_reset
     
     def play_dataset_step(self, time):

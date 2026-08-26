@@ -145,6 +145,26 @@ def test_source_wiring():
     check("the header states the gate's state so rows are unambiguous",
           "freeFlightGate is %s" in src)
 
+    # rcg factor split: rcg = hand * other * all * energy, and a collapsed rcg
+    # says nothing about WHICH factor collapsed.
+    check("compute_cg_reward stashes its four factors",
+          "self._rcg_parts = (rcg_hand.detach()" in src)
+    check("the stash is env-var gated (no cost when the diagnostic is off)",
+          re.search(r"if os\.environ\.get\('REWARD_BREAKDOWN'\) == '1':\s+"
+                    r"self\._rcg_parts", src) is not None)
+    check("factors accumulate on the same free/held split",
+          "self._rbd_rcg_sums[:, k] += torch.bincount(" in src)
+    check("factors print as their own block",
+          "by rcg-factor" in src)
+    check("the block names the weakest HELD factor (the actionable line)",
+          "the weakest factor is" in src)
+    # rcg_hand's floor is what makes the block readable: 0.5 per hand, so 0.25
+    # with both flagged. The print must say so or 0.2 looks like 'a bit low'.
+    check("the floor that makes rcg_hand interpretable is stated",
+          "0.25/0.5 floor" in src)
+    check("the block says hand is pinned to 1.0 on free frames",
+          "1.000 by construction on free frames" in src)
+
 
 def main():
     test_split_math()

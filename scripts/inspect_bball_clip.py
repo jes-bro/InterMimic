@@ -47,6 +47,12 @@ I_ROOT = slice(0, 3)          # root position -- what the SIM actually drives FK
 I_BODY = slice(162, 318)      # 52 bodies x 3, world frame (stored kinematics)
 I_OBJP = slice(318, 321)      # object position
 I_CONTACT_OBJ = 330           # 1.0 where the recon says object is in contact
+I_CONTACT_HUMAN = slice(331, 383)   # per-body human contact, 52 (intermimic.py:765)
+# The hand bodies rcg_hand actually grades, in the clip's 52-body order. These
+# are compute_cg_reward's own left/right lists (intermimic.py) -- body 17 is
+# L_Wrist and 36 is R_Wrist, which wrist_indices() confirms independently.
+HAND_BODY_IDS = list(range(17, 33)) + list(range(36, 52))
+CONTACT_THRES = 0.1           # compute_cg_reward's own threshold
 
 
 def contact_spans(flags):
@@ -124,6 +130,9 @@ def main():
         help="the clip subject's MJCF (for wrist indices by NAME)")
     ap.add_argument("--every", type=int, default=4,
                     help="print every Nth frame in the per-frame tables")
+    ap.add_argument("--ball-radius", type=float, default=0.13,
+                    help="object radius in m, for hand-to-SURFACE gaps "
+                         "(bball recon sphere is 0.26 m diameter)")
     args = ap.parse_args()
 
     if not os.path.exists(args.clip):
@@ -229,6 +238,63 @@ def main():
                    if stand - dip < 0.05 else
                    "MARGINAL -- some dip, but shallower than a real countermovement")
         print(f"      read: {verdict}")
+
+    # 8. Is the reference's own hand-contact claim geometrically satisfiable?
+    #
+    # This is the check that separates "the policy cannot grip" from "the
+    # reference asks for a grip that does not exist". rcg_hand grades the sim's
+    # per-body contact against the REFERENCE's contact_human channel. If the
+    # reference flags hand contact on a frame where NO hand body is anywhere
+    # near the ball surface, then rcg_hand is unearnable there by construction:
+    # to score, the policy would have to put its hand where the reference says
+    # AND be touching the ball, and those are different places.
+    #
+    # Purely a property of the DATA -- no policy, no sim, no checkpoint.
+    print(f"\n== 8. reference hand-contact vs geometry (is rcg_hand earnable?) ==")
+    ch = c[:, I_CONTACT_HUMAN]
+    hand_flags = (ch[:, HAND_BODY_IDS] > CONTACT_THRES)
+    says_contact = hand_flags.any(dim=1)
+    # Distance from each hand body to the ball SURFACE (negative = interpenetrating).
+    hand_gap = ((bp[:, HAND_BODY_IDS, :] - obj[:, None, :]).norm(dim=-1)
+                - args.ball_radius).min(dim=1).values
+    n_claim = int(says_contact.sum())
+    print(f"  frames where contact_human flags a hand body: {n_claim} of {T}")
+    print(f"  (ball radius {args.ball_radius:.3f} m; gap = nearest hand body to ball SURFACE)")
+    if n_claim == 0:
+        print("  reference never claims hand contact -- rcg_hand is 1.0 everywhere,")
+        print("  so the contact term carries no signal at all on this clip.")
+    else:
+        g = hand_gap[says_contact]
+        unreachable = int((g > 0).sum())
+        print(f"  gap on those frames: median {g.median():+.3f}  min {g.min():+.3f}  "
+              f"max {g.max():+.3f} m")
+        print(f"  frames claiming contact with NO hand body touching (gap > 0): "
+              f"{unreachable}/{n_claim} ({100.0*unreachable/n_claim:.0f}%)")
+        if unreachable:
+            worst = int(torch.where(says_contact)[0][int(g.argmax())])
+            print(f"  worst offender: frame {worst}, nearest hand body "
+                  f"{g.max():+.3f} m from the ball surface while flagged CONTACT")
+        # A real hand extends ~0.08-0.10 m past the wrist, but HAND_BODY_IDS
+        # already includes the finger bodies -- so a positive gap here is not
+        # explained away by wrist-vs-fingertip. It is the fingertips missing.
+        if unreachable > n_claim * 0.25:
+            print("  read: DATA PROBLEM. A quarter or more of the claimed-contact")
+            print("        frames have no hand body touching the ball, so rcg_hand")
+            print("        cannot be earned there no matter how good the policy is.")
+            print("        Fix upstream (contact flags or hand placement), not with")
+            print("        a training knob.")
+        else:
+            print("  read: the reference's contact claim is geometrically sound.")
+            print("        A low rcg_hand in training is then the POLICY failing to")
+            print("        make a grip the reference does support.")
+    # Cross-check the two contact channels against each other: contact_obj (the
+    # channel relabel_contact_flags.py rewrites) and contact_human's hand bodies
+    # should agree about when the ball is held. They are stored independently, so
+    # a relabel that touched one and not the other shows up here.
+    obj_flag = flags
+    disagree = int((obj_flag != says_contact).sum())
+    print(f"  contact_obj vs contact_human(hand) disagree on {disagree}/{T} frames"
+          + ("  <- relabel touched one channel only?" if disagree > T * 0.1 else ""))
 
     grounded = lowest[lowest < lowest.median() + 0.05]
     print(f"\n== summary ==")
