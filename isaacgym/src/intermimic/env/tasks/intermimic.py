@@ -1862,6 +1862,16 @@ class InterMimic(Humanoid_SMPLX):
             'body':       (self._rbd_rs_ids,      ['real', 'synthetic']),
             'beta-clust': (self._rbd_cluster_ids, ['c%d' % i for i in range(nclust)]),
             'difficulty': (None,                  ['easy', 'medium', 'hard']),
+            # Per-STEP split (every other group is per-env-constant): is the
+            # REFERENCE in hand-object contact on this frame? This is the one
+            # that answers "is object reward being spent on frames the policy
+            # cannot affect" -- during free flight the sim ball is ballistic and
+            # the only influence was the release instant, so a low ro on 'free'
+            # rows is reward the policy cannot act on. A large free-vs-held gap
+            # in ro is the case FOR rewardTerms.freeFlightGate; a uniformly
+            # mediocre ro across both is a different problem and the gate will
+            # not help. ro here is always the UNGATED value (see _log_...).
+            'ref-contact': (None,                 ['free', 'held']),
         }
         self._rbd_every = int(_os.environ.get('REWARD_BREAKDOWN_EVERY', '1000'))
         self._rbd_reset_accum()
@@ -1876,7 +1886,7 @@ class InterMimic(Humanoid_SMPLX):
             self._rbd_cnts[g] = torch.zeros(len(names), device=self.device)
         self._rbd_steps = 0
 
-    def _log_reward_breakdown(self, rb, ro, rig, rcg):
+    def _log_reward_breakdown(self, rb, ro, rig, rcg, ref_contact=None, ro_raw=None):
         if not getattr(self, '_rbd_ready', False):
             self._init_reward_breakdown()
         T = torch.stack([rb, ro, rig, rcg, rb * ro * rig * rcg], dim=1).detach()
@@ -1888,11 +1898,35 @@ class InterMimic(Humanoid_SMPLX):
             self._rbd_cnts[g] += torch.bincount(ids, minlength=ng).float()
             for k in range(5):
                 self._rbd_sums[g][:, k] += torch.bincount(ids, weights=T[:, k], minlength=ng)
+
+        # ref-contact is accumulated separately for two reasons: its ids are
+        # per-STEP (not a fixed env property), and it deliberately reports the
+        # UNGATED ro. With freeFlightGate on, the gated ro is 1.0 by
+        # construction on every 'free' row, so logging it there would make the
+        # diagnostic agree with itself instead of measuring anything. The other
+        # groups keep the effective (post-gate) ro, i.e. what training used.
+        if ref_contact is not None:
+            ro_d = ro_raw if ro_raw is not None else ro
+            Traw = torch.stack([rb, ro_d, rig, rcg, rb * ro_d * rig * rcg], dim=1).detach()
+            ids = (ref_contact > 0.5).long()          # 0 = free, 1 = held
+            self._rbd_cnts['ref-contact'] += torch.bincount(ids, minlength=2).float()
+            for k in range(5):
+                self._rbd_sums['ref-contact'][:, k] += torch.bincount(
+                    ids, weights=Traw[:, k], minlength=2)
         self._rbd_steps += 1
         if self._rbd_steps >= self._rbd_every:
-            print("\n[reward-breakdown] over %d steps  (rb=body ro=object rig=interaction rcg=contact)" % self._rbd_steps, flush=True)
+            print("\n[reward-breakdown] over %d steps  (rb=body ro=object rig=interaction rcg=contact)"
+                  % self._rbd_steps, flush=True)
+            print("  [ref-contact rows report the UNGATED ro; freeFlightGate is %s. "
+                  "A large free-vs-held ro gap = the gate's case; a uniform ro = a different problem.]"
+                  % ("ON" if getattr(self, '_free_flight_gate', False) else "off"), flush=True)
             for g, (ids, names) in self._rbd_specs.items():
                 cnt = self._rbd_cnts[g]; tot = cnt.sum().item()
+                if tot <= 0:
+                    # ref-contact with no contact_obj channel lands here; say so
+                    # rather than printing an empty heading.
+                    print("  by %s: (no data -- channel unavailable)" % g, flush=True)
+                    continue
                 print("  by %s:" % g, flush=True)
                 for j in torch.argsort(cnt, descending=True).tolist():
                     c = cnt[j].item()
@@ -1908,10 +1942,24 @@ class InterMimic(Humanoid_SMPLX):
         ro, object_reset, obj_points, ref_obj_points = self.compute_obj_reward(self.reward_weights)
         rig, ig_reset = self.compute_ig_reward(self.reward_weights, key_pos, ref_key_pos, obj_points, ref_obj_points)
         rcg, contact_reset = self.compute_cg_reward(self.reward_weights)
-        if self._free_flight_gate:
-            # reference contact flag for the CURRENT ref frame: 1 = held, 0 = free
+        # Reference contact flag for the CURRENT ref frame: 1 = held, 0 = free.
+        # Read unconditionally now (it is a cheap gather) because the reward
+        # breakdown splits on it whether or not the gate is enabled -- that
+        # split is how you decide whether to enable the gate in the first place.
+        # A dataset without the channel must not break training, so failure here
+        # only costs the diagnostic split.
+        try:
             ref_contact = self.extract_data_component(
                 'contact_obj', obs=self._curr_ref_obs).squeeze(-1)
+        except Exception:
+            ref_contact = None
+        ro_raw = ro
+        if self._free_flight_gate:
+            if ref_contact is None:
+                raise RuntimeError(
+                    "[intermimic] freeFlightGate is enabled but the contact_obj "
+                    "channel could not be read -- refusing to train with a gate "
+                    "that silently does nothing.")
             ro = ro * ref_contact + (1.0 - ref_contact)   # neutral (1.0) when free
             # a divergence reset on a free-flying ball is the same trap in reset
             # form; only relevant when object resets are enabled at all
@@ -1919,7 +1967,8 @@ class InterMimic(Humanoid_SMPLX):
         reward = rb * ro * rig * rcg
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
-                self._log_reward_breakdown(rb, ro, rig, rcg)
+                self._log_reward_breakdown(rb, ro, rig, rcg,
+                                           ref_contact=ref_contact, ro_raw=ro_raw)
             except Exception as _rbde:
                 if not getattr(self, '_rbd_warned', False):
                     print("[reward-breakdown] disabled after error: %r" % (_rbde,), flush=True)
