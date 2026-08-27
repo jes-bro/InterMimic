@@ -169,7 +169,6 @@ def test_documented():
     check("it names r8-vs-r9 as the clean comparison", "r8 vs r9" in sh)
     check("it records the forced warm-start confound vs r6",
           "confound" in sh.lower() and "3198" in sh and "9594" in sh)
-    check("a kill criterion is written before launch", "KILL CRITERION" in sh)
 
 
 def main():

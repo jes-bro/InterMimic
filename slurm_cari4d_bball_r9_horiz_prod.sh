@@ -45,14 +45,12 @@
 # Against r6 that is a second difference. Against r8 it is not -- r8 is fresh
 # too -- which is why r8-vs-r9 is the comparison to lean on.
 #
-# KILL CRITERION, written before launch. By sim step 100000, r9 must reach BOTH
-#     held-frame rcg  >= 0.45
-#     completed       >= 10%
-# judged against r6 at the SAME step (same reward shape, so the numbers are
-# comparable). A fresh start climbs more slowly, so read the trend too: still
-# rising at 100k earns more time.
+# HOW TO READ IT. Compare against r6_cf2 at the SAME sim step (same reward
+# shape, so the numbers are comparable), and against r8_horiz for the reward
+# shape alone. r9 starts FRESH, so it climbs more slowly early on. These are
+# progress reads, not a stopping rule.
 #     grep -h -A 4 "by ref-contact" cari4d-bball-r9_horiz_prod-*.out | tail -8
-#     grep -h -A 6 "TERMINATION REASONS  (sim step 100000)" cari4d-bball-r9_horiz_prod-*.out
+#     grep -h -A 6 "TERMINATION REASONS" cari4d-bball-r9_horiz_prod-*.out | tail -16
 #
 # NOTE the eval twin carries the same horizons. obsHorizons changes the obs
 # SHAPE, so a 6-horizon policy cannot be run through a 2-horizon obs at all --

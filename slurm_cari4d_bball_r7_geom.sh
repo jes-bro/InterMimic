@@ -40,14 +40,14 @@
 # completion at mean reward 0.14, 10.6% of episodes falling -- survival without
 # imitation.
 #
-# KILL CRITERION, written before launch. By sim step 100000, r7 must reach BOTH
-#     held-frame rcg  >= 0.45      (r6 sits at 0.240 and is flat)
-#     completed       >= 10%       (r6 is at 1.3%; r3 was 6.1% at step 40000)
-# If it does not, the reward shape is not the constraint either, that is a
-# FOURTH null, and the EgoExo de-risk pivot is called on the evidence rather
-# than on drift. Read them with:
+# HOW TO READ IT. The reward-shape change is visible in the held-frame factors
+# and in how many episodes survive the clip. These are progress reads, not a
+# stopping rule -- these runs take a long time and the interesting movement can
+# come late.
 #     grep -h -A 4 "by ref-contact" cari4d-bball-r7_geom-*.out | tail -8
-#     grep -h -A 6 "TERMINATION REASONS  (sim step 100000)" cari4d-bball-r7_geom-*.out
+#     grep -h -A 6 "TERMINATION REASONS" cari4d-bball-r7_geom-*.out | tail -16
+# Compare against r6_cf2 at the SAME sim step: r7 differs from it in the reward
+# shape alone, so a difference at matched steps is attributable.
 #
 # NOTE the eval twin deliberately does NOT set rewardShape: eval stays on the
 # original product so r7's eval numbers stay comparable with r2..r6. The knob

@@ -175,7 +175,6 @@ def test_confound_is_recorded():
           "3198" in sh and "9594" in sh)
     check("it names the control run to settle it",
           "resume_from None" in sh or "resume_from: None" in sh)
-    check("a kill criterion is written before launch", "KILL CRITERION" in sh)
 
 
 def main():

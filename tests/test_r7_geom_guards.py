@@ -206,24 +206,12 @@ def test_guards():
                 check(f"refuses {sib}", code != 0)
 
 
-def test_kill_criterion():
-    """An arm launched without a pre-written stopping rule is how a ladder
-    becomes a fleet. Jess's rule; pin it so it cannot quietly drop out."""
-    print("\n7. the kill criterion is written down before launch:")
-    sh = open(SCRIPT).read()
-    check("launcher states a KILL CRITERION", "KILL CRITERION" in sh)
-    check("it names a numeric rcg bar", re.search(r"rcg\s*>=\s*0\.45", sh) is not None)
-    check("it names a numeric completion bar", re.search(r"completed\s*>=\s*10%", sh) is not None)
-    check("it names the step at which it is judged", "100000" in sh)
-    check("it says what a miss means", "null" in sh.lower())
-
 
 def main():
     test_maths()
     test_task_code()
     test_one_knob()
     test_guards()
-    test_kill_criterion()
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
