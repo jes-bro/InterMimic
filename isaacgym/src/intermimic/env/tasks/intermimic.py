@@ -102,11 +102,11 @@ class InterMimic(Humanoid_SMPLX):
         'keyBodies', 'keyIndex', 'localRootObs', 'maskDeadEnvs', 'maxClipsPerObject',
         'moreRigid', 'motion_file', 'motion_file_retarget', 'numActions', 'numDoF',
         'numDoFHand', 'numDoFWrist', 'numEnvs', 'numObs', 'numObsRetarget',
-        'numObservations', 'numStates', 'objectDensity', 'objectShapeProps',
+        'obsHorizons', 'numObservations', 'numStates', 'objectDensity', 'objectShapeProps',
         'pairSampleCountsFile',
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'resetThresholds', 'retargetedMotionDir', 'rewardTerms', 'rewardWeights',
-        'robotType', 'rolloutLength',
+        'rewardShape', 'robotType', 'rolloutLength',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'staticScene',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
@@ -351,6 +351,20 @@ class InterMimic(Humanoid_SMPLX):
         # view(batch, 4, -1) reshape stays clean: numObs = 4 * 1599 = 6396, or
         # 4 * (1599 + 32) = 6524 with betas. Default False => stock MLP obs.
         self._use_transformer_obs = cfg['env'].get('useTransformerObs', False)
+        # obsHorizons: explicit delta_t list, else the historical defaults.
+        _default_h = [0, 1, 4, 16] if self._use_transformer_obs else [1, 16]
+        self._obs_horizons = list(cfg['env'].get('obsHorizons', _default_h))
+        if (not self._obs_horizons
+                or any(not isinstance(h, int) or h < 0 for h in self._obs_horizons)
+                or len(set(self._obs_horizons)) != len(self._obs_horizons)):
+            raise ValueError(
+                f"[intermimic] obsHorizons={self._obs_horizons!r}: expected a "
+                f"non-empty list of distinct non-negative ints (delta_t frames)")
+        if self._obs_horizons != _default_h:
+            print(f"[intermimic] obsHorizons {self._obs_horizons} "
+                  f"(default for this policy was {_default_h}); numObs must be "
+                  f"{len(self._obs_horizons)}/{len(_default_h)} of the default "
+                  f"or the obs buffer will not match", flush=True)
         if betas_file is not None:
             from ...utils.path_utils import resolve_repo_path
             betas_path = resolve_repo_path(betas_file)
@@ -435,6 +449,15 @@ class InterMimic(Humanoid_SMPLX):
         # to remove the size bias (default reward penalizes smaller bodies more
         # for the same physical tracking deviation).
         self._body_normalized_reward = cfg['env'].get('bodyNormalizedReward', False)
+        # rewardShape: 'product' (default, InterMimic's original rb*ro*rig*rcg)
+        # or 'geometric' (its 4th root). See the note at the product itself for
+        # why the shape matters. Unknown values are an error, not a silent
+        # fallback to the default -- a typo here would look like a null result.
+        self._reward_shape = cfg['env'].get('rewardShape', 'product')
+        if self._reward_shape not in ('product', 'geometric'):
+            raise ValueError(
+                f"[intermimic] rewardShape={self._reward_shape!r}; expected "
+                f"'product' or 'geometric'")
         self._env_body_height = None
         if self._body_normalized_reward:
             if getattr(self, 'subject_bodies', None) is not None:
@@ -1507,7 +1530,22 @@ class InterMimic(Humanoid_SMPLX):
     def _compute_observations(self, env_ids=None):
         # Horizons stacked into obs_buf: MLP uses 2 (delta_t 1, 16); the
         # transformer policy uses 4 (0, 1, 4, 16) so it can attend over them.
-        horizons = [0, 1, 4, 16] if self._use_transformer_obs else [1, 16]
+        # Horizons stacked into obs_buf. Defaults preserve the historical
+        # behaviour exactly (MLP 2, transformer 4); obsHorizons overrides.
+        #
+        # WHY IT IS A KNOB NOW. The defaults were tuned on OMOMO, where motions
+        # are slow: delta_t 16 is 0.53s at 30fps, a small slice of a long reach.
+        # On the bball layup that same 0.53s spans the whole crouch-to-release,
+        # so [1, 16] shows the policy 'next frame' and 'the apex' with the
+        # entire countermovement invisible between them -- which is the shape of
+        # 'learns the dribble, learns the jump, cannot stitch them'.
+        # Prefer UNIFORM spacing between the SAME endpoints, e.g.
+        # [1,4,7,10,13,16]: it fills the gap without encoding a guess about any
+        # one motion's timing, so the same setting is defensible across a whole
+        # dataset. Not every frame -- at 30fps adjacent frames are near
+        # duplicates, so stride 3 buys the missing resolution at 3x the width
+        # rather than 8x for mostly redundant copies.
+        horizons = self._obs_horizons
         if (env_ids is None):
             self._curr_ref_obs[:] = self._motion_gather(self.hoi_data, (self.data_id[env_ids], self.progress_buf[env_ids])).clone()
             # (source_betas, target_betas) — 32 dims. source_betas[data_id]: from
@@ -2005,6 +2043,29 @@ class InterMimic(Humanoid_SMPLX):
             # form; only relevant when object resets are enabled at all
             object_reset = torch.logical_and(object_reset, ref_contact > 0.5)
         reward = rb * ro * rig * rcg
+        # Opt-in (rewardShape: geometric): the Nth root of the same product.
+        #
+        # WHY. The product is an AND gate, which is the point -- a policy that
+        # tracks the body and drops the object must not score. But it also makes
+        # every term's gradient proportional to the OTHERS: with the bball arm's
+        # held-frame values (rb .304 ro .402 rig .422 rcg .240) the product is
+        # 0.012 and dR/d(rcg) = rb*ro*rig = 0.052, so improving contact barely
+        # moves the reward BECAUSE the rest are bad. Nothing can be fixed first.
+        #
+        # The geometric mean is a monotone transform of the same product, so the
+        # optimum and the AND property are untouched (any zero still zeros it),
+        # but the value lands at 0.334 instead of 0.012 and
+        # dR/d(rcg) = R/(N*rcg) = 0.35 -- ~7x larger, and it no longer collapses
+        # when the other factors are weak.
+        #
+        # NOT a sum: additive is what the multiplicative form was introduced to
+        # fix, and it re-opens exactly the bank-rb-and-abandon-the-object
+        # exploit that the r4_human1m arm demonstrated (28.7% completion at
+        # reward 0.14, with 10.6% of episodes falling).
+        if self._reward_shape == 'geometric':
+            # clamp: the terms are exp(-x) so they are positive, but a zero from
+            # underflow would make the root's gradient non-finite.
+            reward = torch.stack([rb, ro, rig, rcg], dim=0).clamp_min(1e-8).prod(dim=0) ** 0.25
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
                 self._log_reward_breakdown(rb, ro, rig, rcg,
