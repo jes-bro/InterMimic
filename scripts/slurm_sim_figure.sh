@@ -48,6 +48,16 @@ VIDEO="${VIDEO:-$CARI4D/sam3masks/trimmed_vids-aligned/${SEQ}.0.color.mp4}"
 CFG_ENV="${CFG_ENV:-isaacgym/src/intermimic/data/cfg/omomo_cari4d_bball.yaml}"
 CFG_TRAIN="${CFG_TRAIN:-isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml}"
 
+# The clip stage 2 aligns against MUST be the one stage 1 just replayed. That
+# stage rigid-fits the CARI4D bundle onto the sim's root+object trajectory and
+# refuses over 15 cm RMS, so pairing two different reconstruction versions is
+# either a hard stop or, worse, a plausible-looking misalignment. Derive it from
+# the cfg rather than hardcoding a dir: behave_cari4d, _optj3d, _optj3d_cf and
+# _optj3d_cf2 are different builds sitting in different places.
+MOTION_DIR=$(grep -oE '^[[:space:]]*motion_file:[[:space:]]*\S+' "$CFG_ENV" | awk '{print $2}')
+[ -n "$MOTION_DIR" ] || { echo "ERROR: no motion_file in $CFG_ENV" >&2; exit 1; }
+REF_PT="${REF_PT:-$INTERMIMIC/$MOTION_DIR/${SEQ_NAME}.pt}"
+
 # Empty replays the reference kinematically; a path runs that policy. Both go
 # through the identical rest of the job, so the two figures are comparable.
 CHECKPOINT="${CHECKPOINT:-}"
@@ -101,8 +111,10 @@ log "sequence=$SEQ_NAME  tag=$TAG  mode=$([ -n "$CHECKPOINT" ] && echo policy ||
 log "bundle=$BUNDLE"
 log "video=$VIDEO"
 
+log "reference clip=$REF_PT  (from motion_file in $CFG_ENV)"
+
 for required in "$BUNDLE" "$VIDEO" "$SMPLX_MODELS/SMPLX_MALE.npz" \
-                "$HY3D_MESHES_ROOT"; do
+                "$HY3D_MESHES_ROOT" "$REF_PT"; do
     if [ ! -e "$required" ]; then
         echo "ERROR: missing required input: $required" >&2
         exit 1
@@ -144,7 +156,7 @@ log "stage 2/3: fit in the camera's frame and write a prediction file"
 python -u scripts/sim_to_cari4d_bundle.py \
     --dump "$DUMP_NPZ" \
     --bundle "$BUNDLE" \
-    --pt "$INTERMIMIC/InterAct/behave_cari4d/${SEQ_NAME}.pt" \
+    --pt "$REF_PT" \
     --betas "$BETAS" \
     --models "$SMPLX_MODELS" \
     --model-type "$MODEL_TYPE" \
