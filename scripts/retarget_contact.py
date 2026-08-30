@@ -139,8 +139,15 @@ class MJCFChain:
     """Torch forward kinematics for one subject's MJCF, matching smplx_pose.mjcf_fk:
     child_R = parent_R @ expmap(dof_j), child_p = parent_p + parent_R @ rest_offset."""
 
-    def __init__(self, subject, device="cpu"):
-        tree = _parse_mjcf_tree(MJCF % subject)
+    def __init__(self, subject, device="cpu", mjcf_path=None):
+        """mjcf_path overrides the smplx_omomo_<subject>.xml convention.
+
+        The CARI4D bball subject's body is smplh_behave_sub100.xml, and there is
+        a DIFFERENT smplx_omomo_sub100.xml (a synthetic OMOMO body). Deriving
+        the path from the id alone would silently retarget from the wrong
+        person -- same number, different body.
+        """
+        tree = _parse_mjcf_tree(mjcf_path or (MJCF % subject))
         self.names = [n for n, _, _ in tree]
         idx = {n: i for i, n in enumerate(self.names)}
         self.parent = [(-1 if p is None else idx[p]) for _, p, _ in tree]
@@ -196,7 +203,8 @@ def _expmap(v):
 
 # ---------------------------------------------------------------------- the solve
 def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05,
-             w_contact=10.0, w_pose=1.0, w_reg=0.1, device="cpu", verbose=True):
+             w_contact=10.0, w_pose=1.0, w_reg=0.1, device="cpu", verbose=True,
+             source_mjcf=None, target_mjcf=None):
     """Re-solve dof_pos so `target`'s body reproduces `source`'s world body positions,
     weighting bodies that are in contact. Returns (new_clip, stats)."""
     # .detach(): some OMOMO_new clips were saved with requires_grad=True, which
@@ -205,7 +213,8 @@ def retarget(clip, source, target, object_scale=(1., 1., 1.), iters=300, lr=0.05
     clip = clip.detach().to(torch.float64)
     dof_src = clip[:, I_DOF].clone().to(device)
     contact_h = clip[:, I_CONTACT_H].to(device)                 # (T,52) binary
-    src_chain, tgt_chain = MJCFChain(source, device), MJCFChain(target, device)
+    src_chain = MJCFChain(source, device, mjcf_path=source_mjcf)
+    tgt_chain = MJCFChain(target, device, mjcf_path=target_mjcf)
 
     # WORLD frame throughout. The solve itself is invariant to this choice (the
     # loss is a distance, and both sides get the same rigid root transform), but
@@ -316,13 +325,14 @@ def _one(job):
     # One thread per worker: torch grabs ~n_cores threads per process by default, so
     # a pool of W workers oversubscribes W*n_cores threads and thrashes to a standstill.
     torch.set_num_threads(1)
-    clip_path, source, target, scale, iters, out_dir = job
+    clip_path, source, target, scale, iters, out_dir, source_mjcf = job
     dst = os.path.join(out_dir, target, os.path.basename(clip_path))
     if os.path.exists(dst):                       # resume: never redo finished work
         return (target, os.path.basename(clip_path), None, None, "skip")
     try:
         clip = torch.load(clip_path, map_location="cpu", weights_only=False).detach()
-        out, st = retarget(clip, source, target, scale, iters=iters, verbose=False)
+        out, st = retarget(clip, source, target, scale, iters=iters, verbose=False,
+                           source_mjcf=source_mjcf)
         # An under-converged solve can end up WORSE than not retargeting at all
         # (measured: 25 iters took sub16 from 2.72cm to 4.86cm). Never write that --
         # it would silently hand training a reference worse than the original.
@@ -339,7 +349,8 @@ def _one(job):
         return (target, os.path.basename(clip_path), None, None, f"ERROR {e!r}")
 
 
-def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=None):
+def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=None,
+          source_mjcf=None):
     """Retarget EVERY clip of `source` onto EVERY target body. This is the
     preprocessing step that makes the retargeted reference usable for training:
     one file per (target_body, clip), written to <out_dir>/<body>/<clip>.pt."""
@@ -353,7 +364,7 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
         clips = clips[:limit]
     if not clips:
         raise SystemExit(f"no clips for source '{source}' in {motion_dir}")
-    jobs = [(os.path.join(motion_dir, c), source, t, scale, iters, out_dir)
+    jobs = [(os.path.join(motion_dir, c), source, t, scale, iters, out_dir, source_mjcf)
             for t in targets for c in clips]
     print(f"[batch] {len(clips)} clips x {len(targets)} bodies = {len(jobs)} pairs, "
           f"{workers} workers -> {out_dir}")
@@ -415,6 +426,15 @@ def main():
     ap.add_argument("--limit", type=int, help="only the first N clips (smoke test)")
     ap.add_argument("--clip")
     ap.add_argument("--source", default="sub2")
+    ap.add_argument("--source-mjcf",
+                    help="explicit MJCF for the SOURCE body, overriding the "
+                         "smplx_omomo_<source>.xml convention. Needed for the "
+                         "CARI4D bball subject, whose body is "
+                         "smplh_behave_sub100.xml -- a DIFFERENT body from the "
+                         "synthetic smplx_omomo_sub100.xml that the convention "
+                         "would pick up.")
+    ap.add_argument("--target-mjcf",
+                    help="explicit MJCF for the TARGET body (single-clip mode)")
     ap.add_argument("--target", required=False)
     ap.add_argument("--object-scale", nargs=3, type=float, default=[1., 1., 1.])
     ap.add_argument("--iters", type=int, default=300)
@@ -430,14 +450,16 @@ def main():
         if not targets:
             ap.error("--batch needs --targets or --targets-from")
         batch(a.motion_dir, a.source, targets, a.out_dir, tuple(a.object_scale),
-              a.iters, a.workers, a.limit)
+              a.iters, a.workers, a.limit,
+              source_mjcf=a.source_mjcf)
         return
     if not (a.clip and a.target):
         ap.error("--clip and --target required (or --selftest / --batch)")
     clip = torch.load(a.clip, map_location="cpu", weights_only=False).detach()
     print(f"[retarget] {os.path.basename(a.clip)}  {a.source} -> {a.target}  "
           f"object_scale={a.object_scale}")
-    out, st = retarget(clip, a.source, a.target, tuple(a.object_scale), iters=a.iters)
+    out, st = retarget(clip, a.source, a.target, tuple(a.object_scale), iters=a.iters,
+                       source_mjcf=a.source_mjcf, target_mjcf=a.target_mjcf)
     print(f"  contact err {st['contact_before_cm']:.2f} -> {st['contact_after_cm']:.2f} cm | "
           f"all-body {st['all_before_cm']:.2f} -> {st['all_after_cm']:.2f} cm")
     os.makedirs(a.out_dir, exist_ok=True)
