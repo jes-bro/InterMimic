@@ -122,6 +122,19 @@ def _load_model_file(path):
         kintree_table=np.asarray(field("kintree_table")),
         faces=np.asarray(field("f", "faces"), dtype=np.uint32))
 
+    # posedirs is OPTIONAL here, unlike the fields above: the rest-pose paths
+    # (shape comparison, body galleries) never need it, and some stripped model
+    # builds omit it. verts_from_pose warns and skins without it. But when the
+    # file has it, it must survive this curation -- it did not, which is why
+    # posing a body died on KeyError('posedirs').
+    if "posedirs" in raw:
+        pd = np.asarray(raw["posedirs"], dtype=np.float64)
+        if pd.shape[:2] == (out["v_template"].shape[0], 3):
+            out["posedirs"] = pd
+        else:
+            print(f"[smplx_pose] ignoring posedirs with unexpected shape "
+                  f"{pd.shape}", flush=True)
+
     # Validate rather than trust. A model whose parts disagree produces a body
     # that renders without complaint and is wrong, which is the failure this
     # whole exercise is trying to escape.
@@ -225,11 +238,28 @@ class SMPLXPoser:
                 f"file and --model-type disagree.")
 
         n_betas = min(N_BETAS, m["shapedirs"].shape[2])
+        # posedirs: the pose-corrective blendshapes verts_from_pose applies.
+        # It was missing from this dict, so verts_from_pose died on
+        # KeyError('posedirs') the moment anyone skinned a POSED body -- the
+        # rest-pose paths never touch it, which is why it survived.
+        # Its last axis is (n_joints-1)*9, matching the flattened
+        # (R[1:] - I) pose feature; slice it in case a model ships more joints
+        # than this poser indexes.
+        posedirs = m.get("posedirs")
+        if posedirs is not None:
+            want = (n_joints - 1) * 9
+            if posedirs.shape[-1] < want:
+                raise SystemExit(
+                    f"{os.path.basename(path)}: posedirs has "
+                    f"{posedirs.shape[-1]} pose components but {n_joints} "
+                    f"joints need {want}. Model and --model-type disagree.")
+            posedirs = posedirs[..., :want]
         self._cache[g] = dict(
             v_template=m["v_template"],
             shapedirs=m["shapedirs"][:, :, :n_betas],
             J_reg=m["J_regressor"],
             weights=m["weights"],
+            posedirs=posedirs,
             parents=parents[:n_joints], faces=m["faces"], n_betas=n_betas)
         print(f"[smplx_pose] {os.path.basename(path)}: "
               f"{m['v_template'].shape[0]} verts, {n_joints} joints, "
@@ -393,7 +423,16 @@ class SMPLXPoser:
         v = M["v_template"] + M["shapedirs"] @ beta
         J = M["J_reg"] @ v
         R = np.stack([expmap(a) for a in np.asarray(pose_aa)])          # (n_j,3,3)
-        v = v + M["posedirs"] @ (R[1:] - np.eye(3)).reshape(-1)         # pose blendshapes
+        if M.get("posedirs") is not None:
+            v = v + M["posedirs"] @ (R[1:] - np.eye(3)).reshape(-1)   # pose blendshapes
+        elif not getattr(self, "_warned_posedirs", False):
+            # Not silent: without these the surface is still correctly shaped
+            # and posed, but loses the pose-dependent corrections (bulging at
+            # bent joints). Worth knowing before judging a render.
+            print("[smplx_pose] WARNING: model has no posedirs; skinning "
+                  "WITHOUT pose blendshapes (joints will look slightly "
+                  "collapsed when bent)", flush=True)
+            self._warned_posedirs = True
         parents = M["parents"]
         G = np.zeros((n_j, 4, 4)); G[0, :3, :3] = R[0]; G[0, :3, 3] = J[0]; G[0, 3, 3] = 1
         for j in range(1, n_j):
