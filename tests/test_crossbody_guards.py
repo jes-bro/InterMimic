@@ -25,8 +25,14 @@ import yaml
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CFGDIR = os.path.join(REPO, "isaacgym/src/intermimic/data/cfg")
 RLG = os.path.join(CFGDIR, "train/rlg")
-PLAIN, RET, BASE = "r11_sub2_plain", "r12_sub2_ret", "r8_horiz"
-RETARGET_DIR = "InterAct/behave_cari4d_optj3d_cf2_sub2"
+BASE = "r8_horiz"
+# Both cross-body pairs, checked identically. sub10 is the shortest real
+# subject (1.481 m) and its un-retargeted mismatch measured 8.62 cm against
+# sub2's 4.77, so it is the pair most likely to show an effect.
+PAIRS = [("r11_sub2_plain", "r12_sub2_ret", "sub2"),
+         ("r13_sub10_plain", "r14_sub10_ret", "sub10")]
+PLAIN, RET, BODY = PAIRS[0]
+RETARGET_DIR = f"InterAct/behave_cari4d_optj3d_cf2_{BODY}"
 
 failures = []
 
@@ -64,8 +70,8 @@ def test_one_knob_chain():
           diff(b, p) == ["env.robotType"], f"({diff(b, p)})")
     check("r12 differs from r11 ONLY in motion_file",
           diff(p, r) == ["env.motion_file"], f"({diff(p, r)})")
-    check("r11 uses sub2's body",
-          p.get("env.robotType") == "smplx/smplx_omomo_sub2.xml",
+    check(f"{PLAIN} uses {BODY}'s body",
+          p.get("env.robotType") == f"smplx/smplx_omomo_{BODY}.xml",
           f"(got {p.get('env.robotType')})")
     check("r12 uses the SAME body as r11",
           r.get("env.robotType") == p.get("env.robotType"))
@@ -161,17 +167,25 @@ def test_the_sub100_trap_is_documented():
 
 
 def main():
-    test_one_knob_chain()
-    test_recipe_preserved()
-    test_eval_twins_track()
-    test_guards()
-    test_the_sub100_trap_is_documented()
+    global PLAIN, RET, BODY, RETARGET_DIR
+    for PLAIN, RET, BODY in PAIRS:
+        RETARGET_DIR = f"InterAct/behave_cari4d_optj3d_cf2_{BODY}"
+        print(f"\n########## pair: {PLAIN} / {RET} (body {BODY}) ##########")
+        _run_pair()
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
     print("all green")
     return 0
+
+
+def _run_pair():
+    test_one_knob_chain()
+    test_recipe_preserved()
+    test_eval_twins_track()
+    test_guards()
+    test_the_sub100_trap_is_documented()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,284 @@
+# BBALL R6_CF2 -- the contact-label arm. Cloned from
+# omomo_cari4d_bball_r5_roll50_* and identical to it EXCEPT motion_file
+# (behave_cari4d_optj3d_cf -> _cf2), in BOTH the train and eval cfgs. One knob,
+# so any difference from r5 is attributable to the contact relabel alone.
+#
+# WHY (measured 2026-08-26, not hypothesised). r3's eval reward breakdown, split
+# by reference contact state, showed:
+#     free (66%)  rb=0.482 ro=0.538 rig=0.594 rcg=0.686  reward=0.174
+#     held (34%)  rb=0.342 ro=0.580 rig=0.596 rcg=0.141  reward=0.019
+# ro is FLAT across the split, which killed the free-flight-gating hypothesis.
+# rcg is what collapses -- and rcg_hand is pinned to exactly 1.0 wherever the
+# reference says no hand contact (compute_cg_reward's (1 - ref_any) term), so
+# the held row is the only one that measures grip at all.
+#
+# The cause was upstream. relabel_contact_flags.py rewrote channel 330
+# (contact_obj) ONLY; rcg_hand grades against contact_human (channels 331..382),
+# which the _cf build never touched. inspect_bball_clip section 8 on _cf:
+#     frames claiming hand contact:                     53 of 101
+#     of those, with NO hand body touching the ball:    21 (40%)
+#     worst: frame 11, nearest hand body +0.187 m out
+#     contact_obj vs contact_human disagree on:         15 of 101
+# The stale channel still carried the garbage 99-100 end contact that the _cf
+# changelog says it dropped, and put the release at 61 where contact_obj says 58.
+# rcg_hand was unearnable on those 21 frames for ANY policy.
+#
+# _cf2 (scripts/relabel_contact_human.py, threshold 0.02 m finger-to-SURFACE)
+# re-derives the 32 hand-body flags from geometry and re-derives contact_obj
+# from the same criterion. After:
+#     worst gap            +0.187 m -> +0.012 m   (inside PhysX contact_offset)
+#     channel disagreement    15/101 -> 0/101
+# Positions are byte-identical to _cf; only flags moved.
+#
+# WHAT THIS ARM ANSWERS. Does making rcg_hand earnable actually raise it? If the
+# held-frame rcg stays near 0.141 with satisfiable labels, the grip failure is
+# the POLICY and the next lever is elsewhere. If it climbs, the contact term was
+# being starved and the layup/dribble tradeoff should ease.
+#
+# Read it with the ref-contact split, NOT the clip average: the free rows carry
+# no grip information by construction.
+#
+# WHY 50 RATHER THAN 30 (Jess's observation, 2026-08-25). r3's mid-clip render
+# was the read: across ~20 sampled 30-frame windows, only ONE began before the
+# takeoff -- the rest opened with the humanoid already airborne, where there is
+# nothing left to learn about jumping. The policy visibly tries to shoot but
+# slides instead of loading the knees, i.e. it has never been asked to perform
+# the crouch->extend transition from a standing start.
+#
+# The arithmetic behind the choice. A window teaches the takeoff only if it
+# STARTS before the takeoff frame T and SURVIVES long enough to reach it. r3
+# measured a mean episode of ~17 control steps, so the useful starts are the
+# ~17 frames preceding T, drawn uniformly from 0..(100-L):
+#     L=30 -> starts 0..70  -> P(useful) ~ 18/71 = 25%
+#     L=50 -> starts 0..50  -> P(useful) ~ 18/51 = 35%
+#     L=60 -> starts 0..40  -> 44% if T<=40, but 20% if T=50
+# 50 is both the higher-yield choice and the STABLE one: it returns ~35%
+# for a takeoff anywhere in T=40..50, whereas 60 swings by a factor of 2 on a
+# frame we have not measured. The window is also 1.67s instead of 1.0s, which
+# matters because crouch->extend->flight is a multi-phase action that a 1s
+# window can bisect.
+#
+# UNVERIFIED ASSUMPTION, stated on purpose: the takeoff frame T is inferred from
+# watching renders, not measured. Measure it before reading this arm's result --
+#   python3 scripts/inspect_bball_clip.py \
+#       --clip InterAct/behave_cari4d_optj3d_cf/sub100_bball_000.pt --every 1
+# and read the "lowest body point per frame" column: takeoff is where it leaves
+# the grounded ~0.23m offset. If T lands past frame 55, the coverage story above
+# changes and 50 stops being the right answer.
+#
+# NOTE this also REVISES an assumption pinned in tests/test_r3_roll30_guards.py,
+# which asserted the sampler must be able to start as late as frame 70 (a
+# takeoff window guessed at 35-70). Frame 70 is mid-flight; being able to START
+# there teaches nothing about leaving the ground. That test still pins r3's own
+# claim as-run and is deliberately left alone -- this header is the record that
+# the reasoning moved on.
+#
+# NOTE: `completed` changes meaning in the TRAIN cfg. A rollout that hits its
+# 50-frame cap resets WITHOUT terminating, which TERM_REASON scores as completed.
+# Expect a nonzero completed% from step one; it is NOT the same statistic as
+# r2_warm's 0.0%, and it is not directly comparable to r3's either (a longer cap
+# is harder to reach, so this arm's completed% will read LOWER than r3's for the
+# same competence). Read the eval twin for real full-clip success.
+#
+# OVERFIT-TRAINING config for the EgoExo4D basketball reconstruction.
+# One clip, one body: can a physics policy execute this 4D reconstruction at all?
+#
+# Clip: sub100_bball_000.pt, 101 frames @30fps (3.37s), Ego-Exo4D take
+# unc_basketball_03-31-23_02_9 cam04 frames 354-454. One dribble bounce
+# (frame ~15) then a layup. Object 'bball': reconstructed sphere, 0.26m diameter.
+#
+# Derived from the cluster's omomo_cari4d_bball.yaml (replay cfg) with the
+# training-relevant changes below. KNOWN DATA DEFECTS carried in on purpose --
+# this run is the measurement of whether they matter:
+#   * human global placement ~23cm too high (monocular depth scale; floor
+#     grounded on feet, so the BALL's low point sits 0.403m up where 0.16 would
+#     be right; ball is correct relative to the hands)
+#   * last ~8 frames of ball trajectory unreliable (triangulation dropout)
+#   * no net/backboard -- the shot is free flight after release
+# If training fails, the 23cm floor offset is the first thing to rule out.
+#
+# PHYSICS FIXES vs the replay cfg (the point of this file):
+#   objectDensity 200 -> 86:  mesh volume x 200 gave a 1.45kg ball; real is
+#       ~0.62kg (scripts/object_density.py --mesh bball.obj --mass 0.624 -> ~86).
+#   objectShapeProps.restitution 0.85 + plane.restitution 0.85: the runtime
+#       HARDCODED object restitution to 0.05 (furniture value) until commit
+#       0604830 made it cfg-driven. PhysX averages object and plane, so both are
+#       set; 0.05-vs-0.7 averaged to a ball that thuds.
+#   rolling_friction needs nothing: runtime already forces 0.01 (ball-correct);
+#       the URDF's 0.5 was never in effect.
+#
+# NOT implemented, deliberately: free-flight gating (neutralizing object
+# reward/reset during reference no-contact frames). The dribble bounce and the
+# shot are free flight; if the run fails exactly there, that is the machinery to
+# build next -- see the contact_obj channel (ch 330) already in the data.
+env:
+  numEnvs: 4096          # PhysX multiplier lowered to 12.0 below to keep the
+                         # 4096-env footprint off the 44G ceiling the teachers hit
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True   # frame-0 object velocity from the reference (the handoff
+                  # actually arrives now); False zeroed it and every Start-mode
+                  # spawn dropped a dead ball -- Jess-diagnosed 2026-08-21
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2  # 30 Hz
+  stateInit: "Hybrid"     # teacher-style init mix (replay cfg used Start)
+  rolloutLength: 50       # R5: THE knob. Was 30 in r3 (300 in r2_warm). Start
+  obsHorizons: [1, 4, 7, 10, 13, 16]   # THE knob vs r7: was [1, 16]. Same endpoints,
+                                       # uniform stride 3 -- fills a 15-frame blind gap without
+                                       # tuning the spacing to this clip's timing.
+                          # sampling is randint(0, max(1, clip_len -
+                          # rolloutLength)) (intermimic.py:1246), so this sets
+                          # BOTH where episodes can begin and how long they last
+                          # (humanoid.py:553) -- which is why it is worth tuning
+                          # rather than just un-clamping.
+                          #   300 -> randint(0,1)  = ALWAYS frame 0 (the r2_warm
+                          #          bug: stateInit Hybrid was silently a Start
+                          #          init, completed 0.0% of 16,666,993 episodes)
+                          #    30 -> starts 0..70, 30-frame (1.0s) windows
+                          #    50 -> starts 0..50, 50-frame (1.67s) windows
+                          # 50 raises the odds a window opens BEFORE the takeoff
+                          # and lives to reach it (~35% vs ~25%, see the header),
+                          # and gives the crouch->extend->flight sequence room to
+                          # play out inside one episode instead of being bisected.
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub100']
+  ballSize: 1.
+  numObs: 9594            # 6 horizons x 1599 (was 2 x 1599); no betas conditioning
+  # THE knob vs r13_sub10_plain: the reference is retargeted to sub10's
+  # proportions by scripts/retarget_contact.py. Same body, same recipe --
+  # only the reference it is asked to reproduce differs, which is exactly
+  # what retargeting is supposed to fix.
+  motion_file: InterAct/behave_cari4d_optj3d_cf2_sub10
+  rewardShape: geometric   # THE knob vs r6_cf2: 4th root of the same product
+  # THE knob vs r8_horiz: the BODY. sub10 is 1.481 m at rest -- the SHORTEST real subject; the CARI4D
+  # bball subject is a different build entirely (smplh_behave_sub100.xml).
+  # The reference is UNCHANGED, so this is the no-retargeting baseline:
+  # sub2's body tracking a reference shaped like someone else.
+  robotType: "smplx/smplx_omomo_sub10.xml"
+  objectDensity: 86
+  objectShapeProps:
+    restitution: 0.85
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3", "L_Thumb3", "R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3", "R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+  # BBALL R2_WARM: the post-mortem arm. cf data (geometry-derived flags) +
+  # initVel TRUE (dead-ball spawn fixed) + HUMAN divergence reset restored
+  # (anti-crawl) + pose term; PSI key removed (inert, clip < rolloutLength).
+  # No hoop until CARI4D delivers the measured pose. Base header:
+  # from geometry (relabel_contact_flags.py, threshold 0.25m): fixes flagged-
+  # contact-with-0.3-0.7m-of-air at frames 20-26, moves release to 59, drops
+  # the garbage 99-100 end contact. Positions byte-identical to optj3d.
+  # Otherwise identical to OPTJ3D_PSI_WARM:: the contact-anchored recon (CARI4D export
+  # rectinj3-hy3d3-optj3d, 2026-08-19), FULL clip, spawn at frame 0 (t0):
+  # handoff start -- ball 0.29m from hands closing at ~3m/s (velocity init
+  # verified at intermimic.py:1034-1037), in-hand by frame 2, physical push
+  # through 11, release 12, bounce 0.159m, steady ~0.25 carry, layup. No trim:
+  # frame-3+ spawns would start with the wrist inside the ball (penetration
+  # pop). Recipe = t32_psi_warm (PSI 3, pose 0.02, explicit sub2 warm start,
+  # looseterm resets).
+  
+  # teacher-standard mechanisms that transfer to a single-body clip: PSI
+  # (physicalBufferSize 3) and the pose reward term (lambda 0.02). Deliberately
+  # NOT adopted from teachers: betas conditioning (breaks the sub2 warm start),
+  # bodyNormalizedReward (constant rescale w/ one body), teacher object physics,
+  # default reset thresholds (free-flight tail would false-reset). Base:: start at REAL CONTACT (old frame 32, ball
+  # 0.012m in the palm) -- the first genuinely in-hand frame of this recon.
+  # Jess 2026-08-19: guidance must start at a frame the humanoid can actually
+  # do; the recon's opening hold floats the ball 0.26-0.43m so no in-hand
+  # start exists before the dribble. This clip = catch-hold-layup, NO dribble;
+  # the dribble returns when the recon's hand contacts are fixed upstream.
+  # (old frame 10, first free-flight frame). The recon's opening hold (frames
+  # 0-9) places the ball 0.26-0.43m from the palm while flagged CONTACT --
+  # physically impossible to imitate, so those frames are a reward desert that
+  # blocked t4_warm's tracking terms. From frame 10 on the reference is
+  # physical: ballistic flight, real bounce (0.16m), tight re-catch (0.012m),
+  # layup. Supersedes the t4 trim rationale below:
+  # (scripts/trim_pt_start.py) so frame 0 is a ball-IN-HAND contact frame (0.27m)
+  # instead of a detached falling ball 0.72m from the hand -- Start-mode init
+  # copies frame 0 verbatim, so the untrimmed export made t=0 a catch problem.
+  # Otherwise identical to RECTINJ3_WARM: (rectinj3 data + EXPLICIT sub2-teacher warm start,
+  # chosen by Jess 2026-08-17: fresh-from-scratch falls instantly at ~2k epochs;
+  # the teacher init supplies body competence, the improved recon supplies the
+  # supervision). Original header: the IMPROVED 4D reconstruction (rectinj3 export --
+  # teleports fixed, median ball error ~0.11m, worst ~0.22m) converted into
+  # InterAct/behave_cari4d_optj3d_cf. Termination config = looseterm twin, so
+  # recon version is the ONLY variable vs smplx_cari4d_bball_looseterm.
+  # (original loosterm header follows:) monocular-recon reference -- the ball flight is not
+  # physically executable, so the object/ig/contact divergence resets execute
+  # episodes for the reference's sins (baseline: best of 20,501 attempts died
+  # at frame 43). Disable those three; keep body-fall + human resets. Reward
+  # terms untouched. Episodes end ONLY on body-fall / NaN / clip end. Jess hypothesis
+  # 2026-08-11: termination (not reward sparsity) is the binding constraint --
+  # noreset showed 100% kinematic deaths (human reset, mislabeled ig_diverge)
+  # at ~34-step episodes. SEPARATE experiment; warm-starts from the ORIGINAL
+  # run like noreset did, so looseterm-vs-noreset isolates the human knob.
+  resetThresholds:
+    human: 0.5    # BACK ON: kills the crawl exploit (crawler deviates >0.5m
+                  # from reference within frames). Object-side resets stay off:
+                  # they re-create the free-flight wall on imperfect releases.
+    object: false
+    igRatio: false
+    contactSteps: false
+  rewardTerms:
+    pose:
+      enable: true        # relative joint-angle term, teacher-standard
+      lambda: 0.02
+  enableEvaluation: False
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.85     # raised with the object's so the PhysX average is 0.85
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0  # validated on normval_adlr: no PhysX warnings, results continuous
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
