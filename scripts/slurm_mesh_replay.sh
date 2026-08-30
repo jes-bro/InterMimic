@@ -77,10 +77,20 @@ BG="${BG:-black}"
 # the same numbers in a different shape basis and thickens the build.
 MODEL_TYPE="${MODEL_TYPE:-smplh}"
 
-TAG="${TAG:-$SEQ_NAME}"
+# Name outputs by EXPERIMENT + timestamp, never by sequence alone. Two arms
+# replaying the same clip would otherwise write the same file, and a second peek
+# at one arm would silently overwrite the first -- which is how a render gets
+# compared against itself. TAG still overrides if you want a specific name.
+if [ -n "$CHECKPOINT" ]; then
+    _EXP=$(basename "$(dirname "$(dirname "$CHECKPOINT")")")
+else
+    _EXP="reference_${SEQ_NAME}"
+fi
+STAMP="${STAMP:-$(date +%Y%m%d-%H%M%S)}"
+TAG="${TAG:-${_EXP}_${STAMP}}"
 RENDER_DIR="${RENDER_DIR:-$INTERMIMIC/renders}"
-DUMP_NPZ="${DUMP_NPZ:-$RENDER_DIR/${TAG}_rollout.npz}"
-OUT_MP4="${OUT_MP4:-$RENDER_DIR/${TAG}_mesh.mp4}"
+DUMP_NPZ="${DUMP_NPZ:-$RENDER_DIR/mesh_${TAG}_rollout.npz}"
+OUT_MP4="${OUT_MP4:-$RENDER_DIR/mesh_${TAG}.mp4}"
 
 log() { echo "[mesh $(date -u +%H:%M:%S)] $*"; }
 
@@ -95,6 +105,17 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 cd "$INTERMIMIC"
 mkdir -p "$RENDER_DIR"
+
+# The bball arms save only the ROLLING mimic.pth (save_intermediate: False), so
+# reading it while training rewrites it is a race. Render from a private frozen
+# copy, kept beside the video as its provenance.
+if [ -n "$CHECKPOINT" ] && [ "$(basename "$CHECKPOINT")" = "mimic.pth" ]; then
+    _SNAP="$RENDER_DIR/mesh_${TAG}_frozen.pth"
+    mkdir -p "$RENDER_DIR"
+    cp "$CHECKPOINT" "$_SNAP"
+    CHECKPOINT="$_SNAP"
+    echo "[mesh] rolling checkpoint frozen -> $_SNAP"
+fi
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=$CONDA_DEFAULT_ENV"
 log "sequence=$SEQ_NAME  mode=$([ -n "$CHECKPOINT" ] && echo policy || echo reference)"
