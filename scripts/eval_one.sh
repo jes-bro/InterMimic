@@ -197,17 +197,24 @@ if [ "${DRY:-0}" = 1 ]; then
 fi
 
 
-# Nodes to keep off. simurgh4 and simurgh6 kill jobs within seconds of starting,
-# and a run of gen-2 evals on one of them died with "uncorrectable ECC error"
-# during setup -- every pair failed identically, writing a full CSV of exit_code=1
-# rows that looks like a result until you check the metrics column.
+# Nodes to keep off. Every gen-2 eval that landed on simurgh6 died during setup
+# with "RuntimeError: CUDA error: uncorrectable ECC error encountered" -- failing
+# GPU memory. Those jobs exit COMPLETED in ~45 s having written a FULL CSV whose
+# every row is exit_code=1 with empty metrics, which reads as a result until you
+# check the metrics column.
+#
+# simurgh4 is NOT excluded: it was suspect alongside simurgh6, but it ran a
+# 16-body eval to completion the same day the ECC failures happened. Add it back
+# with EXCLUDE_NODES=simurgh4,simurgh6 if it starts eating jobs again.
 #
 # This MUST be an sbatch CLI flag. #SBATCH headers are read before the job script
 # runs, and sbatch does not honour an SBATCH_EXCLUDE environment variable -- a
-# submission that set one still landed on simurgh6.
+# submission that set one still landed on simurgh6. Note it only binds at
+# submission: on an already-running job the placement is fixed, and on a PENDING
+# one it can still be changed with `scontrol update JobId=N ExcNodeList=...`.
 #
 # EXCLUDE_NODES="" opts out; EXCLUDE_NODES=nodeA,nodeB overrides the list.
-EXCLUDE_NODES="${EXCLUDE_NODES-simurgh4,simurgh6}"
+EXCLUDE_NODES="${EXCLUDE_NODES-simurgh6}"
 [ -n "$EXCLUDE_NODES" ] && echo "   exclude    : $EXCLUDE_NODES"
 
 CHECKPOINT="$CKPT" OUT="$OUT" BETAS_FILE="$BETAS" \
