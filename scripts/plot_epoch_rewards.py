@@ -44,7 +44,11 @@ EPOCH_RE = re.compile(r"epoch_num:(\d+)\s+mean_rewards:\[([-\d.eE+]+)\]")
 # a2c_common.py:952 logs mean_rewards against epoch_num under this tag, so a
 # tensorboard dir carries the same curve as the logs -- which is the only way in
 # when all you have is a checkpoint directory.
-TB_TAG = "rewards0/iter"
+# a2c_common.py:950 names the first value's tag 'rewards', later ones
+# 'rewards<i>'. Older code in this tree wrote 'rewards0' for the first, so runs
+# from different vintages disagree -- try both rather than making the caller
+# know which era a checkpoint came from.
+TB_TAGS = ["rewards/iter", "rewards0/iter"]
 # slurm names logs <prefix>-<run>-<jobid>.out; the jobid is the last dash field.
 NAME_RE = re.compile(r"^(?:teacher-|cari4d-bball-)?(.+)-(\d+)\.out$")
 
@@ -66,33 +70,46 @@ def read_log(path):
     return np.asarray(ep), np.asarray(rw)
 
 
-def read_tb(run_dir, tag=TB_TAG):
-    """(epochs, rewards) from a run's summaries/ dir.
+def read_tb(run_dir, tags=None):
+    """(epochs, rewards, tag_used) from a run's summaries/ dir.
 
-    A requeued run writes one event file per job, and a job that died before
-    logging leaves an EMPTY file -- skipped rather than raised on, but a dir with
-    no usable file still fails loudly, since a silently empty line is worse than
-    an error.
+    Tries each candidate tag and uses the first that any event file carries. A
+    requeued run writes one event file per job, and a job that died before
+    logging leaves an EMPTY one -- skipped, but a dir with no usable file still
+    fails loudly, naming the union of tags actually present so the next guess is
+    informed rather than blind.
     """
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    tags = tags or TB_TAGS
     run_dir = os.path.expanduser(run_dir)
     if os.path.isdir(os.path.join(run_dir, "summaries")):
         run_dir = os.path.join(run_dir, "summaries")
     files = sorted(globmod.glob(os.path.join(run_dir, "events.out.tfevents*")))
     if not files:
         raise SystemExit(f"no event files under {run_dir}")
-    ep, rw = [], []
+
+    accs, present = [], set()
     for f in files:
         acc = EventAccumulator(f, size_guidance={"scalars": 0})
         acc.Reload()
-        if tag not in acc.Tags().get("scalars", []):
+        got = set(acc.Tags().get("scalars", []))
+        present |= got
+        accs.append((acc, got))
+
+    tag = next((t for t in tags if t in present), None)
+    if tag is None:
+        raise SystemExit(
+            f"{run_dir}: none of {tags} present.\n"
+            f"  scalar tags found: {sorted(present)}\n"
+            f"  pass --tag with one of the '/iter' tags above")
+
+    ep, rw = [], []
+    for acc, got in accs:
+        if tag not in got:
             continue
         for e in acc.Scalars(tag):
             ep.append(e.step); rw.append(e.value)
-    if not ep:
-        raise SystemExit(f"{run_dir}: no '{tag}' scalar in any event file "
-                         f"(tags present: {sorted(acc.Tags().get('scalars', []))[:8]})")
-    return np.asarray(ep), np.asarray(rw)
+    return np.asarray(ep), np.asarray(rw), tag
 
 
 def ewma(y, alpha):
@@ -121,6 +138,11 @@ def main():
                         "-- the only route when all you have is a checkpoint "
                         "directory (e.g. unpacked from a collaborator's tar). "
                         "DIR is the run dir or its summaries/. Repeatable.")
+    p.add_argument("--tag", default=None,
+                   help=f"tensorboard scalar to read; default tries {TB_TAGS} "
+                        f"in order. Use --list-tags to see what a run has.")
+    p.add_argument("--list-tags", action="store_true",
+                   help="print each --tb run's scalar tags and exit")
     p.add_argument("--relative", action="store_true",
                    help="plot epochs since each run's OWN first epoch. Needed "
                         "when comparing warm-started runs (which inherit the "
@@ -131,11 +153,31 @@ def main():
     p.add_argument("--min-epochs", type=int, default=50,
                    help="skip runs with fewer logged epochs than this")
     p.add_argument("--title", default="Reward vs epoch")
-    p.add_argument("--out", required=True)
+    p.add_argument("--out", help="output PNG (not needed with --list-tags)")
     a = p.parse_args()
 
     if not a.glob and not a.run and not a.tb:
         raise SystemExit("pass --glob, --run or --tb")
+
+    if not a.list_tags and not a.out:
+        raise SystemExit("--out is required (except with --list-tags)")
+
+    if a.list_tags:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+        for spec in a.tb:
+            label, d = spec.split("=", 1)
+            d = os.path.expanduser(d)
+            if os.path.isdir(os.path.join(d, "summaries")):
+                d = os.path.join(d, "summaries")
+            present = set()
+            for f in sorted(globmod.glob(os.path.join(d, "events.out.tfevents*"))):
+                acc = EventAccumulator(f, size_guidance={"scalars": 1})
+                acc.Reload()
+                present |= set(acc.Tags().get("scalars", []))
+            print(f"{label}:")
+            for t in sorted(present):
+                print(f"    {t}")
+        return 0
 
     groups = collections.OrderedDict()
     for spec in a.run:
@@ -155,7 +197,9 @@ def main():
         if "=" not in spec:
             raise SystemExit(f"--tb wants LABEL=DIR, got {spec!r}")
         label, d = spec.split("=", 1)
-        tb_series.append((label, *read_tb(d)))
+        ep_i, rw_i, tag_used = read_tb(d, [a.tag] if a.tag else None)
+        print(f"  {label}: {len(ep_i)} points from '{tag_used}'", flush=True)
+        tb_series.append((label, ep_i, rw_i))
 
     series, skipped = [], []
     for label, ep, rw in tb_series:
