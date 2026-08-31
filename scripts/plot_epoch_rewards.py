@@ -149,6 +149,13 @@ def main():
                         f"in order. Use --list-tags to see what a run has.")
     p.add_argument("--list-tags", action="store_true",
                    help="print each --tb run's scalar tags and exit")
+    p.add_argument("--auto-epochs", action="store_true",
+                   help="when a series' steps advance by a constant stride > 1, "
+                        "divide by it to recover an epoch index. Needed for runs "
+                        "logged against FRAME count (a wandb-style train/reward "
+                        "steps by frames, e.g. 65536 per epoch) so they share an "
+                        "axis with runs logged against epoch. Reports every "
+                        "conversion it makes.")
     p.add_argument("--relative", action="store_true",
                    help="plot epochs since each run's OWN first epoch. Needed "
                         "when comparing warm-started runs (which inherit the "
@@ -207,8 +214,32 @@ def main():
         print(f"  {label}: {len(ep_i)} points from '{tag_used}'", flush=True)
         tb_series.append((label, ep_i, rw_i))
 
+    def normalize(label, ep):
+        """Frames -> epochs when the stride is a constant > 1. Loud, never silent:
+        a mis-scaled axis makes two runs look like different experiments."""
+        if not a.auto_epochs or len(ep) < 3:
+            return ep
+        d = np.diff(ep)
+        d = d[d > 0]
+        if len(d) == 0:
+            return ep
+        stride = int(np.median(d))
+        if stride <= 1:
+            return ep
+        # Only rescale if the stride really is constant; an irregular one means
+        # this is not a frame counter and dividing would invent an axis.
+        if not np.allclose(d, stride, rtol=0.02):
+            print(f"  {label}: steps advance irregularly (median {stride}); "
+                  f"NOT rescaling -- axis may not be epochs", flush=True)
+            return ep
+        print(f"  {label}: steps stride {stride} -> dividing to get epochs "
+              f"({ep[0]}-{ep[-1]} becomes {ep[0]//stride}-{ep[-1]//stride})",
+              flush=True)
+        return ep // stride
+
     series, skipped = [], []
     for label, ep, rw in tb_series:
+        ep = normalize(label, ep)
         if len(ep) < a.min_epochs:
             skipped.append((label, len(ep)))
             continue
