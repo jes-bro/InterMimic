@@ -41,6 +41,10 @@ import matplotlib.pyplot as plt          # noqa: E402
 import numpy as np                        # noqa: E402
 
 EPOCH_RE = re.compile(r"epoch_num:(\d+)\s+mean_rewards:\[([-\d.eE+]+)\]")
+# a2c_common.py:952 logs mean_rewards against epoch_num under this tag, so a
+# tensorboard dir carries the same curve as the logs -- which is the only way in
+# when all you have is a checkpoint directory.
+TB_TAG = "rewards0/iter"
 # slurm names logs <prefix>-<run>-<jobid>.out; the jobid is the last dash field.
 NAME_RE = re.compile(r"^(?:teacher-|cari4d-bball-)?(.+)-(\d+)\.out$")
 
@@ -59,6 +63,35 @@ def read_log(path):
             if m:
                 ep.append(int(m.group(1)))
                 rw.append(float(m.group(2)))
+    return np.asarray(ep), np.asarray(rw)
+
+
+def read_tb(run_dir, tag=TB_TAG):
+    """(epochs, rewards) from a run's summaries/ dir.
+
+    A requeued run writes one event file per job, and a job that died before
+    logging leaves an EMPTY file -- skipped rather than raised on, but a dir with
+    no usable file still fails loudly, since a silently empty line is worse than
+    an error.
+    """
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    run_dir = os.path.expanduser(run_dir)
+    if os.path.isdir(os.path.join(run_dir, "summaries")):
+        run_dir = os.path.join(run_dir, "summaries")
+    files = sorted(globmod.glob(os.path.join(run_dir, "events.out.tfevents*")))
+    if not files:
+        raise SystemExit(f"no event files under {run_dir}")
+    ep, rw = [], []
+    for f in files:
+        acc = EventAccumulator(f, size_guidance={"scalars": 0})
+        acc.Reload()
+        if tag not in acc.Tags().get("scalars", []):
+            continue
+        for e in acc.Scalars(tag):
+            ep.append(e.step); rw.append(e.value)
+    if not ep:
+        raise SystemExit(f"{run_dir}: no '{tag}' scalar in any event file "
+                         f"(tags present: {sorted(acc.Tags().get('scalars', []))[:8]})")
     return np.asarray(ep), np.asarray(rw)
 
 
@@ -83,6 +116,11 @@ def main():
     p.add_argument("--run", action="append", default=[], metavar="LABEL=GLOB",
                    help="explicit label for a glob, overriding the filename. "
                         "Repeatable.")
+    p.add_argument("--tb", action="append", default=[], metavar="LABEL=DIR",
+                   help="read a run's tensorboard summaries instead of its log "
+                        "-- the only route when all you have is a checkpoint "
+                        "directory (e.g. unpacked from a collaborator's tar). "
+                        "DIR is the run dir or its summaries/. Repeatable.")
     p.add_argument("--relative", action="store_true",
                    help="plot epochs since each run's OWN first epoch. Needed "
                         "when comparing warm-started runs (which inherit the "
@@ -96,8 +134,8 @@ def main():
     p.add_argument("--out", required=True)
     a = p.parse_args()
 
-    if not a.glob and not a.run:
-        raise SystemExit("pass --glob or --run")
+    if not a.glob and not a.run and not a.tb:
+        raise SystemExit("pass --glob, --run or --tb")
 
     groups = collections.OrderedDict()
     for spec in a.run:
@@ -109,10 +147,27 @@ def main():
         for f in sorted(globmod.glob(pat)):
             groups.setdefault(run_name(f), []).append(f)
 
-    if not groups:
+    if not groups and not a.tb:
         raise SystemExit("no files matched")
 
+    tb_series = []
+    for spec in a.tb:
+        if "=" not in spec:
+            raise SystemExit(f"--tb wants LABEL=DIR, got {spec!r}")
+        label, d = spec.split("=", 1)
+        tb_series.append((label, *read_tb(d)))
+
     series, skipped = [], []
+    for label, ep, rw in tb_series:
+        if len(ep) < a.min_epochs:
+            skipped.append((label, len(ep)))
+            continue
+        order = np.argsort(ep, kind="stable")
+        ep, rw = ep[order], rw[order]
+        _, keep = np.unique(ep[::-1], return_index=True)
+        keep = np.sort(len(ep) - 1 - keep)
+        series.append((label, ep[keep], rw[keep], "tb"))
+
     for label, files in groups.items():
         ep, rw = [], []
         for f in files:
@@ -130,7 +185,7 @@ def main():
         _, keep = np.unique(ep[::-1], return_index=True)
         keep = len(ep) - 1 - keep
         ep, rw = ep[np.sort(keep)], rw[np.sort(keep)]
-        series.append((label, ep, rw, len(files)))
+        series.append((label, ep, rw, f"log x{len(files)}"))
 
     if not series:
         raise SystemExit("every run was below --min-epochs; nothing to plot")
@@ -140,7 +195,7 @@ def main():
                          "font.size": 11})
     fig, ax = plt.subplots(figsize=(11, 6))
     cmap = plt.get_cmap("tab10")
-    print(f"{'run':<40} {'epochs':>16} {'final':>8} {'best':>8}  jobs")
+    print(f"{'run':<40} {'epochs':>16} {'final':>8} {'best':>8}  source")
     print("-" * 82)
     for i, (label, ep, rw, njobs) in enumerate(series):
         x = ep - ep[0] if a.relative else ep
