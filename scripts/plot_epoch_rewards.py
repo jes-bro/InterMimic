@@ -295,7 +295,10 @@ def main():
         c = cmap(i % 10)
         ax.plot(x, rw, color=c, alpha=0.15, linewidth=0.8)          # raw, faint
         ax.plot(x, ewma(rw, a.smoothing), color=c, linewidth=1.8, label=label)
-        print(f"{label:<40} {ep[0]:>7d}-{ep[-1]:<8d} {rw[-1]:>8.3f} "
+        # int(), not :d -- the tensorboard path and --auto-epochs both yield
+        # float epoch arrays, and :d raises on those. Only the .out-log path
+        # gives ints, so this crashed on whichever run happened to come second.
+        print(f"{label:<40} {int(ep[0]):>7d}-{int(ep[-1]):<8d} {rw[-1]:>8.3f} "
               f"{rw.max():>8.3f}  {njobs}")
     if skipped:
         print("\nskipped (too few epochs logged):")
