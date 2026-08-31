@@ -27,6 +27,7 @@ Missing (body, run) cells are drawn as a GAP labeled n/r, never as 0.
 """
 import argparse
 import csv
+import fnmatch
 import glob
 import re
 import math
@@ -72,9 +73,18 @@ def ordered_bodies(bodies):
 FINAL_STEP = 10 ** 12
 
 
-def _read(path):
+def _read(path, required=True):
+    """Rows with usable metrics. required=False returns [] instead of exiting.
+
+    The teacher scan reads every CSV in the directory, which may hold unrelated
+    or wholly-failed older evals -- one of those must not kill the figure. A
+    caller that named the file explicitly still gets a hard failure.
+    """
     rows = list(csv.DictReader(open(path)))
     if not rows:
+        if not required:
+            print(f"[read] {os.path.basename(path)}: no data rows -- skipping")
+            return []
         raise SystemExit(f"FATAL: {path} has no data rows")
     # A pair whose eval CRASHED is written with empty metrics + exit_code=1.
     # Drop it (loudly) so one dead pair doesn't kill the whole figure; it will
@@ -90,11 +100,14 @@ def _read(path):
             r[k] = float(r[k])
         kept.append(r)
     if not kept:
+        if not required:
+            print(f"[read] {os.path.basename(path)}: every pair FAILED -- skipping")
+            return []
         raise SystemExit(f"FATAL: {path} has no rows with metrics (all pairs failed?)")
     return kept
 
 
-def load_teacher(in_dir, all_checkpoints=False):
+def load_teacher(in_dir, all_checkpoints=False, args_include=None):
     """smplx_teacher_*.csv -> {label: {rows, step, source}}.
 
     Run + step come from the checkpoint column (authoritative), not the file
@@ -111,7 +124,9 @@ def load_teacher(in_dir, all_checkpoints=False):
     for p in sorted(glob.glob(os.path.join(in_dir, "*.csv"))):
         if p.endswith("__full.csv"):
             continue
-        rows = _read(p)
+        if args_include and not fnmatch.fnmatch(os.path.basename(p), args_include):
+            continue
+        rows = _read(p, required=False)
         if not rows or "checkpoint" not in rows[0]:
             continue
         ckpt = rows[0]["checkpoint"]
@@ -308,6 +323,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="in_dir", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--include", default=None, metavar="GLOB",
+                   help="only read CSVs whose FILENAME matches this glob, e.g. "
+                        "'*g2_mlp*'. Without it every CSV in --in is read, which "
+                        "is right for a directory of one experiment and wrong "
+                        "for a shared dumping ground of old results.")
     ap.add_argument("--all-checkpoints", action="store_true",
                     help="keep every checkpoint of a run, labeled @<step>k "
                          "(default: latest per run)")
@@ -316,7 +336,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
 
-    teachers = load_teacher(args.in_dir, args.all_checkpoints)
+    teachers = load_teacher(args.in_dir, args.all_checkpoints, args.include)
     if teachers:
         for metric, label, hib in METRICS:
             fig_teacher(teachers, metric, label, hib,
