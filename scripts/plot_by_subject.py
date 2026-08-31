@@ -191,10 +191,21 @@ def load_teacher(in_dir, all_checkpoints=False, args_include=None):
     return out
 
 
-def load_curriculum(in_dir):
-    """*__full.csv -> {run: rows} (body x source matrices)."""
-    return {os.path.basename(p).replace("__full.csv", ""): _read(p)
-            for p in sorted(glob.glob(os.path.join(in_dir, "*__full.csv")))}
+def load_curriculum(in_dir, args_include=None):
+    """*__full.csv -> {run: rows} (body x source matrices).
+
+    Honours --include like the teacher scan does. Without that, filtering to one
+    experiment still produced curriculum figures from every matrix CSV in the
+    directory -- the filter looked applied and was not.
+    """
+    out = {}
+    for p in sorted(glob.glob(os.path.join(in_dir, "*__full.csv"))):
+        if args_include and not fnmatch.fnmatch(os.path.basename(p), args_include):
+            continue
+        rows = _read(p, required=False)
+        if rows:
+            out[os.path.basename(p).replace("__full.csv", "")] = rows
+    return out
 
 
 def per_body(rows, metric):
@@ -344,7 +355,7 @@ def main(argv=None):
     else:
         print("[teacher] no smplx_teacher_*.csv found -- skipping")
 
-    curriculum = load_curriculum(args.in_dir)
+    curriculum = load_curriculum(args.in_dir, args.include)
     if args.curriculum_runs is not None:
         missing = [r for r in args.curriculum_runs if r not in curriculum]
         if missing:
