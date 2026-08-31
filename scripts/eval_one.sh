@@ -195,7 +195,20 @@ if [ "${DRY:-0}" = 1 ]; then
 fi
 
 
+# Nodes to keep off. simurgh4 and simurgh6 kill jobs within seconds of starting,
+# and a run of gen-2 evals on one of them died with "uncorrectable ECC error"
+# during setup -- every pair failed identically, writing a full CSV of exit_code=1
+# rows that looks like a result until you check the metrics column.
+#
+# This MUST be an sbatch CLI flag. #SBATCH headers are read before the job script
+# runs, and sbatch does not honour an SBATCH_EXCLUDE environment variable -- a
+# submission that set one still landed on simurgh6.
+#
+# EXCLUDE_NODES="" opts out; EXCLUDE_NODES=nodeA,nodeB overrides the list.
+EXCLUDE_NODES="${EXCLUDE_NODES-simurgh4,simurgh6}"
+[ -n "$EXCLUDE_NODES" ] && echo "   exclude    : $EXCLUDE_NODES"
+
 CHECKPOINT="$CKPT" OUT="$OUT" BETAS_FILE="$BETAS" \
 BASE_YAML="$BASE" TRAIN_YAML="$trainc" \
 SOURCES="$SOURCES" BODIES="$BODIES" ALL_OBJECTS=1 \
-sbatch slurm_eval_curriculum.sh
+sbatch ${EXCLUDE_NODES:+--exclude="$EXCLUDE_NODES"} slurm_eval_curriculum.sh

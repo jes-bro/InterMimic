@@ -88,11 +88,21 @@ for C in $CELLS; do
         skipped="$skipped $run"
         continue
     fi
+    # An existing CSV is only a result if it holds usable rows. A job that hit a
+    # bad GPU writes a FULL csv whose every row is exit_code=1 with empty
+    # metrics -- 17 lines, looks finished, contains nothing. Count the usable
+    # rows (metrics present AND exit_code 0) and redo the file when there are
+    # none, saying so rather than skipping over a hole.
     if [ -f "$out" ]; then
-        echo "[gen2-eval] SKIP $run: $out already exists (OUT=... or remove it to redo)"
-        n_skip=$((n_skip + 1))
-        skipped="$skipped $run"
-        continue
+        ok=$(awk -F, 'FNR>1 && $5!="" && $10=="0"{n++} END{print n+0}' "$out")
+        if [ "$ok" -gt 0 ]; then
+            echo "[gen2-eval] SKIP $run: $out already has $ok usable rows"
+            n_skip=$((n_skip + 1))
+            skipped="$skipped $run"
+            continue
+        fi
+        echo "[gen2-eval] REDO $run: $out has 0 usable rows (every pair failed) -- replacing"
+        rm -f "$out"
     fi
 
     echo "[gen2-eval] $run -> $out"
@@ -110,7 +120,15 @@ echo
 echo "[gen2-eval] ${n_sub} submitted, ${n_skip} skipped${skipped:+ ($skipped )}"
 [ "$n_sub" -gt 0 ] && cat <<'EOF'
 
-Each job scores 16 bodies at ~12 min/pair, so ~3-4 h -- inside the 8 h walltime.
+Each job scores 16 bodies at ~4-5 min/pair (measured), so ~70-90 min. The job
+script asks for 8 h, which blocks backfill -- prefix SBATCH_TIMELIMIT=02:00:00
+to ask for a realistic slot instead.
+
+A job that finishes in under a minute did NOT succeed: check the CSVs with
+  awk -F, 'FNR>1 && ($5=="" || $10!="0"){print FILENAME": "$1}' eval_results/g2_*allbodies*.csv
+Silence means every row is filled. Re-running this script replaces any CSV whose
+rows all failed.
+
 When they finish:
   rsync -av --include='g2_*_allbodies.csv' --exclude='*' \
     <cluster>:/simurgh2/projects/ret-hoi/InterMimic/eval_results/ \

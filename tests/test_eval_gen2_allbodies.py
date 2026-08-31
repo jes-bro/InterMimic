@@ -89,18 +89,43 @@ def test_latest_epoch_is_printed_not_silent(tmp_path):
     assert "resolved to mimic_00061200.pth" in r.stdout
 
 
-def test_existing_csv_is_not_silently_overwritten(roots, tmp_path):
+HDR = ("body,source,is_identity,avg_steps,human_pose_error,object_pose_error,"
+       "success_rate,success_count,success_total,exit_code,timed_out,checkpoint\n")
+GOOD = "sub1,sub2,False,180.0,0.15,0.12,50.0,26,52,0,False,x.pth\n"
+# What a bad GPU writes: a full CSV whose every row failed. 17 lines, no result.
+FAILED = "sub1,sub2,False,,,,,,,1,False,x.pth\n"
+
+
+def test_existing_csv_with_results_is_not_overwritten(roots, tmp_path):
     out = REPO / "eval_results" / "g2_mlp_ret_stock__f0_ep00054600_pytest.csv"
     out.parent.mkdir(exist_ok=True)
-    out.write_text("body\n")
+    out.write_text(HDR + GOOD)
     try:
         r = run({**roots, "FOLDS": "f0", "CELLS": "ret_stock", "TAG": "pytest"},
                 ["mlp"])
         assert r.returncode == 0, r.stderr
-        assert "already exists" in r.stdout
+        assert "already has 1 usable rows" in r.stdout
         assert "0 submitted, 1 skipped" in r.stdout
     finally:
         out.unlink()
+
+
+def test_all_failed_csv_is_redone_not_skipped(roots, tmp_path):
+    """A simurgh6 ECC job wrote a full CSV of exit_code=1 rows. That is a hole,
+    not a result, and skipping over it is how it stays invisible."""
+    out = REPO / "eval_results" / "g2_mlp_ret_stock__f0_ep00054600_pytest.csv"
+    out.parent.mkdir(exist_ok=True)
+    out.write_text(HDR + FAILED * 16)
+    try:
+        r = run({**roots, "FOLDS": "f0", "CELLS": "ret_stock", "TAG": "pytest"},
+                ["mlp"])
+        assert r.returncode == 0, r.stderr
+        assert "0 usable rows (every pair failed) -- replacing" in r.stdout
+        assert "1 submitted, 0 skipped" in r.stdout
+        assert not out.exists()          # removed so the rerun can write it
+    finally:
+        if out.exists():
+            out.unlink()
 
 
 def test_unknown_fold_is_a_hard_error(roots):
