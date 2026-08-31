@@ -48,7 +48,13 @@ EPOCH_RE = re.compile(r"epoch_num:(\d+)\s+mean_rewards:\[([-\d.eE+]+)\]")
 # 'rewards<i>'. Older code in this tree wrote 'rewards0' for the first, so runs
 # from different vintages disagree -- try both rather than making the caller
 # know which era a checkpoint came from.
-TB_TAGS = ["rewards/iter", "rewards0/iter"]
+# Tried in order; each run uses whichever it has. Three schemes appear in
+# practice: rl_games names the first value 'rewards' (a2c_common.py:950), older
+# code here wrote 'rewards0', and a collaborator's runs use a different logging
+# layer entirely ('train/reward', alongside losses/actor rather than
+# losses/a_loss). CHECK THE EPOCH RANGE the summary prints -- 'train/reward' is
+# only comparable if its step is an epoch count and not a frame count.
+TB_TAGS = ["rewards/iter", "rewards0/iter", "train/reward"]
 # slurm names logs <prefix>-<run>-<jobid>.out; the jobid is the last dash field.
 NAME_RE = re.compile(r"^(?:teacher-|cari4d-bball-)?(.+)-(\d+)\.out$")
 
