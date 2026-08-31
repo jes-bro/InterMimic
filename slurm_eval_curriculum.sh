@@ -96,6 +96,13 @@ echo "[eval] -> $OUT"
 echo "[eval] base=$BASE_YAML train=$TRAIN_YAML betas=${BETAS_FILE:-<base default>}"
 [ -f "$CHECKPOINT" ] || { echo "[eval] ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 
+# RESUME=1 keeps the pairs an earlier run of this same CSV already completed and
+# evaluates only the missing ones -- for a job that hit its walltime part way
+# through. Only pairs with exit_code 0 and real metrics are kept, so failures are
+# retried, and a CSV from a different checkpoint is refused rather than merged.
+RESUME_ARG=""
+[ "${RESUME:-0}" = 1 ] && RESUME_ARG="--resume" && echo "[eval] RESUME=1 (reusing completed pairs in $OUT)"
+
 python -u scripts/eval_per_pair.py \
     --checkpoint "$CHECKPOINT" \
     --bodies $BODIES \
@@ -104,7 +111,7 @@ python -u scripts/eval_per_pair.py \
     --base-yaml "$BASE_YAML" \
     --train-yaml "$TRAIN_YAML" \
     --num-envs "$NUM_ENVS" \
-    --timeout-per-pair "$TIMEOUT" $ALL_OBJ $BETAS_ARG
+    --timeout-per-pair "$TIMEOUT" $ALL_OBJ $BETAS_ARG $RESUME_ARG
 
 echo
 echo "================ EVAL SUMMARY ================"

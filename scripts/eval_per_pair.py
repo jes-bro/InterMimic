@@ -26,6 +26,43 @@ import tempfile
 import time
 from pathlib import Path
 
+RESUME_METRICS = ["avg_steps", "human_pose_error", "object_pose_error",
+                  "success_rate"]
+
+
+def load_resumable(csv_path, checkpoint):
+    """{(body, source): row} for the pairs in csv_path that already SUCCEEDED.
+
+    A pair counts only when exit_code is 0 and its metrics are actually
+    present -- a job that lands on a bad GPU writes a full CSV of exit_code=1
+    rows with empty metrics, and resuming over that would preserve the hole.
+    Timeouts and crashes are likewise retried rather than kept.
+
+    The rows must belong to the SAME checkpoint. Reusing another checkpoint's
+    numbers would produce one CSV silently describing two different policies,
+    which no downstream reader could detect, so that is a hard error.
+    """
+    if not Path(csv_path).exists():
+        return {}
+    with open(csv_path, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    keep = {}
+    for r in rows:
+        if r.get("exit_code") != "0":
+            continue
+        if any(not r.get(m) for m in RESUME_METRICS):
+            continue
+        if r.get("checkpoint") != str(checkpoint):
+            raise SystemExit(
+                f"ERROR: {csv_path} holds results for a different checkpoint.\n"
+                f"       in the file: {r.get('checkpoint')}\n"
+                f"       requested  : {checkpoint}\n"
+                f"       Resuming would mix two policies into one CSV. Delete "
+                f"the file, or point --output-csv somewhere else.")
+        keep[(r["body"], r["source"])] = r
+    return keep
+
+
 METRIC_PATTERNS = {
     "avg_steps":         re.compile(r"Average Execution Steps:\s+([0-9.]+)"),
     "human_pose_error":  re.compile(r"Average Human Pose Error:\s+([0-9.]+)"),
@@ -170,6 +207,11 @@ def main():
                    help="override betas_file in the base yaml to match the checkpoint's "
                         "training betas, e.g. scripts/omomo_betas_neutral.npz. Required "
                         "when the base test config's betas differ from what was trained.")
+    p.add_argument("--resume", action="store_true",
+                   help="reuse the pairs that already succeeded in --output-csv "
+                        "and only run the missing ones. A pair counts as done "
+                        "only if exit_code is 0 AND its metrics are present, so "
+                        "failures and timeouts are retried.")
     p.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parents[1]),
@@ -181,11 +223,27 @@ def main():
               "success_rate", "success_count", "success_total",
               "exit_code", "timed_out", "checkpoint"]
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    # --resume: reuse the pairs that already succeeded. A 16-body eval is ~80
+    # minutes, so a job that hits its walltime three quarters of the way through
+    # should not throw away the twelve pairs it paid for.
+    done = {}
+    if args.resume:
+        done = load_resumable(args.output_csv, args.checkpoint)
+        if done:
+            print(f"[resume] reusing {len(done)} completed pairs from "
+                  f"{args.output_csv}")
+
     with args.output_csv.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for body in args.bodies:
             for source in args.sources:
+                if (body, source) in done:
+                    writer.writerow(done[(body, source)])
+                    f.flush()
+                    print(f"[resume] [body={body},source={source}] already done")
+                    continue
                 metrics, rc, timed_out = run_eval(
                     body, source, args.base_yaml, args.train_yaml,
                     args.checkpoint, args.num_envs, args.repo_root,

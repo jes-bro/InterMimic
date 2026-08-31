@@ -96,16 +96,42 @@ GOOD = "sub1,sub2,False,180.0,0.15,0.12,50.0,26,52,0,False,x.pth\n"
 FAILED = "sub1,sub2,False,,,,,,,1,False,x.pth\n"
 
 
-def test_existing_csv_with_results_is_not_overwritten(roots, tmp_path):
+BODIES16 = ["sub1", "sub2", "sub3", "sub5", "sub6", "sub7", "sub8", "sub9",
+            "sub10", "sub11", "sub12", "sub13", "sub14", "sub15", "sub16",
+            "sub17"]
+
+
+def good_rows(bodies):
+    return "".join(f"{b},sub2,False,180.0,0.15,0.12,50.0,26,52,0,False,x.pth\n"
+                   for b in bodies)
+
+
+def test_complete_csv_is_skipped(roots, tmp_path):
     out = REPO / "eval_results" / "g2_mlp_ret_stock__f0_ep00054600_pytest.csv"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(HDR + GOOD)
+    out.write_text(HDR + good_rows(BODIES16))
     try:
         r = run({**roots, "FOLDS": "f0", "CELLS": "ret_stock", "TAG": "pytest"},
                 ["mlp"])
         assert r.returncode == 0, r.stderr
-        assert "already has 1 usable rows" in r.stdout
+        assert "is complete (16/16)" in r.stdout
         assert "0 submitted, 1 skipped" in r.stdout
+    finally:
+        out.unlink()
+
+
+def test_partial_csv_is_resumed_not_restarted(roots, tmp_path):
+    """A walltime timeout part way through must not throw away paid-for pairs."""
+    out = REPO / "eval_results" / "g2_mlp_ret_stock__f0_ep00054600_pytest.csv"
+    out.parent.mkdir(exist_ok=True)
+    out.write_text(HDR + good_rows(BODIES16[:12]))
+    try:
+        r = run({**roots, "FOLDS": "f0", "CELLS": "ret_stock", "TAG": "pytest"},
+                ["mlp"])
+        assert r.returncode == 0, r.stderr
+        assert "has 12/16 -- running the remaining 4" in r.stdout
+        assert "1 submitted, 0 skipped" in r.stdout
+        assert out.exists()          # kept, not deleted
     finally:
         out.unlink()
 
@@ -120,7 +146,7 @@ def test_all_failed_csv_is_redone_not_skipped(roots, tmp_path):
         r = run({**roots, "FOLDS": "f0", "CELLS": "ret_stock", "TAG": "pytest"},
                 ["mlp"])
         assert r.returncode == 0, r.stderr
-        assert "0 usable rows (every pair failed) -- replacing" in r.stdout
+        assert "has 0/16 usable rows (every pair failed) -- replacing" in r.stdout
         assert "1 submitted, 0 skipped" in r.stdout
         assert not out.exists()          # removed so the rerun can write it
     finally:

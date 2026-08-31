@@ -167,7 +167,9 @@ fi
 # narrower re-run (fewer BODIES, or a TERM_REASON diagnostic) resolves to the SAME
 # default OUT path -- which is how a 21-body result got replaced by a 2-body one.
 # OUT=<path> for a variant, OVERWRITE=1 to genuinely replace.
-if [ -f "$OUT" ] && [ "${OVERWRITE:-0}" != 1 ]; then
+# RESUME=1 is the deliberate exception: it does not discard the file, it keeps
+# the pairs that succeeded and fills in the rest (eval_per_pair.py --resume).
+if [ -f "$OUT" ] && [ "${OVERWRITE:-0}" != 1 ] && [ "${RESUME:-0}" != 1 ]; then
   echo "ERROR: $OUT already exists ($(awk 'END{print NR-1}' "$OUT") data rows)." >&2
   echo "       Refusing to overwrite -- an eval costs GPU-hours and a narrower" >&2
   echo "       re-run writes to this same path." >&2
@@ -210,5 +212,5 @@ EXCLUDE_NODES="${EXCLUDE_NODES-simurgh4,simurgh6}"
 
 CHECKPOINT="$CKPT" OUT="$OUT" BETAS_FILE="$BETAS" \
 BASE_YAML="$BASE" TRAIN_YAML="$trainc" \
-SOURCES="$SOURCES" BODIES="$BODIES" ALL_OBJECTS=1 \
+SOURCES="$SOURCES" BODIES="$BODIES" ALL_OBJECTS=1 RESUME="${RESUME:-0}" \
 sbatch ${EXCLUDE_NODES:+--exclude="$EXCLUDE_NODES"} slurm_eval_curriculum.sh

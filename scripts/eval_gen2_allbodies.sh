@@ -93,23 +93,31 @@ for C in $CELLS; do
     # metrics -- 17 lines, looks finished, contains nothing. Count the usable
     # rows (metrics present AND exit_code 0) and redo the file when there are
     # none, saying so rather than skipping over a hole.
+    n_bodies=$(echo $BODIES | wc -w)
+    resume=0
     if [ -f "$out" ]; then
         ok=$(awk -F, 'FNR>1 && $5!="" && $10=="0"{n++} END{print n+0}' "$out")
-        if [ "$ok" -gt 0 ]; then
-            echo "[gen2-eval] SKIP $run: $out already has $ok usable rows"
+        if [ "$ok" -ge "$n_bodies" ]; then
+            echo "[gen2-eval] SKIP $run: $out is complete ($ok/$n_bodies)"
             n_skip=$((n_skip + 1))
             skipped="$skipped $run"
             continue
+        elif [ "$ok" -gt 0 ]; then
+            # Partial -- a walltime timeout, or a crash part way through. Keep
+            # what it paid for and evaluate only the missing bodies.
+            echo "[gen2-eval] RESUME $run: $out has $ok/$n_bodies -- running the remaining $((n_bodies - ok))"
+            resume=1
+        else
+            echo "[gen2-eval] REDO $run: $out has 0/$n_bodies usable rows (every pair failed) -- replacing"
+            rm -f "$out"
         fi
-        echo "[gen2-eval] REDO $run: $out has 0 usable rows (every pair failed) -- replacing"
-        rm -f "$out"
     fi
 
     echo "[gen2-eval] $run -> $out"
     if [ "${DRY:-0}" = 1 ]; then
-        DRY=1 BODIES="$BODIES" OUT="$out" sh scripts/eval_one.sh "$run" "$ck"
+        DRY=1 RESUME="$resume" BODIES="$BODIES" OUT="$out" sh scripts/eval_one.sh "$run" "$ck"
     else
-        BODIES="$BODIES" OUT="$out" sh scripts/eval_one.sh "$run" "$ck"
+        RESUME="$resume" BODIES="$BODIES" OUT="$out" sh scripts/eval_one.sh "$run" "$ck"
     fi
     n_sub=$((n_sub + 1))
 done
