@@ -156,6 +156,12 @@ def main():
                         "steps by frames, e.g. 65536 per epoch) so they share an "
                         "axis with runs logged against epoch. Reports every "
                         "conversion it makes.")
+    p.add_argument("--max-epochs", type=int, default=None,
+                   help="clip every series at this epoch. Use it when runs got "
+                        "different amounts of wall time: comparing their FINAL "
+                        "rewards then compares 'stopped later' with 'better', "
+                        "and clipping to the shortest run's endpoint is the "
+                        "honest cut.")
     p.add_argument("--relative", action="store_true",
                    help="plot epochs since each run's OWN first epoch. Needed "
                         "when comparing warm-started runs (which inherit the "
@@ -240,6 +246,9 @@ def main():
     series, skipped = [], []
     for label, ep, rw in tb_series:
         ep = normalize(label, ep)
+        if a.max_epochs is not None:
+            keep_m = ep <= a.max_epochs
+            ep, rw = ep[keep_m], rw[keep_m]
         if len(ep) < a.min_epochs:
             skipped.append((label, len(ep)))
             continue
@@ -256,6 +265,9 @@ def main():
             ep.append(e); rw.append(r)
         ep = np.concatenate(ep) if ep else np.array([])
         rw = np.concatenate(rw) if rw else np.array([])
+        if a.max_epochs is not None:
+            keep_m = ep <= a.max_epochs
+            ep, rw = ep[keep_m], rw[keep_m]
         if len(ep) < a.min_epochs:
             skipped.append((label, len(ep)))
             continue
