@@ -28,6 +28,7 @@ Missing (body, run) cells are drawn as a GAP labeled n/r, never as 0.
 import argparse
 import csv
 import glob
+import re
 import math
 import os
 import sys
@@ -66,6 +67,11 @@ def ordered_bodies(bodies):
 
 
 # ------------------------------------------------------------------ loading
+# A rolling mimic.pth has no step in its name. It is by definition the newest
+# checkpoint a run has, so it sorts above any numbered one.
+FINAL_STEP = 10 ** 12
+
+
 def _read(path):
     rows = list(csv.DictReader(open(path)))
     if not rows:
@@ -97,11 +103,33 @@ def load_teacher(in_dir, all_checkpoints=False):
     Everything dropped is printed, so a thinner chart is never a silent one.
     """
     by_run_step = {}                       # (run, step) -> (rows, source, path)
-    for p in sorted(glob.glob(os.path.join(in_dir, "smplx_teacher_*.csv"))):
+    # Glob every CSV rather than only smplx_teacher_*: run and step come from
+    # the checkpoint column, so the FILE name carries no information and
+    # requiring a convention just means a differently-named eval is silently
+    # skipped. Matrices (*__full.csv) go to load_curriculum, and anything
+    # without a checkpoint column is not a teacher eval at all.
+    for p in sorted(glob.glob(os.path.join(in_dir, "*.csv"))):
+        if p.endswith("__full.csv"):
+            continue
         rows = _read(p)
+        if not rows or "checkpoint" not in rows[0]:
+            continue
         ckpt = rows[0]["checkpoint"]
-        run = ckpt.split("/")[1].replace("smplx_teacher_", "")
-        step = int(os.path.basename(ckpt).split("_")[-1].split(".")[0])
+        # The run directory is the path component named for the experiment --
+        # found by name, not by position. Position breaks the moment a
+        # checkpoint lives somewhere other than checkpoints/<run>/, e.g. a
+        # collaborator's tar unpacked to collab/jm/checkpointsjm/<run>/.
+        parts = ckpt.split("/")
+        run = next((x for x in parts if x.startswith("smplx_")), None)
+        if run is None:
+            print(f"[teacher] {os.path.basename(p)}: no smplx_* component in "
+                  f"checkpoint path {ckpt!r} -- skipping")
+            continue
+        run = run.replace("smplx_teacher_", "")
+        # A bare mimic.pth is the rolling checkpoint: the run's latest, with no
+        # step in its name. Treat it as newest rather than failing to parse it.
+        m = re.search(r"(\d+)\.pth$", os.path.basename(ckpt))
+        step = int(m.group(1)) if m else FINAL_STEP
         key = (run, step)
         if key in by_run_step:
             keep, drop = max(by_run_step[key], (rows, rows[0]["source"], p),
@@ -120,13 +148,18 @@ def load_teacher(in_dir, all_checkpoints=False):
             latest[run] = max(latest.get(run, step), step)
         for (run, step) in sorted(by_run_step):
             if step != latest[run]:
-                print(f"[teacher] {run}: dropping step {step:,} "
-                      f"(latest is {latest[run]:,}; --all-checkpoints keeps both)")
+                print(f"[teacher] {run}: dropping step "
+                      f"{'final' if step == FINAL_STEP else format(step, ',')} "
+                      f"(latest is "
+                      f"{'final' if latest[run] == FINAL_STEP else format(latest[run], ',')}"
+                      f"; --all-checkpoints keeps both)")
         by_run_step = {k: v for k, v in by_run_step.items() if k[1] == latest[k[0]]}
 
     dupes = {run for (run, _) in by_run_step
              if sum(1 for (r, _) in by_run_step if r == run) > 1}
-    labels = {key: (f"{key[0]}@{key[1] // 1000}k" if key[0] in dupes else key[0])
+    def _steplab(st):
+        return "final" if st == FINAL_STEP else f"{st // 1000}k"
+    labels = {key: (f"{key[0]}@{_steplab(key[1])}" if key[0] in dupes else key[0])
               for key in by_run_step}
     # Two steps of a run inside the same 1000-step bucket would share an @<N>k
     # label and one would silently vanish -- fall back to exact-step labels.
@@ -135,7 +168,8 @@ def load_teacher(in_dir, all_checkpoints=False):
         counts[lab] = counts.get(lab, 0) + 1
     for key, lab in labels.items():
         if counts[lab] > 1:
-            labels[key] = f"{key[0]}@{key[1]}"
+            labels[key] = (f"{key[0]}@final" if key[1] == FINAL_STEP
+                           else f"{key[0]}@{key[1]}")
     out = {}
     for key, (rows, source, _p) in sorted(by_run_step.items()):
         out[labels[key]] = {"rows": rows, "step": key[1], "source": source}
