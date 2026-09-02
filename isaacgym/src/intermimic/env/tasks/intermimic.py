@@ -132,10 +132,11 @@ class InterMimic(Humanoid_SMPLX):
         if bad:
             raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} "
                              f"(only 'pose', 'freeFlightGate').")
-        badf = sorted(k for k in (rt.get('freeFlightGate') or {}) if k != 'enable')
+        badf = sorted(k for k in (rt.get('freeFlightGate') or {})
+                      if k not in ('enable', 'reward', 'resets'))
         if badf:
             raise ValueError(f"[intermimic] unknown rewardTerms.freeFlightGate key(s) "
-                             f"{badf} (only 'enable').")
+                             f"{badf} (only 'enable', 'reward', 'resets').")
         badp = sorted(k for k in (rt.get('pose') or {}) if k not in ('enable', 'lambda'))
         if badp:
             raise ValueError(f"[intermimic] unknown rewardTerms.pose key(s) {badp} "
@@ -500,11 +501,28 @@ class InterMimic(Humanoid_SMPLX):
         # any release error, starving learning on the frames the policy CAN
         # control. rcg already gates this way; this extends it to ro. Default
         # OFF => reward byte-identical to stock.
+        # The reward half and the RESET half are independent switches, because
+        # they are wanted independently: r8 trains without reward gating, but its
+        # object and igRatio resets are what kill it (measured 2026-09-02 on r8's
+        # converged policy, one criterion at a time -- object alone 23 steps / 0%
+        # success, igRatio alone 96-99 steps of 101 / 0%, contactSteps alone 100
+        # steps / 100%, against 100 / 100% with all three off). So contactSteps is
+        # deliberately NOT gated: it costs nothing ungated, and gating a criterion
+        # that never fires only discards signal on datasets where it would.
+        #   freeFlightGate: {reward: false, resets: true}
+        # Legacy `enable: true` still means both, so configs written before the
+        # split keep their meaning.
         ffg_cfg = (cfg['env'].get('rewardTerms', {}) or {}).get('freeFlightGate', {}) or {}
-        self._free_flight_gate = bool(ffg_cfg.get('enable', False))
+        _ffg_enable = bool(ffg_cfg.get('enable', False))
+        self._ffg_reward = bool(ffg_cfg.get('reward', _ffg_enable))
+        self._ffg_resets = bool(ffg_cfg.get('resets', _ffg_enable))
+        # Either half needs the contact_obj channel, so one flag guards the read.
+        self._free_flight_gate = self._ffg_reward or self._ffg_resets
         if self._free_flight_gate:
-            print("[intermimic] freeFlightGate enabled: object reward neutral on "
-                  "reference no-contact frames")
+            print(f"[intermimic] freeFlightGate: reward={self._ffg_reward} "
+                  f"(object reward neutral on reference no-contact frames) "
+                  f"resets={self._ffg_resets} (object + igRatio resets gated on "
+                  f"reference contact; contactSteps NOT gated)", flush=True)
 
         # --- Early-termination thresholds, cfg-driven (resetThresholds block). ---
         # Defaults REPRODUCE the historical hardcoded values, so a cfg without the
@@ -2041,10 +2059,19 @@ class InterMimic(Humanoid_SMPLX):
                     "[intermimic] freeFlightGate is enabled but the contact_obj "
                     "channel could not be read -- refusing to train with a gate "
                     "that silently does nothing.")
-            ro = ro * ref_contact + (1.0 - ref_contact)   # neutral (1.0) when free
-            # a divergence reset on a free-flying ball is the same trap in reset
-            # form; only relevant when object resets are enabled at all
-            object_reset = torch.logical_and(object_reset, ref_contact > 0.5)
+            if self._ffg_reward:
+                ro = ro * ref_contact + (1.0 - ref_contact)   # neutral (1.0) when free
+            if self._ffg_resets:
+                # A divergence reset on a free-flying ball is the same trap in
+                # reset form: the object went where physics sent it, and the
+                # reference's own arc is not executable, so the episode dies for
+                # the reference's sins. igRatio is gated for the same reason and
+                # matters more than it looks -- ungated it kills at frames 96-99
+                # of 101, which is the layup. contactSteps is deliberately left
+                # alone: measured free (100% completion ungated).
+                held = ref_contact > 0.5
+                object_reset = torch.logical_and(object_reset, held)
+                ig_reset = torch.logical_and(ig_reset, held)
         # Shape the per-aspect factors into one reward. The AND-gate rationale,
         # why a root helps at all, and why 'geometric' and 'geometric_all' differ
         # in where the pose factor lands, are all in utils/reward_shape.py.
