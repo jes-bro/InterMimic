@@ -15,6 +15,7 @@ import imageio
 
 from ...utils.path_utils import resolve_data_path
 from ...utils.psi_update import psi_buffer_update
+from ...utils import reward_shape
 
 
 # ----------------------------------------------------------------------------
@@ -449,15 +450,17 @@ class InterMimic(Humanoid_SMPLX):
         # to remove the size bias (default reward penalizes smaller bodies more
         # for the same physical tracking deviation).
         self._body_normalized_reward = cfg['env'].get('bodyNormalizedReward', False)
-        # rewardShape: 'product' (default, InterMimic's original rb*ro*rig*rcg)
-        # or 'geometric' (its 4th root). See the note at the product itself for
-        # why the shape matters. Unknown values are an error, not a silent
+        # rewardShape: 'product' (default, InterMimic's original rb*ro*rig*rcg),
+        # 'geometric' (its 4th root, with the pose factor applied OUTSIDE the
+        # root exactly as r7..r14 ran), or 'geometric_all' (the root taken over
+        # every enabled factor, pose included). See utils/reward_shape.py for
+        # why both roots exist. Unknown values are an error, not a silent
         # fallback to the default -- a typo here would look like a null result.
         self._reward_shape = cfg['env'].get('rewardShape', 'product')
-        if self._reward_shape not in ('product', 'geometric'):
+        if self._reward_shape not in reward_shape.VALID_SHAPES:
             raise ValueError(
-                f"[intermimic] rewardShape={self._reward_shape!r}; expected "
-                f"'product' or 'geometric'")
+                f"[intermimic] rewardShape={self._reward_shape!r}; expected one "
+                f"of {reward_shape.VALID_SHAPES}")
         self._env_body_height = None
         if self._body_normalized_reward:
             if getattr(self, 'subject_bodies', None) is not None:
@@ -2042,30 +2045,21 @@ class InterMimic(Humanoid_SMPLX):
             # a divergence reset on a free-flying ball is the same trap in reset
             # form; only relevant when object resets are enabled at all
             object_reset = torch.logical_and(object_reset, ref_contact > 0.5)
-        reward = rb * ro * rig * rcg
-        # Opt-in (rewardShape: geometric): the Nth root of the same product.
+        # Shape the per-aspect factors into one reward. The AND-gate rationale,
+        # why a root helps at all, and why 'geometric' and 'geometric_all' differ
+        # in where the pose factor lands, are all in utils/reward_shape.py.
         #
-        # WHY. The product is an AND gate, which is the point -- a policy that
-        # tracks the body and drops the object must not score. But it also makes
-        # every term's gradient proportional to the OTHERS: with the bball arm's
-        # held-frame values (rb .304 ro .402 rig .422 rcg .240) the product is
-        # 0.012 and dR/d(rcg) = rb*ro*rig = 0.052, so improving contact barely
-        # moves the reward BECAUSE the rest are bad. Nothing can be fixed first.
-        #
-        # The geometric mean is a monotone transform of the same product, so the
-        # optimum and the AND property are untouched (any zero still zeros it),
-        # but the value lands at 0.334 instead of 0.012 and
-        # dR/d(rcg) = R/(N*rcg) = 0.35 -- ~7x larger, and it no longer collapses
-        # when the other factors are weak.
-        #
-        # NOT a sum: additive is what the multiplicative form was introduced to
-        # fix, and it re-opens exactly the bank-rb-and-abandon-the-object
-        # exploit that the r4_human1m arm demonstrated (28.7% completion at
+        # NOT a sum, under any shape: additive is what the multiplicative form was
+        # introduced to fix, and it re-opens exactly the bank-rb-and-abandon-the-
+        # object exploit that the r4_human1m arm demonstrated (28.7% completion at
         # reward 0.14, with 10.6% of episodes falling).
-        if self._reward_shape == 'geometric':
-            # clamp: the terms are exp(-x) so they are positive, but a zero from
-            # underflow would make the root's gradient non-finite.
-            reward = torch.stack([rb, ro, rig, rcg], dim=0).clamp_min(1e-8).prod(dim=0) ** 0.25
+        #
+        # Term 1 (opt-in): relative joint-angle pose factor. Computed here rather
+        # than after the shaping because 'geometric_all' needs it INSIDE the root;
+        # the other shapes apply it outside, exactly as they always have.
+        pose_factor = self._compute_pose_reward() if self._pose_term_enable else None
+        reward = reward_shape.combine([rb, ro, rig, rcg], self._reward_shape,
+                                      pose=pose_factor)
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
                 self._log_reward_breakdown(rb, ro, rig, rcg,
@@ -2074,9 +2068,6 @@ class InterMimic(Humanoid_SMPLX):
                 if not getattr(self, '_rbd_warned', False):
                     print("[reward-breakdown] disabled after error: %r" % (_rbde,), flush=True)
                     self._rbd_warned = True
-        # Term 1 (opt-in): relative joint-angle pose factor, layered on the product.
-        if self._pose_term_enable:
-            reward = reward * self._compute_pose_reward()
         self.rew_buf[:] = reward
         kinematic_reset = torch.logical_or(human_reset, object_reset)
         self.contact_reset = (self.contact_reset + contact_reset) * contact_reset
