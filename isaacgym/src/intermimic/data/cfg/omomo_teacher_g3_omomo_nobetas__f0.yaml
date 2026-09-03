@@ -1,0 +1,226 @@
+# ARM A -- THE RECIPE ON OMOMO. f0's 43 bodies, OMOMO retargeted references.
+# Twin of omomo_teacher_g3_bball__f0.yaml: diff them with scripts/cfg_diff.py and
+# only the motion data and the object's measured physical properties differ.
+#
+# THE RECIPE (identical in this arm and its twin on the other dataset):
+#   obsHorizons [1,4,7,10,13,16] | numObs 9594 (6 x 1599, NO betas)
+#   rewardShape geometric | rolloutLength 50 | initVel True | PSI 3
+#   pose lambda 0.02 | bodyNormalizedReward | cpuMotionData
+#   freeFlightGate {reward: false, resets: true}
+#   resetThresholds human 0.5 | object 0.5 | igRatio 2.0 | contactSteps 10
+#   stock optimizer, 2048 envs, buffer multiplier 12.0, fresh start
+#
+# NO BETAS CONDITIONING. With per-body contact retargeting in place, each body
+# already reads a reference re-solved for its own proportions (sub16 2.7 -> 0.13
+# cm), so the compensation betas used to inform is handled in the data. Body
+# positions are also in the observation, so bone lengths are recoverable from it
+# anyway. Whether betas add anything on top is the g3_omomo (with-betas) arm's
+# job to answer -- it is the ablation, one knob from this one.
+#
+# rolloutLength 50 is not a preference. Start sampling is
+# randint(0, max(1, T - rolloutLength)) (intermimic.py:1269); at 300, 8538 of 8842
+# OMOMO clips (96.6%) could only ever start at frame 0, making stateInit Hybrid
+# silently equal to Start, and PSI harvests only where T >= R (psi_update.py:104)
+# so it was inert on 96% of the data. At 50 nothing is pinned, every clip is
+# PSI-eligible, and the ceiling across all motion dirs is 60.
+#
+# TERMINATIONS: all four criteria live, object + igRatio gated on reference
+# contact. Measured 2026-09-02 on r8's converged policy, one at a time:
+#   object 0.5 alone 23 steps/0% (fatal) | igRatio 2.0 alone 96-99 steps/0%
+#   (kills at the layup) | contactSteps 10 alone 100 steps/100% (free)
+#   all four live + object/ig gated: 100 steps, 100%, reward 13.4
+# Confirmed on retargeted references too (r12: 100 steps/100%, reward 13.61 vs
+# 13.58 ungated). freeFlightGate.reward stays FALSE -- r8 trains without it and
+# r3's breakdown refuted it (ro flat across the contact split, .538 vs .580).
+#
+# Baseline: smplx_teacher_g2_mlp_ret_stock__f0 (same data, bodies, optimizer, envs).
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub:
+  - sub2
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/OMOMO_new
+  numEnvs: 4096
+  numObs: 9594
+  objectDensity: 200
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2
+  rewardShape: geometric
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2

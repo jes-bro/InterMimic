@@ -1,0 +1,228 @@
+# ARM B -- THE SAME RECIPE ON THE EGOEXO4D BASKETBALL RECONSTRUCTION.
+# Twin of omomo_teacher_g3_omomo_nobetas__f0.yaml.
+#
+# THE RECIPE (identical in this arm and its twin on the other dataset):
+#   obsHorizons [1,4,7,10,13,16] | numObs 9594 (6 x 1599, NO betas)
+#   rewardShape geometric | rolloutLength 50 | initVel True | PSI 3
+#   pose lambda 0.02 | bodyNormalizedReward | cpuMotionData
+#   freeFlightGate {reward: false, resets: true}
+#   resetThresholds human 0.5 | object 0.5 | igRatio 2.0 | contactSteps 10
+#   stock optimizer, 2048 envs, buffer multiplier 12.0, fresh start
+#
+# NO BETAS CONDITIONING. With per-body contact retargeting in place, each body
+# already reads a reference re-solved for its own proportions (sub16 2.7 -> 0.13
+# cm), so the compensation betas used to inform is handled in the data. Body
+# positions are also in the observation, so bone lengths are recoverable from it
+# anyway. Whether betas add anything on top is the g3_omomo (with-betas) arm's
+# job to answer -- it is the ablation, one knob from this one.
+#
+# DATA: the bball clip (optj3d_cf2 lineage) solved onto each of f0's 43 bodies,
+# body-major, built by scripts/retarget_layout.py from the retarget job's log.
+# Bodies that FAIL the solve must be named in --exclude and dropped from
+# subjectBodies here too.
+#
+# OBJECT PHYSICS -- measured, not tuned, and NOT part of the recipe:
+#   objectDensity 86   mesh volume x 200 gave 1.45 kg; a real basketball is
+#                      ~0.62 kg (scripts/object_density.py --mass 0.624)
+#   restitution 0.85   regulation bounce: 1.8 m drop -> 1.2-1.4 m, COR ~0.85.
+#                      PhysX averages object and plane, so both are set.
+#
+# Dropping betas conditioning also removes a trap: the clip is sub100_bball_000.pt,
+# so the task would read its SOURCE subject as 100 and find "sub100" in the OMOMO
+# betas file -- which is the SYNTHETIC OMOMO body, a different person entirely.
+# The lookup would have succeeded and conditioned on the wrong identity silently.
+# With betas off there is nothing to look up. If betas are ever reinstated here,
+# the clip must be renumbered (sub200 is free) and the CARI4D subject's SMPL-H
+# betas re-fit into the 16-dim neutral SMPL-X space first.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub:
+  - sub100
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_optj3d_cf2
+  numEnvs: 4096
+  numObs: 9594
+  objectDensity: 86
+  objectShapeProps:
+    restitution: 0.85
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.85
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_bball_f0_bodymajor
+  rewardShape: geometric
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
