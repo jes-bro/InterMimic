@@ -82,3 +82,20 @@ def test_default_bodies_include_the_heldout_trio_and_exclude_sub4():
     """
     assert {"sub10", "sub13", "sub16"} <= set(crc.DEFAULT_BODIES)
     assert "sub4" not in crc.DEFAULT_BODIES
+
+
+def test_omomo_arm_gets_the_omomo_generator(capsys):
+    """An OMOMO arm may be handed slurm_retarget_gen.sh; a non-OMOMO one must not.
+
+    That generator defaults --motion-dir to InterAct/OMOMO_new and writes a FLAT
+    per-target layout, so pointing it at the bball tree would solve the wrong
+    clips into the wrong shape. Printing a confidently wrong command is worse
+    than printing none.
+    """
+    src = open(os.path.join(REPO, "scripts/check_retarget_coverage.py")).read()
+    # the generator command is emitted only under the OMOMO branch
+    omomo_branch = src.split('if motion == "InterAct/OMOMO_new":')[1].split("else:")[0]
+    assert "slurm_retarget_gen.sh" in omomo_branch
+    other_branch = src.split('if motion == "InterAct/OMOMO_new":')[1].split("else:")[1]
+    assert "sbatch slurm_retarget_gen.sh" not in other_branch
+    assert "retarget_layout.py" in other_branch

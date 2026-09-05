@@ -109,15 +109,45 @@ def main(argv=None):
 
     print(f"\n{len(missing_bodies)} body/bodies incomplete: {' '.join(missing_bodies)}")
     print("The eval would raise FileNotFoundError at startup rather than score them\n"
-          "against the source reference. Generate the missing solves -- the job is\n"
-          "ADDITIVE, it writes new per-body dirs beside the existing ones and does\n"
-          "not touch bodies that are already there:\n")
-    print(f"  SOURCE={sources[0] if sources else 'sub2'} \\")
-    print(f"  TARGETS='{' '.join(missing_bodies)}' \\")
-    print(f"  OUT={rt} \\")
-    print(f"  sbatch slurm_retarget_gen.sh")
+          "against the source reference.\n")
+
+    # WHICH generator applies depends on the arm's motion data, and getting it
+    # wrong is worse than saying nothing: slurm_retarget_gen.sh defaults
+    # --motion-dir to InterAct/OMOMO_new and writes a FLAT per-target layout, so
+    # aiming it at a non-OMOMO arm would solve the wrong clips into the wrong
+    # shape. Recognise the OMOMO case, and refuse to invent a command otherwise.
+    motion = env["motion_file"]
+    src = sources[0] if sources else "sub2"
+    if motion == "InterAct/OMOMO_new":
+        print("Generate the missing solves. The job is ADDITIVE -- it writes new\n"
+              "per-body dirs beside the existing ones and does not touch bodies that\n"
+              "are already there:\n")
+        print(f"  SOURCE={src} \\")
+        print(f"  TARGETS='{' '.join(missing_bodies)}' \\")
+        print(f"  OUT={rt} \\")
+        print(f"  sbatch slurm_retarget_gen.sh")
+    else:
+        print(f"This arm's references are NOT OMOMO (motion_file={motion}), so\n"
+              f"slurm_retarget_gen.sh does NOT apply -- it would solve\n"
+              f"InterAct/OMOMO_new (its --motion-dir default) into a FLAT layout,\n"
+              f"while intermimic.py:314 needs BODY-MAJOR <dir>/<body>/<clip>.pt.\n")
+        print("For the EgoExo4D bball lineage the pipeline is two steps:\n"
+              "  1. solve each missing body -- slurm_cari4d_bball_retarget.sh\n"
+              "     (writes flat InterAct/behave_cari4d_optj3d_cf2_<body>/<clip>.pt)\n"
+              "  2. assemble the body-major tree, with the per-body verdicts that\n"
+              "     decide whether a solve is usable at all --\n"
+              "     scripts/retarget_layout.py\n")
+        print(f"  Needed: source={src}, targets='{' '.join(missing_bodies)}',\n"
+              f"          motion-dir={motion}, out={rt} (body-major)\n")
+        print("Deliberately not printing a ready-made command: retarget_contact.py\n"
+              "exits 0 even when a solve makes the reference WORSE, so a body has to\n"
+              "clear retarget_layout.py's verdict before it can be scored. Check the\n"
+              "verdicts rather than assuming the files appearing means it worked.")
+
     print("\nThen re-run this check. Until it passes, either wait for the solve or\n"
-          "evaluate only the covered bodies (BODIES=\"...\" sh scripts/eval_one.sh ...).")
+          "evaluate only the covered bodies (BODIES=\"...\" sh scripts/eval_one.sh ...)\n"
+          "-- but a retargeting arm scored without its held-out solves has no\n"
+          "generalization number, which is usually the number you wanted.")
     return 2
 
 
