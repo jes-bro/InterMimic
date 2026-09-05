@@ -21,7 +21,16 @@
 #   F0_EPOCH=00054600   which numbered checkpoint the fold-0 runs are scored at.
 #                       "latest" takes the newest, PRINTED so it stays on record.
 #   F0_ROOT / F1_ROOT   where each fold's checkpoints live
-#   TAG=allbodies       goes in the CSV name
+#   TAG=allbodies       goes in the CSV name. USE A NEW TAG when the eval
+#                       pipeline changes: the skip-if-complete check below counts
+#                       usable rows and cannot tell which pipeline wrote them, so
+#                       a stale CSV silently protects itself. CSVs tagged
+#                       'allbodies' predate the per-arm eval configs -- they were
+#                       produced by the retired shared template, which scored the
+#                       retargeting cells against the UN-retargeted reference at
+#                       1024 envs, through a parser that recorded the first
+#                       progress snapshot instead of the final metrics. They are
+#                       NOT comparable to anything tagged after 2026-09-04.
 #
 # Fold 1's checkpoints came from a collaborator and live under a different root
 # with a rolling mimic.pth rather than numbered snapshots, which is why the two
@@ -126,23 +135,29 @@ done
 
 echo
 echo "[gen2-eval] ${n_sub} submitted, ${n_skip} skipped${skipped:+ ($skipped )}"
-[ "$n_sub" -gt 0 ] && cat <<'EOF'
+[ "$n_sub" -gt 0 ] && cat <<EOF
 
 Each job scores 16 bodies at ~4-5 min/pair (measured), so ~70-90 min. The job
 script asks for 8 h, which blocks backfill -- prefix SBATCH_TIMELIMIT=02:00:00
 to ask for a realistic slot instead.
 
-A job that finishes in under a minute did NOT succeed: check the CSVs with
-  awk -F, 'FNR>1 && ($5=="" || $10!="0"){print FILENAME": "$1}' eval_results/g2_*allbodies*.csv
-Silence means every row is filled. Re-running this script replaces any CSV whose
-rows all failed.
+A job that finishes in under a minute did NOT succeed. These commands are built
+from the TAG you actually ran ($TAG), because a CSV from a different tag is a
+different pipeline: results written before the per-arm eval configs landed used
+the retired shared template, scored the retargeting cells against the
+UN-retargeted reference, and recorded the first progress snapshot rather than the
+final metrics. Mixing tags in one plot compares two different measurements.
+
+  awk -F, 'FNR>1 && (\$5=="" || \$10!="0"){print FILENAME": "\$1}' \\
+      eval_results/g2_*_${TAG}.csv
+Silence means every row is filled.
 
 When they finish:
-  rsync -av --include='g2_*_allbodies.csv' --exclude='*' \
-    <cluster>:/simurgh2/projects/ret-hoi/InterMimic/eval_results/ \
-    ~/Downloads/eval_resultsaug31/
-  python3 scripts/plot_gen2_by_subject.py --in ~/Downloads/eval_resultsaug31 \
-    --include 'g2_mlp_*allbodies*' \
-    --out ~/Downloads/eval_resultsaug31/gen2_mlp_by_subject.png
+  rsync -av --include='g2_*_${TAG}.csv' --exclude='*' \\
+    <cluster>:/simurgh2/projects/ret-hoi/InterMimic/eval_results/ \\
+    ~/Downloads/eval_results/
+  python3 scripts/plot_gen2_by_subject.py --in ~/Downloads/eval_results \\
+    --include 'g2_mlp_*_${TAG}' \\
+    --out ~/Downloads/eval_results/gen2_mlp_by_subject.png
 EOF
 exit 0
