@@ -93,11 +93,23 @@ import sys, re, yaml
 envc, nsyn = sys.argv[1], int(sys.argv[2])
 c = yaml.safe_load(open(envc))["env"]
 nobs = int(c["numObs"])
-arch = {3230: "mlp", 6524: "transformer"}.get(nobs)
-if arch is None:
-    print(f'echo "ERROR: unexpected numObs={nobs} in {envc} (want 3230 MLP / 6524 transformer)" >&2; exit 2')
-    sys.exit()
+# Arch and observation width are DERIVED, not looked up. A table of magic
+# numObs values only knows the two STOCK horizon sets (MLP [1,16] -> 3230,
+# transformer [0,1,4,16] -> 6524) and rejects every multi-horizon arm, which is
+# all of g3. See intermimic.py:355-357: useTransformerObs picks the arch and its
+# default horizons, obsHorizons overrides them, and the transformer folds betas
+# into EACH token while the MLP appends them once.
 betas  = c.get("betas_file")
+arch   = "transformer" if c.get("useTransformerObs") else "mlp"
+_H     = c.get("obsHorizons") or ([0, 1, 4, 16] if arch == "transformer" else [1, 16])
+_B     = 32 if betas else 0
+_want  = len(_H) * (1599 + _B) if arch == "transformer" else len(_H) * 1599 + _B
+if nobs != _want:
+    print(f'echo "ERROR: numObs={nobs} in {envc} disagrees with arch={arch}, '
+          f'{len(_H)} horizon(s), betas={bool(betas)} -- expected {_want}. '
+          f'Refusing to guess: a wrong obs width loads and produces silently '
+          f'wrong numbers." >&2; exit 2')
+    sys.exit()
 src    = c.get("dataSub") or []
 bodies = c.get("subjectBodies") or []
 num = lambda s: (int(re.match(r"sub(\d+)", str(s)).group(1)) if re.match(r"sub(\d+)", str(s)) else -1)

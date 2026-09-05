@@ -73,6 +73,13 @@ def main():
             continue
         f = lambda v, w, spec: (format(v, spec) if isinstance(v, (int, float))
                                 else "--").rjust(w)
+        # rl_games initialises last_mean_rewards to -100500 (a2c_common.py:180)
+        # and only overwrites it when a NEW BEST is recorded. The rolling
+        # mimic.pth therefore usually carries the sentinel, not a reward.
+        # Printing it as a number invites reading -100500 as a real value.
+        if isinstance(vals['last_mean_rewards'], (int, float)) \
+                and vals['last_mean_rewards'] <= -100000:
+            vals['last_mean_rewards'] = "n/a"
         print(f"{f(vals['epoch'], 9, 'd' if isinstance(vals['epoch'], int) else '.0f')} "
               f"{f(vals['frame'], 14, ',d' if isinstance(vals['frame'], int) else '.0f')} "
               f"{f(vals['last_mean_rewards'], 8, '.3f')}  {path}")
