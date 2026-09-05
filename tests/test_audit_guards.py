@@ -139,7 +139,7 @@ def main():
     #     our code), so a valid eval config gains a 'seed' key at runtime. The
     #     validator MUST accept it -- otherwise every eval crashes (it did).
     print("[1b] runtime-injected keys (rl_games player path):")
-    base_env = (yaml.safe_load(open(os.path.join(CFG_DIR, "omomo_test_multibody_xf.yaml"))) or {}).get("env", {})
+    base_env = (yaml.safe_load(open(os.path.join(CFG_DIR, "omomo_eval_v1_multibody_xf.yaml"))) or {}).get("env", {})
     check("test config + injected seed passes",
           lambda: validate_env_config({**base_env, "seed": 42}))
 

@@ -1,9 +1,31 @@
-# Transformer eval/test config. Identical to omomo_test_multibody.yaml (Start init,
-# enableEvaluation, per-env body from subjectBodies) EXCEPT the observation layout is
-# the transformer one: numObs 6524 + useTransformerObs. Use this as --base-yaml when
-# evaluating a TRANSFORMER checkpoint (xf / xf_aug teachers, ist_neutral_bn_xf,
-# SYNAUG_XF_*, ALLON_NOSUB_XF, SLOW_*). betas_file is overridden per-run by
-# eval_per_pair.py --betas-file so the beta obs matches the checkpoint's training betas.
+# V1 eval config -- for PRE-GEN-2 checkpoints ONLY.
+#
+# This file was `omomo_test_multibody.yaml`. It began as a chunk-1 multi-body
+# SMOKE TEST (verify per-env asset loading: same policy, same motion, several
+# bodies in parallel) and was then adopted as the shared eval template for every
+# checkpoint. Renamed on 2026-09-04 so it can no longer be mistaken for a default.
+#
+# WHAT WENT WRONG. As a shared template it silently supplied its OWN value for
+# every feature added to the task after it was written. It has no
+# retargetedMotionDir, so every gen-2 retargeting arm was scored against the
+# UN-retargeted reference -- a different target than it trained to track. It has
+# no rewardTerms.freeFlightGate, so a gen-3 arm would have had object and igRatio
+# resets firing on reference free-flight frames (measured: ~0%% success for a
+# policy that completes the clip). It has no obsHorizons, so a multi-horizon arm
+# cannot load against it at all. It carries gendered betas, a student-eval
+# dataObjects leftover, and the PhysX buffer multiplier that OOM'd at 44.3/44G.
+#
+# DO NOT USE IT FOR A GEN-2 OR GEN-3 ARM. Those have their own configs --
+# cfg/omomo_eval_g2_*.yaml and cfg/omomo_eval_g3_*.yaml -- resolved by
+# `scripts/check_eval_cfg.py --arm <arm>`, which also re-proves that each one
+# still mirrors its arm. An arm with no eval config is an error, not a fallback.
+#
+# IT IS STILL CORRECT for the v1 checkpoints it predates and matches: the
+# smplx_multibody_* baselines, the distilled students, and the crosspair
+# teachers, all of which trained in exactly this environment. That is the only
+# reason it was renamed rather than deleted.
+#
+# THIS FILE: numObs 6524 (transformer, 4 stock tokens + betas).
 env:
   numEnvs: 16
   envSpacing: 2

@@ -169,7 +169,7 @@ def main():
     p.add_argument("--output-csv", required=True, type=Path)
     p.add_argument(
         "--base-yaml",
-        default="isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml",
+        default="isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml",
         help="Template test yaml (subjectBodies + dataSub get overwritten per subject)",
     )
     p.add_argument(

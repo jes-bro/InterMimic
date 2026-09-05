@@ -7,11 +7,20 @@ isolates cross-body retargeting from body-control: same body across many
 source subjects shows whether the policy can retarget; same source across
 many bodies shows whether the policy generalizes body shape.
 
+--env-yaml is the arm's OWN eval config and is passed through untouched; the
+two keys that vary across the sweep, subjectBodies and dataSub, are overridden
+on the run's command line (--subject_bodies / --data_sub, config.py). Nothing is
+copied or rewritten, so the environment a checkpoint is scored in is exactly the
+committed, reviewed one -- there is no template that can quietly contribute a
+default the arm never trained with.
+
 Example:
     python scripts/eval_per_pair.py \\
-        --checkpoint checkpoints/smplx_multibody_stage2/nn/mimic.pth \\
-        --bodies  sub2 sub10 sub3 sub17 sub9 sub1 sub5 \\
-        --sources sub2 sub10 \\
+        --checkpoint checkpoints/smplx_teacher_g3_bball__f0/nn/mimic_0005.pth \\
+        --env-yaml   isaacgym/src/intermimic/data/cfg/omomo_eval_g3_bball__f0.yaml \\
+        --train-yaml isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_g3_bball__f0.yaml \\
+        --bodies  sub2 sub10 sub16 \\
+        --sources sub100 \\
         --output-csv eval_pair_matrix.csv \\
         --num-envs 1024
 """
@@ -22,7 +31,6 @@ import os
 import re
 import signal
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -71,51 +79,35 @@ METRIC_PATTERNS = {
 }
 
 
-def make_temp_yaml(base_yaml_path, body, source, all_objects=False, betas_file=None):
-    """Copy base_yaml and patch subjectBodies=[body], dataSub=[source].
-    If all_objects, also drop any dataObjects restriction so the eval covers
-    the subject's FULL object set (the base test config carries a student-eval
-    leftover `dataObjects: ['largetable','woodchair']` that otherwise filters
-    every clip to 2 objects -- and empties out subjects that lack them).
-    Returns path to the temp file."""
-    base_text = Path(base_yaml_path).read_text()
-    new_text = re.sub(
-        r"^(\s*dataSub:).*$",
-        rf"\1 ['{source}']",
-        base_text, flags=re.MULTILINE,
-    )
-    new_text = re.sub(
-        r"^(\s*subjectBodies:).*$",
-        rf"\1 ['{body}']",
-        new_text, flags=re.MULTILINE,
-    )
-    if all_objects:
-        # [] => env treats it as "no restriction" and loads all objects.
-        new_text = re.sub(
-            r"^(\s*dataObjects:).*$",
-            r"\1 []",
-            new_text, flags=re.MULTILINE,
-        )
-    if betas_file:
-        # Match the checkpoint's training betas (gendered vs neutral vs neutral_aug);
-        # the betas occupy part of the obs, so a mismatch silently corrupts eval.
-        new_text = re.sub(
-            r"^(\s*betas_file:).*$",
-            rf"\1 {betas_file}",
-            new_text, flags=re.MULTILINE,
-        )
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=f"_b{body}_s{source}.yaml", delete=False
-    )
-    tmp.write(new_text)
-    tmp.close()
-    return tmp.name
+def _last_metrics_block(stdout):
+    """The one block of stdout the metrics should be read from.
+
+    The env prints an 'EVALUATION METRICS:' block EVERY time a per-clip running
+    best improves (intermimic.py:1699), then one 'FINAL EVALUATION SUMMARY' at the
+    end (print_final_eval_summary). So stdout holds many blocks, ascending.
+
+    This used to be a plain pat.search() over the whole of stdout, which returns
+    the FIRST match -- i.e. the earliest, most pessimistic snapshot, taken the
+    moment every clip had merely been attempted once. Every CSV written that way
+    understates the policy. Prefer the final summary; fall back to the last
+    periodic block when the run was killed before printing it (a timeout).
+
+    Returning ONE block also keeps the four metrics mutually consistent: read
+    independently they could otherwise come from different points in the rollout.
+    """
+    marker = "FINAL EVALUATION SUMMARY"
+    idx = stdout.rfind(marker)
+    if idx != -1:
+        return stdout[idx:]
+    idx = stdout.rfind("EVALUATION METRICS:")
+    return stdout[idx:] if idx != -1 else stdout
 
 
 def parse_metrics(stdout):
+    block = _last_metrics_block(stdout)
     out = {}
     for name, pat in METRIC_PATTERNS.items():
-        m = pat.search(stdout)
+        m = pat.search(block)
         if m is None:
             return None
         if name == "success_rate":
@@ -127,18 +119,30 @@ def parse_metrics(stdout):
     return out
 
 
-def run_eval(body, source, base_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec, all_objects=False, betas_file=None):
-    tmp_yaml = make_temp_yaml(base_yaml, body, source, all_objects=all_objects, betas_file=betas_file)
+def run_eval(body, source, env_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec):
+    # The arm's OWN committed eval config is passed through untouched; only the
+    # two keys that vary across the sweep are overridden, on the command line.
+    # Nothing is copied, rewritten or written to a temp file, so the environment
+    # the policy is scored in is byte-for-byte the reviewed one.
     cmd = [
         "python", "-u", "-m", "intermimic.run",
         "--task", "InterMimic",
-        "--cfg_env", tmp_yaml,
+        "--cfg_env", str(env_yaml),
         "--cfg_train", train_yaml,
         "--test",
         "--headless",
         "--checkpoint", str(checkpoint),
-        "--num_envs", str(num_envs),
+        "--subject_bodies", body,
+        "--data_sub", source,
     ]
+    # num_envs is NOT passed unless explicitly asked for. It is an optimistic-bias
+    # knob -- success is the best attempt per CLIP (a running max indexed by seq_id,
+    # over a clip-count denominator, intermimic.py:1685-1703), so more envs can only
+    # raise the success rate and lower the pose errors. It therefore belongs in the
+    # committed eval config, where it is reviewable and identical across arms, not
+    # in a caller's default that silently overrides it.
+    if num_envs:
+        cmd += ["--num_envs", str(num_envs)]
     tag = f"[body={body},source={source}]"
     print(f"\n{tag} running (timeout={timeout_sec}s)")
     env = {"PYTHONPATH": f"{repo_root}/isaacgym/src:{repo_root}"}
@@ -174,7 +178,6 @@ def run_eval(body, source, base_yaml, train_yaml, checkpoint, num_envs, repo_roo
             print(f"{tag} stderr tail:\n{stderr[-1500:]}")
     else:
         print(f"{tag} metrics: {metrics}")
-    Path(tmp_yaml).unlink(missing_ok=True)
     return metrics, rc, timed_out
 
 
@@ -188,25 +191,23 @@ def main():
     p.add_argument("--sources", nargs="+", required=True,
                    help="Source subject motions (dataSub in env yaml)")
     p.add_argument("--output-csv", required=True, type=Path)
-    p.add_argument(
-        "--base-yaml",
-        default="isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml",
-    )
-    p.add_argument(
-        "--train-yaml",
-        default="isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml",
-    )
-    p.add_argument("--num-envs", type=int, default=1024)
+    # REQUIRED, with no default. The default used to be the old shared template (omomo_test_multibody.yaml),
+    # a chunk-1 smoke-test config that silently supplied its own retargeting (none),
+    # betas, reset gating, obs horizons and PhysX buffer to whatever checkpoint it
+    # was handed. Pass the arm's OWN eval config (cfg/omomo_eval_<arm>.yaml).
+    p.add_argument("--env-yaml", required=True, type=Path,
+                   help="the arm's own eval config, e.g. "
+                        "isaacgym/src/intermimic/data/cfg/omomo_eval_g3_bball__f0.yaml. "
+                        "Passed to --cfg_env untouched; only subjectBodies and dataSub "
+                        "are overridden per pair, on the command line.")
+    p.add_argument("--train-yaml", required=True,
+                   help="the arm's rl_games train config (it carries the network arch)")
+    p.add_argument("--num-envs", type=int, default=0,
+                   help="override the eval config's numEnvs. Default 0 = DON'T, so "
+                        "the committed config decides. This is a scoring-budget knob "
+                        "(success = best attempt per clip), so overriding it for one "
+                        "arm and not another invalidates the comparison.")
     p.add_argument("--timeout-per-pair", type=int, default=900)
-    p.add_argument("--all-objects", action="store_true",
-                   help="drop the base config's dataObjects restriction so each "
-                        "pair is evaluated on the subject's FULL object set (the "
-                        "test config's ['largetable','woodchair'] is a student-eval "
-                        "leftover that filters most subjects to empty).")
-    p.add_argument("--betas-file", default=None,
-                   help="override betas_file in the base yaml to match the checkpoint's "
-                        "training betas, e.g. scripts/omomo_betas_neutral.npz. Required "
-                        "when the base test config's betas differ from what was trained.")
     p.add_argument("--resume", action="store_true",
                    help="reuse the pairs that already succeeded in --output-csv "
                         "and only run the missing ones. A pair counts as done "
@@ -245,10 +246,9 @@ def main():
                     print(f"[resume] [body={body},source={source}] already done")
                     continue
                 metrics, rc, timed_out = run_eval(
-                    body, source, args.base_yaml, args.train_yaml,
+                    body, source, args.env_yaml, args.train_yaml,
                     args.checkpoint, args.num_envs, args.repo_root,
-                    args.timeout_per_pair, all_objects=args.all_objects,
-                    betas_file=args.betas_file,
+                    args.timeout_per_pair,
                 )
                 row = {
                     "body": body,

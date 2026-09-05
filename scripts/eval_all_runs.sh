@@ -24,9 +24,9 @@ TIMEOUT=900   # 15 min per subject
 # Each entry: <name>:<checkpoint_path>:<base_yaml>:<train_yaml>
 # Comment out runs whose checkpoints don't exist yet.
 RUNS="
-main:checkpoints/smplx_multibody_stage2/nn/mimic.pth:isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml:isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
-nobetas:checkpoints/smplx_multibody_nobetas/nn/mimic.pth:isaacgym/src/intermimic/data/cfg/omomo_test_multibody_nobetas.yaml:isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody_nobetas.yaml
-stage1:checkpoints/smplx_multibody_sub2only/nn/mimic.pth:isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml:isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
+main:checkpoints/smplx_multibody_stage2/nn/mimic.pth:isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml:isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
+nobetas:checkpoints/smplx_multibody_nobetas/nn/mimic.pth:isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_nobetas.yaml:isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody_nobetas.yaml
+stage1:checkpoints/smplx_multibody_sub2only/nn/mimic.pth:isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml:isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
 "
 
 for ENTRY in $RUNS; do

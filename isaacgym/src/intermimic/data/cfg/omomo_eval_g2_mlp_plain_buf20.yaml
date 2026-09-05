@@ -1,0 +1,202 @@
+# EVAL config -- PhysX buffer multiplier 20.0 (the buf20 satellite's whole point)
+#
+# A copy of omomo_eval_g2_mlp_plain.yaml differing in exactly ONE key, because its
+# arm trained with that key at a different value. It is a separate file rather
+# than a widened allowed-to-differ set on purpose: "this knob probably doesn't
+# affect the result" is the exact reasoning that let the retired
+# omomo_test_multibody.yaml drop retargeting and the free-flight gate.
+# scripts/check_eval_cfg.py --check-all proves the rest of the file still mirrors
+# the arm.
+#
+# Read omomo_eval_g2_mlp_plain.yaml for every other key and its reason.
+#
+# EVAL config -- GEN-2, MLP arch, PLAIN (un-retargeted) references.
+#
+# Hand-written, one per distinct eval environment. Replaces omomo_test_multibody.yaml,
+# which was a chunk-1 multi-body SMOKE TEST that got adopted as the eval template and
+# then silently dropped every feature added after it (retargeting, the pose term,
+# body-normalized reward, obsHorizons, the free-flight gate, the 12.0 PhysX buffer).
+#
+# SERVES these arms -- verified with scripts/cfg_diff.py, not by eye:
+#   g2_mlp_plain_stock__f0     g2_mlp_plain_stock__f1
+#   g2_mlp_plain_nvadlr__f0    g2_mlp_plain_nvadlr__f1
+#   g2_mlp_plain_stock_buf20__f0
+# They share ONE eval environment because their differences are not env-visible:
+#   * stock vs nvadlr : 0 differing env keys (normalize_value / lr_schedule live in
+#                       the TRAIN yaml). cfg_diff: "68 keys compared: 0 differ".
+#   * f0 vs f1        : subjectBodies only -- which the eval overwrites per pair
+#                       with a single body anyway, so the fold cannot survive here.
+#   * buf20           : default_buffer_size_multiplier only, a PhysX allocation
+#                       knob with no effect on dynamics. Eval pins 12.0 (below).
+# Adding a body/source axis is eval_one.sh's job; this file is the environment.
+#
+# MIRRORS omomo_teacher_g2_mlp_plain_stock__f0.yaml exactly EXCEPT the eval-owned
+# keys below. Everything else -- betas file, pose term, bodyNormalizedReward,
+# subjectHeightsFile, reward weights, contact/key bodies, object density, plane
+# friction, control rate -- is copied from the arm, because a divergence in any of
+# them scores the policy on an environment it was never trained in.
+#
+# EVAL-OWNED OVERRIDES (train value -> eval value, with the reason):
+#   stateInit        Hybrid -> Start   enableEvaluation is force-disabled in any
+#                                      other mode (intermimic.py:168-171) and the
+#                                      metrics assume start_times == 0.
+#   enableEvaluation absent -> True    turns the metric block on.
+#   rolloutLength    300    -> 1000    NOT inherited, and the reason is structural.
+#                                      The episode is cut at
+#                                      progress - start >= rolloutLength-1
+#                                      (humanoid.py:553) and success is defined as
+#                                      reaching max_episode_length-1
+#                                      (intermimic.py:1703), so a rollout window
+#                                      shorter than the clip makes success
+#                                      impossible by construction -- an arm would
+#                                      score 0% no matter how good it is.
+#                                      VERIFY ON THE CLUSTER that no OMOMO clip
+#                                      exceeds 1000 frames; any that does is
+#                                      truncated and scores 0% success silently:
+#                                        python3 -c "import glob,torch;
+#                                        print(max(torch.load(f).shape[0] for f in
+#                                        glob.glob('InterAct/OMOMO_new/*.pt')))"
+#   physicalBufferSize 3   -> 1        PSI harvests only where clip length >=
+#                                      rolloutLength, so at 1000 the buffer never
+#                                      fills and holds topk identical copies of the
+#                                      mocap reference (intermimic.py:863). 1 makes
+#                                      init deterministic and drops a 3x hoi_refs
+#                                      allocation.
+#   numEnvs          4096   -> 2048    NOT a placeholder and NOT free; see the key
+#                                      itself below for the full reason. The 4096 in
+#                                      the train yaml was never in effect: all 30
+#                                      g2/g3 launchers pass
+#                                      --num_envs "${NUM_ENVS:-2048}" and
+#                                      config.py:91 lets the flag win. 2048 here
+#                                      matches what the arms actually trained at.
+#                                      Eval CSVs written before 2026-09-04 used
+#                                      1024 and are NOT comparable to these.
+#   dataSub          [sub2] -> [sub2]  placeholder, patched per (body, source) pair.
+#   subjectBodies    43 bodies -> 1    placeholder, patched per pair. This is why
+#                                      one file serves both folds.
+#   hybridInitProb   0.1              kept at the arm's value; inert under Start,
+#                                      but the task reads the key unconditionally.
+#   episodeLength    300              kept at the arm's value; it is a DEAD key --
+#                                      nothing under isaacgym/src reads it, only
+#                                      rolloutLength and per-clip length bound an
+#                                      episode.
+#   default_buffer_size_multiplier 20.0-of-the-old-base -> 12.0. 20.0 is the value
+#                                      that PhysX-OOM'd at 44.3/44G; 12.0 is the
+#                                      validated replacement every g2/g3 arm runs.
+#   dataObjects      omitted          the old base carried a student-eval leftover
+#                                      ['largetable','woodchair'] that filtered most
+#                                      subjects to empty and had to be undone with
+#                                      --all-objects. Absent = no restriction.
+# The arms this config scores. Resolution reads THIS list
+# (scripts/check_eval_cfg.py --arm <arm>), so an arm with no eval cfg
+# is an error rather than a silent fall back to a generic template.
+evalFor:
+  - g2_mlp_plain_stock_buf20__f0
+
+env:
+  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
+                                           # Success is the BEST attempt per CLIP:
+                                           # _max_execution_steps is indexed by
+                                           # seq_id and is a running MAXIMUM, and the
+                                           # denominator is the clip count, not the
+                                           # env count (intermimic.py:1685-1703). So
+                                           # more envs = more attempts per clip = a
+                                           # success rate that can only rise and pose
+                                           # errors that can only fall. It must be
+                                           # IDENTICAL across every arm compared.
+                                           # 2048 = the count all 30 g2/g3 arms
+                                           # actually trained at (the launchers pass
+                                           # --num_envs "${NUM_ENVS:-2048}", which
+                                           # overrides the 4096 in their train yamls).
+                                           # NOTE: eval CSVs written before 2026-09-04
+                                           # used 1024 and are NOT comparable to these.
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: False
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  enableEvaluation: True
+  rolloutLength: 1000
+  physicalBufferSize: 1
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub2']                        # patched per pair by eval_per_pair.py
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  betas_file: scripts/omomo_betas_neutral_aug.npz
+  subjectHeightsFile: scripts/synthetic_heights.json
+  bodyNormalizedReward: true
+  ballSize: 1.
+  numObs: 3230                             # 2 horizons x 1599 + 32 betas (MLP)
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  # The arm's reward configuration, carried over verbatim. These terms do not move
+  # the reported metrics -- human_reset is computed on the RAW un-normalized error
+  # (intermimic.py:2210) and reward is not a metric -- but REWARD_BREAKDOWN=1 on an
+  # eval is only interpretable if the reward is the one the arm trained with.
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 20.0   # the arm trained at 20.0, so it is scored at 20.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25

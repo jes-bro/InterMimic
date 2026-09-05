@@ -1,0 +1,185 @@
+# EVAL config -- ARM B: THE SAME RECIPE ON THE EGOEXO4D BASKETBALL RECONSTRUCTION.
+# Mirrors omomo_teacher_g3_bball__f0.yaml. One file, one arm.
+#
+# The old base yaml was not merely incomplete for this arm, it described a
+# different experiment. Scored through omomo_test_multibody.yaml this arm would
+# have been run on OMOMO furniture (motion_file InterAct/OMOMO_new) with a 1.45 kg
+# ball that does not bounce, no free-flight gate, and a 3230-dim observation. Four
+# independent ways to produce a number that means nothing.
+#
+# WHAT THIS ARM NEEDS THAT NO SHARED TEMPLATE COULD CARRY:
+#
+#   DATA
+#     motion_file          InterAct/behave_cari4d_optj3d_cf2   the reconstruction,
+#                          not OMOMO. sub100_bball_000.pt, 101 frames @30fps.
+#     dataSub              ['sub100']  the ONLY valid source for this arm -- there
+#                          is one clip. eval_per_pair patches this key per pair, so
+#                          drive it with SOURCES="sub100"; any other source
+#                          selects zero clips.
+#     retargetedMotionDir  InterAct/behave_cari4d_bball_f0_bodymajor -- the clip
+#                          re-solved onto each f0 body. Per Jess's 2026-09-04 call
+#                          each arm is graded against its OWN retargeted reference,
+#                          so a body with no solve raises FileNotFoundError rather
+#                          than quietly reverting to the source clip.
+#
+#   OBJECT PHYSICS -- measured facts about a basketball, not recipe choices:
+#     objectDensity 86                mesh volume x 200 gave 1.45 kg; a real ball
+#                                     is ~0.62 kg (scripts/object_density.py).
+#     objectShapeProps.restitution    0.85, and plane.restitution 0.85 to match:
+#     plane.restitution               PhysX AVERAGES the two, so setting only one
+#                                     halves the bounce. Regulation: 1.8 m drop ->
+#                                     1.2-1.4 m, COR ~0.85. The old base's 200 /
+#                                     0.7 / (object default) is a piece of
+#                                     furniture.
+#
+#   FREE-FLIGHT GATE -- the single most consequential dropped key. Measured
+#   2026-09-02 on r8's converged policy, 512 envs, start pinned to frame 0:
+#     all three object-side criteria off   100 steps, 100% success, reward 13.4
+#     object 0.5 alone                      23 steps,   0%
+#     igRatio 2.0 alone                  96-99 steps,   0%   (kills at the layup)
+#     contactSteps 10 alone                100 steps, 100%   (free)
+#     ALL FOUR live, object+ig gated       100 steps, 100%, reward 13.4
+#   Evaluating this arm without freeFlightGate.resets would report roughly 0%
+#   success for a policy that completes the clip. That is the difference between
+#   "the method failed" and "the eval config was wrong".
+#
+#   NO BETAS. betas_file is ABSENT, not "none". Beyond the obs width, the clip is
+#   sub100_bball_000.pt, so a betas lookup would read the source subject as 100 and
+#   find "sub100" in the OMOMO betas file -- the SYNTHETIC OMOMO body, a different
+#   person. The lookup would SUCCEED and condition on the wrong identity in silence.
+#   The old eval path could not avoid this: BETAS_FILE=none meant "send no
+#   --betas-file override", which left the template's gendered omomo_betas.npz in
+#   force. Absence is the only correct encoding (intermimic.py:348).
+#
+# EVAL-OWNED OVERRIDES (train -> eval):
+#   stateInit Hybrid -> Start | enableEvaluation -> True | physicalBufferSize 3 -> 1
+#   numEnvs 4096 -> 16 | dataSub/subjectBodies -> single placeholders
+#   rolloutLength 50 -> 300. The clip is 101 frames, so 300 lets it run to
+#     completion (success requires reaching max_episode_length-1; at 50 the episode
+#     is cut first and success is structurally 0). 300 is also exactly what the
+#     r-series eval cfgs use, so these numbers land directly alongside
+#     omomo_cari4d_bball_r12_onerecipe_eval.yaml's ladder rather than beside it.
+# The arms this config scores. Resolution reads THIS list
+# (scripts/check_eval_cfg.py --arm <arm>), so an arm with no eval cfg
+# is an error rather than a silent fall back to a generic template.
+evalFor:
+  - g3_bball__f0
+
+env:
+  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
+                                           # Success is the BEST attempt per CLIP:
+                                           # _max_execution_steps is indexed by
+                                           # seq_id and is a running MAXIMUM, and the
+                                           # denominator is the clip count, not the
+                                           # env count (intermimic.py:1685-1703). So
+                                           # more envs = more attempts per clip = a
+                                           # success rate that can only rise and pose
+                                           # errors that can only fall. It must be
+                                           # IDENTICAL across every arm compared.
+                                           # 2048 = the count all 30 g2/g3 arms
+                                           # actually trained at (the launchers pass
+                                           # --num_envs "${NUM_ENVS:-2048}", which
+                                           # overrides the 4096 in their train yamls).
+                                           # NOTE: eval CSVs written before 2026-09-04
+                                           # used 1024 and are NOT comparable to these.
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  enableEvaluation: True
+  rolloutLength: 300
+  physicalBufferSize: 1
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub100']                      # patched per pair; sub100 is the only source
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  retargetedMotionDir: InterAct/behave_cari4d_bball_f0_bodymajor
+  cpuMotionData: true
+  subjectHeightsFile: scripts/synthetic_heights.json
+  bodyNormalizedReward: true
+  ballSize: 1.
+  numObs: 9594                             # 6 horizons x 1599, no betas block
+  obsHorizons: [1, 4, 7, 10, 13, 16]
+  motion_file: InterAct/behave_cari4d_optj3d_cf2
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 86                        # 0.62 kg basketball, not 1.45 kg
+  objectShapeProps:
+    restitution: 0.85
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  resetThresholds:
+    human: 0.5
+    object: 0.5
+    igRatio: 2.0
+    contactSteps: 10
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.85                      # averaged with the object's 0.85
+
+  rewardShape: geometric
+
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+    freeFlightGate:
+      reward: false
+      resets: true
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25

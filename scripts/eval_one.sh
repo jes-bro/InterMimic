@@ -1,9 +1,13 @@
 #!/bin/sh
 # eval_one.sh -- submit an eval for ONE finished teacher run.
 #
-# Auto-detects arch (MLP/transformer), betas, source, and training bodies from
-# the run's OWN env config -- no fallbacks (a wrong arch/betas loads but produces
-# silently-wrong numbers). Evaluates the run's own source against:
+# Resolves the arm's OWN eval config (scripts/check_eval_cfg.py --arm), which
+# states the whole environment -- arch, obs horizons, betas, retargeting, reset
+# gating, object physics, scoring budget. There is NO generic template and no
+# fallback: an arm with no eval config is an error, because the template that used
+# to fill that role silently substituted its own value for every feature it
+# predated. Source and training bodies still come from the arm's train config,
+# since they decide which pairs are worth scoring. Evaluates against:
 #   - IN-DISTRIBUTION real training bodies (how well it does on what it saw)
 #   - HELD-OUT test bodies sub10/sub16/sub13 (generalization to never-trained bodies)
 #   - a sample of SYNTHETIC augmentation bodies sub100+ (if the run trained on any),
@@ -84,32 +88,17 @@ if [ ! -f "$CKPT" ]; then
   exit 2
 fi
 
-# Pull arch/betas/source/bodies from the run's OWN env config. python parses the
-# yaml (subjectBodies is a long list -- grep/sed would be fragile) and emits
-# shell assignments; on an unknown numObs it emits a hard error, no arch guess.
+# Pull the SOURCE and BODY sets from the run's own env config -- what this arm
+# trained on, which decides which pairs are worth scoring. Nothing about the
+# observation layout is derived here any more: arch, obs width, betas and every
+# other environment key now live in the arm's eval config, and check_eval_cfg.py
+# is the single place that validates them (having two implementations of the obs
+# derivation is how they drift).
 N_SYNTHETIC="${N_SYNTHETIC:-5}"
 eval "$(python3 - "$envc" "$N_SYNTHETIC" <<'PY'
 import sys, re, yaml
 envc, nsyn = sys.argv[1], int(sys.argv[2])
 c = yaml.safe_load(open(envc))["env"]
-nobs = int(c["numObs"])
-# Arch and observation width are DERIVED, not looked up. A table of magic
-# numObs values only knows the two STOCK horizon sets (MLP [1,16] -> 3230,
-# transformer [0,1,4,16] -> 6524) and rejects every multi-horizon arm, which is
-# all of g3. See intermimic.py:355-357: useTransformerObs picks the arch and its
-# default horizons, obsHorizons overrides them, and the transformer folds betas
-# into EACH token while the MLP appends them once.
-betas  = c.get("betas_file")
-arch   = "transformer" if c.get("useTransformerObs") else "mlp"
-_H     = c.get("obsHorizons") or ([0, 1, 4, 16] if arch == "transformer" else [1, 16])
-_B     = 32 if betas else 0
-_want  = len(_H) * (1599 + _B) if arch == "transformer" else len(_H) * 1599 + _B
-if nobs != _want:
-    print(f'echo "ERROR: numObs={nobs} in {envc} disagrees with arch={arch}, '
-          f'{len(_H)} horizon(s), betas={bool(betas)} -- expected {_want}. '
-          f'Refusing to guess: a wrong obs width loads and produces silently '
-          f'wrong numbers." >&2; exit 2')
-    sys.exit()
 src    = c.get("dataSub") or []
 bodies = c.get("subjectBodies") or []
 num = lambda s: (int(re.match(r"sub(\d+)", str(s)).group(1)) if re.match(r"sub(\d+)", str(s)) else -1)
@@ -120,9 +109,6 @@ if syn and nsyn > 0:                      # evenly-spaced sample across the rang
     n = min(nsyn, len(syn))
     idx = sorted({round(i * (len(syn) - 1) / (n - 1)) if n > 1 else 0 for i in range(n)})
     pick = [syn[i] for i in idx]
-print(f'ARCH={arch}')
-print(f'NOBS={nobs}')
-print(f'BETAS="{betas or "none"}"')
 print(f'SRC_DEFAULT="{" ".join(src)}"')
 print(f'REAL_BODIES="{" ".join(real)}"')
 print(f'SYN_PICK="{" ".join(pick)}"')
@@ -130,9 +116,21 @@ print(f'N_SYN_AVAIL={len(syn)}')
 PY
 )"
 
-# arch -> arch-matched test base yaml (python already hard-errored on unknown numObs)
-if [ "$ARCH" = transformer ]; then BASE="$CFG/omomo_test_multibody_xf.yaml"
-else                               BASE="$CFG/omomo_test_multibody.yaml"; fi
+# The arm's OWN eval config -- resolved, never guessed.
+#
+# This used to be a binary arch test: useTransformerObs set -> the 6524-dim
+# template, else the 3230-dim one. Two things were wrong with that. It cannot
+# express a multi-horizon arm at all (g3 is a SIX-horizon MLP wanting 9594/9626,
+# and fell to the 3230 template), and even when the width happened to match, the
+# template supplied its own value for every key it did not know about -- so every
+# retargeting arm in gen-2 was scored against the UN-retargeted reference, and a
+# gen-3 arm would have been scored with its free-flight gate off.
+#
+# check_eval_cfg.py maps arm -> config via each config's own `evalFor:` list AND
+# re-proves that the config still mirrors the arm on every key outside the small
+# eval-owned set. An arm with no eval config is a hard error here: there is no
+# generic template left to fall back to, which is the point.
+ENV_YAML=$(python3 scripts/check_eval_cfg.py --arm "$texp") || exit 2
 
 SOURCES="${SOURCES:-$SRC_DEFAULT}"
 # Held-out default is FOLD-AWARE (same __fN filename rule as summarize_evals.py):
@@ -170,8 +168,8 @@ OUT="${OUT:-eval_results/${exp_out}__${id}__indist+heldout+syn.csv}"
 # betas file corrupts the 32 beta obs dims and still runs), so it must have
 # exactly one implementation -- this one.
 if [ "${EMIT:-0}" = 1 ]; then
-  printf "CHECKPOINT='%s'\nOUT='%s'\nBETAS_FILE='%s'\nBASE_YAML='%s'\nTRAIN_YAML='%s'\nSOURCES='%s'\nBODIES='%s'\nEXP='%s'\n" \
-    "$CKPT" "$OUT" "$BETAS" "$BASE" "$trainc" "$SOURCES" "$BODIES" "$exp"
+  printf "CHECKPOINT='%s'\nOUT='%s'\nENV_YAML='%s'\nTRAIN_YAML='%s'\nSOURCES='%s'\nBODIES='%s'\nEXP='%s'\n" \
+    "$CKPT" "$OUT" "$ENV_YAML" "$trainc" "$SOURCES" "$BODIES" "$exp"
   exit 0
 fi
 
@@ -190,7 +188,7 @@ if [ -f "$OUT" ] && [ "${OVERWRITE:-0}" != 1 ] && [ "${RESUME:-0}" != 1 ]; then
 fi
 
 echo "== eval_one: $exp =="
-echo "   arch/betas : $ARCH (numObs=$NOBS) / $BETAS"
+echo "   eval cfg   : $(basename "$ENV_YAML")"
 echo "   checkpoint : $CKPT"
 echo "   sources    : $SOURCES"
 if [ "$BODIES" = "$BODIES_DEFAULT" ]; then
@@ -200,7 +198,20 @@ if [ "$BODIES" = "$BODIES_DEFAULT" ]; then
 else
   echo "   BODIES     : $BODIES   <-- caller override (default set NOT used)"
 fi
-echo "   base/train : $(basename "$BASE") | $(basename "$trainc")"
+echo "   train cfg  : $(basename "$trainc")"
+# Print the settings that decide what the numbers MEAN, out of the config that
+# will actually run -- so the submission log records them and a stale eval config
+# is visible at submit time rather than after a GPU-hour.
+python3 - "$ENV_YAML" <<'EOPY'
+import sys, yaml
+e = (yaml.safe_load(open(sys.argv[1])) or {}).get("env", {})
+g = (e.get("rewardTerms") or {}).get("freeFlightGate") or {}
+print(f"   obs        : numObs={e.get('numObs')} horizons={e.get('obsHorizons', '<stock>')} "
+      f"xf={bool(e.get('useTransformerObs'))} betas={e.get('betas_file', '<none>')}")
+print(f"   scoring    : numEnvs={e.get('numEnvs')} rolloutLength={e.get('rolloutLength')} "
+      f"stateInit={e.get('stateInit')} ffgResets={g.get('resets', False)}")
+print(f"   reference  : motion={e.get('motion_file')} retarget={e.get('retargetedMotionDir', '<none>')}")
+EOPY
 echo "   -> csv     : $OUT"
 
 if [ "${DRY:-0}" = 1 ]; then
@@ -229,7 +240,7 @@ fi
 EXCLUDE_NODES="${EXCLUDE_NODES-simurgh6}"
 [ -n "$EXCLUDE_NODES" ] && echo "   exclude    : $EXCLUDE_NODES"
 
-CHECKPOINT="$CKPT" OUT="$OUT" BETAS_FILE="$BETAS" \
-BASE_YAML="$BASE" TRAIN_YAML="$trainc" \
-SOURCES="$SOURCES" BODIES="$BODIES" ALL_OBJECTS=1 RESUME="${RESUME:-0}" \
+CHECKPOINT="$CKPT" OUT="$OUT" \
+ENV_YAML="$ENV_YAML" TRAIN_YAML="$trainc" \
+SOURCES="$SOURCES" BODIES="$BODIES" RESUME="${RESUME:-0}" \
 sbatch ${EXCLUDE_NODES:+--exclude="$EXCLUDE_NODES"} slurm_eval_curriculum.sh

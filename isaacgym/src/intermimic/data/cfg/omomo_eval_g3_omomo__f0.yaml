@@ -1,0 +1,169 @@
+# EVAL config -- ARM A: THE RECIPE ON OMOMO, WITH BETAS CONDITIONING.
+# Mirrors omomo_teacher_g3_omomo__f0.yaml. One file, one arm.
+#
+# THIS ARM WAS NEVER EVALUABLE BEFORE. eval_one.sh picked its base template from a
+# binary arch test -- useTransformerObs set or not -- and g3 is a SIX-horizon MLP,
+# so it fell to the 3230-dim MLP template while the policy expects 9626. That is a
+# load_state_dict size mismatch: it crashes rather than lying, but no g3 number has
+# ever come out of that path.
+#
+# EVERYTHING THE OLD BASE YAML SILENTLY DROPPED FOR THIS ARM (27 keys; the ones
+# that move the reported metrics are marked):
+#   * obsHorizons [1,4,7,10,13,16] + numObs 9626        <- METRIC (crash)
+#   * retargetedMotionDir                               <- METRIC: graded against
+#       the un-retargeted source, i.e. a different target than it was trained on
+#   * rewardTerms.freeFlightGate {reward:false,resets:true}  <- METRIC: without it,
+#       object and igRatio resets fire on reference free-flight frames
+#       (intermimic.py:2064-2074), killing episodes the arm is exempt from
+#   * initVel true                                      <- METRIC: sets the object's
+#       frame-0 velocity in the reference (intermimic.py:787-790), and frame 0 is
+#       exactly where Start-init eval begins
+#   * rewardShape geometric, pose term, bodyNormalizedReward, subjectHeightsFile
+#       -- reward-only, no metric effect (human_reset uses the RAW error,
+#       intermimic.py:2210), but REWARD_BREAKDOWN=1 is uninterpretable without them
+#   * default_buffer_size_multiplier 12.0 vs the old base's 20.0, the value that
+#       PhysX-OOM'd at 44.3/44G
+#   * resetThresholds -- the block restates the code defaults exactly
+#       (_parse_reset_thresholds), so its absence was harmless here
+#
+# EVAL-OWNED OVERRIDES (train -> eval), full reasons in omomo_eval_g2_mlp_plain.yaml:
+#   stateInit Hybrid -> Start | enableEvaluation -> True | physicalBufferSize 3 -> 1
+#   numEnvs 4096 -> 16 (eval_per_pair passes --num_envs) | dataSub/subjectBodies
+#   -> single placeholders, patched per pair
+#
+#   rolloutLength 50 -> 1000. THE ONE OVERRIDE THAT IS A JUDGEMENT CALL. The
+#   episode is cut at progress - start >= rolloutLength-1 (humanoid.py:553) and
+#   success means reaching max_episode_length-1, so inheriting 50 would make
+#   success STRUCTURALLY ZERO on every clip longer than 50 frames -- which is
+#   nearly all of OMOMO. 1000 is what every prior eval CSV used, so these numbers
+#   stay comparable to the g2 grid's. CAVEAT TO STATE WHEN REPORTING: it asks a
+#   policy trained on 50-step windows to run the full clip. That is the intended
+#   question (can it execute the whole interaction), not an oversight.
+# The arms this config scores. Resolution reads THIS list
+# (scripts/check_eval_cfg.py --arm <arm>), so an arm with no eval cfg
+# is an error rather than a silent fall back to a generic template.
+evalFor:
+  - g3_omomo__f0
+
+env:
+  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
+                                           # Success is the BEST attempt per CLIP:
+                                           # _max_execution_steps is indexed by
+                                           # seq_id and is a running MAXIMUM, and the
+                                           # denominator is the clip count, not the
+                                           # env count (intermimic.py:1685-1703). So
+                                           # more envs = more attempts per clip = a
+                                           # success rate that can only rise and pose
+                                           # errors that can only fall. It must be
+                                           # IDENTICAL across every arm compared.
+                                           # 2048 = the count all 30 g2/g3 arms
+                                           # actually trained at (the launchers pass
+                                           # --num_envs "${NUM_ENVS:-2048}", which
+                                           # overrides the 4096 in their train yamls).
+                                           # NOTE: eval CSVs written before 2026-09-04
+                                           # used 1024 and are NOT comparable to these.
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  enableEvaluation: True
+  rolloutLength: 1000
+  physicalBufferSize: 1
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub2']                        # patched per pair by eval_per_pair.py
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2
+  cpuMotionData: true
+  betas_file: scripts/omomo_betas_neutral_aug.npz
+  subjectHeightsFile: scripts/synthetic_heights.json
+  bodyNormalizedReward: true
+  ballSize: 1.
+  numObs: 9626                             # 6 horizons x 1599 + 32 betas
+  obsHorizons: [1, 4, 7, 10, 13, 16]
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  # All four criteria live, exactly as trained. These restate the code defaults
+  # (_parse_reset_thresholds) -- stated explicitly so the eval does not depend on
+  # a default staying put.
+  resetThresholds:
+    human: 0.5
+    object: 0.5
+    igRatio: 2.0
+    contactSteps: 10
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardShape: geometric
+
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+    # resets: true is NOT optional at eval. It gates object + igRatio resets on
+    # reference contact; ungated they execute episodes for the reference's sins.
+    freeFlightGate:
+      reward: false
+      resets: true
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25

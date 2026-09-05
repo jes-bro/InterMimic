@@ -39,11 +39,11 @@ CKPT_VANILLA=/home/ubuntu/vanilla_intermimic/checkpoints/student.pth
 CKPT_CURRICULUM=checkpoints/curriculum_stage2.pth
 
 # --- yamls (test + train) ---
-TEST_3230_LT=isaacgym/src/intermimic/data/cfg/omomo_test_multibody_largetable.yaml
-TEST_3230_WC=isaacgym/src/intermimic/data/cfg/omomo_test_multibody_woodchair.yaml
-TEST_3198_LT=isaacgym/src/intermimic/data/cfg/omomo_test_multibody_nobetas_largetable.yaml
-TEST_3198_WC=isaacgym/src/intermimic/data/cfg/omomo_test_multibody_nobetas_woodchair.yaml
-TEST_3230=isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml
+TEST_3230_LT=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_largetable.yaml
+TEST_3230_WC=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_woodchair.yaml
+TEST_3198_LT=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_nobetas_largetable.yaml
+TEST_3198_WC=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_nobetas_woodchair.yaml
+TEST_3230=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml
 
 TRAIN_FULL=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_distill_both_normreward.yaml
 TRAIN_REWARD_ABL=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_distill_both.yaml

@@ -94,6 +94,33 @@ def load_cfg(args):
     if args.episode_length > 0:
         cfg["env"]["episodeLength"] = args.episode_length
 
+    # Per-pair eval overrides. An eval sweep runs ONE committed env config over a
+    # (body x source) grid, and these are the only two keys that vary across it --
+    # so they are set here, the same way --num_envs already is, instead of by
+    # rewriting the config file per pair.
+    #
+    # This replaces eval_per_pair.py's temp-yaml patcher, which line-substituted
+    # `subjectBodies:` / `dataSub:` with a regex. That only worked on FLOW-style
+    # lists (`dataSub: ['sub2']`); given a block-style list it replaced the key
+    # line and left the `- sub2` items dangling, so the config no longer parsed.
+    # Every generated and hand-written per-arm config uses block style, which is
+    # why the eval could never be pointed at an arm's own config.
+    #
+    # Comma-separated rather than nargs: isaacgym's gymutil.parse_arguments only
+    # honours name/type/default/help/action in custom_parameters.
+    if args.subject_bodies:
+        cfg["env"]["subjectBodies"] = [s for s in args.subject_bodies.split(",") if s]
+
+    if args.data_sub:
+        cfg["env"]["dataSub"] = [s for s in args.data_sub.split(",") if s]
+
+    # Same reasoning for the object filter, which the render/replay scripts vary
+    # per clip. "" = leave the config alone; "all" = no restriction (the env reads
+    # an empty list as "load every object").
+    if args.data_objects:
+        cfg["env"]["dataObjects"] = ([] if args.data_objects == "all"
+                                     else [s for s in args.data_objects.split(",") if s])
+
     cfg["name"] = args.task
     cfg["headless"] = args.headless
 
@@ -231,6 +258,12 @@ def get_args(benchmark=False):
             "help": "Number of environments to create - override config file"},
         {"name": "--episode_length", "type": int, "default": 0,
             "help": "Episode length, by default is read from yaml config"},
+        {"name": "--subject_bodies", "type": str, "default": "",
+            "help": "Comma-separated target bodies overriding subjectBodies in the env yaml (e.g. 'sub10'). The per-pair eval sweep uses this so one committed config serves every pair."},
+        {"name": "--data_sub", "type": str, "default": "",
+            "help": "Comma-separated source subjects overriding dataSub in the env yaml (e.g. 'sub2'). Pairs with --subject_bodies."},
+        {"name": "--data_objects", "type": str, "default": "",
+            "help": "Comma-separated objects overriding dataObjects in the env yaml, or 'all' for no restriction. Used by the render/replay scripts to pin one object."},
         {"name": "--seed", "type": int, "help": "Random seed"},
         {"name": "--frames_scale", "type": float, "default": 0.,
             "help": "Set the fps scale for the reference HOI dataset"},

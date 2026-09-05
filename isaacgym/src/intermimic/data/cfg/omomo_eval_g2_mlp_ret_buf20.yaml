@@ -1,0 +1,156 @@
+# EVAL config -- PhysX buffer multiplier 20.0 (the buf20 satellite's whole point)
+#
+# A copy of omomo_eval_g2_mlp_ret.yaml differing in exactly ONE key, because its
+# arm trained with that key at a different value. It is a separate file rather
+# than a widened allowed-to-differ set on purpose: "this knob probably doesn't
+# affect the result" is the exact reasoning that let the retired
+# omomo_test_multibody.yaml drop retargeting and the free-flight gate.
+# scripts/check_eval_cfg.py --check-all proves the rest of the file still mirrors
+# the arm.
+#
+# Read omomo_eval_g2_mlp_ret.yaml for every other key and its reason.
+#
+# EVAL config -- GEN-2, MLP arch, RETARGETED references.
+#
+# SERVES these arms (cfg_diff-verified; see omomo_eval_g2_mlp_plain.yaml for why
+# recipe/fold/buffer collapse into one eval environment):
+#   g2_mlp_ret_stock__f0     g2_mlp_ret_stock__f1
+#   g2_mlp_ret_nvadlr__f0    g2_mlp_ret_nvadlr__f1
+#   g2_mlp_ret_stock_buf20__f0    g2_mlp_ret_stock_gpumotion__f0
+#   g2_mlp_ret_nvadlr_gpumotion__f0
+# gpumotion differs only in cpuMotionData, a memory/throughput knob with no effect
+# on dynamics or observations; this file pins true.
+#
+# NOT served: g2_mlp_ret_stock_syn{0,60,130}__f0. Those arms train on a different
+# body roster AND a different betas file (omomo_betas_neutral_aug2.npz), which
+# changes the beta observation -- they need their own eval cfg. They are also
+# currently unlaunchable: all three committed env yamls fail yaml.safe_load, a
+# block-list corruption from generate_synladder_cfgs.py:55.
+#
+# THE ONE THING THIS FILE EXISTS FOR:
+#   retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2
+# The old base yaml never set it, so every retargeting arm was scored against the
+# UN-retargeted source reference -- a different target than the one it was trained
+# to track (intermimic.py:302-334 swaps in <dir>/<body>/<clip>.pt per target body).
+# That ran to completion and produced numbers that looked fine. Per Jess's call on
+# 2026-09-04, each arm is now graded against its OWN retargeted reference.
+#
+# CONSEQUENCE, by design: a (body, clip) pair with no retargeted file raises
+# FileNotFoundError rather than falling back to the source reference. If a held-out
+# body (f0: sub10/sub13/sub16, f1: sub5/sub7/sub12) has no solve under that dir, the
+# eval STOPS instead of silently scoring a different target. scripts/check_retarget_shift.py
+# already runs against sub16/sub10/sub13 there, so they are expected to exist --
+# but a failure here means generate them, not work around it.
+#
+# Otherwise identical to omomo_eval_g2_mlp_plain.yaml (same overrides, same reasons).
+# The arms this config scores. Resolution reads THIS list
+# (scripts/check_eval_cfg.py --arm <arm>), so an arm with no eval cfg
+# is an error rather than a silent fall back to a generic template.
+evalFor:
+  - g2_mlp_ret_stock_buf20__f0
+
+env:
+  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
+                                           # Success is the BEST attempt per CLIP:
+                                           # _max_execution_steps is indexed by
+                                           # seq_id and is a running MAXIMUM, and the
+                                           # denominator is the clip count, not the
+                                           # env count (intermimic.py:1685-1703). So
+                                           # more envs = more attempts per clip = a
+                                           # success rate that can only rise and pose
+                                           # errors that can only fall. It must be
+                                           # IDENTICAL across every arm compared.
+                                           # 2048 = the count all 30 g2/g3 arms
+                                           # actually trained at (the launchers pass
+                                           # --num_envs "${NUM_ENVS:-2048}", which
+                                           # overrides the 4096 in their train yamls).
+                                           # NOTE: eval CSVs written before 2026-09-04
+                                           # used 1024 and are NOT comparable to these.
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: False
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  enableEvaluation: True
+  rolloutLength: 1000
+  physicalBufferSize: 1
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub2']                        # patched per pair by eval_per_pair.py
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2
+  cpuMotionData: true
+  betas_file: scripts/omomo_betas_neutral_aug.npz
+  subjectHeightsFile: scripts/synthetic_heights.json
+  bodyNormalizedReward: true
+  ballSize: 1.
+  numObs: 3230                             # 2 horizons x 1599 + 32 betas (MLP)
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 20.0   # the arm trained at 20.0, so it is scored at 20.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25

@@ -8,7 +8,7 @@ export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 
 python -u -m intermimic.run \
     --task InterMimic \
-    --cfg_env isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml \
+    --cfg_env isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml \
     --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml \
     --test \
     --headless \

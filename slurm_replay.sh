@@ -31,7 +31,15 @@ export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
 SUBJECTS="${SUBJECTS:-sub4 sub6}"
 FRAMES="${FRAMES:-300}"
-BASE=isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml
+# Replay is kinematic (ground-truth playback, no policy), but it still has to read
+# the RIGHT data: motion dir, object set and object physics all come from the
+# config. ARM=<arm> plays an arm's own data through its own environment; otherwise
+# this falls back to the v1 config, which is correct only for v1-era OMOMO data.
+if [ -n "${ARM:-}" ]; then
+    BASE=$(python3 scripts/check_eval_cfg.py --arm "$ARM") || exit 2
+else
+    BASE=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml
+fi
 TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
 
 # Rename the job so `squeue` shows which subjects this replay is for.
@@ -39,14 +47,14 @@ scontrol update JobId="$SLURM_JOB_ID" JobName="rep-$(echo $SUBJECTS | tr ' ' '-'
 
 mkdir -p renders
 for S in $SUBJECTS; do
-    CFG="/tmp/replay_$S.yaml"
-    # patch the multibody test config to this subject (motion + body), all objects
-    sed "s|dataSub:.*|dataSub: ['$S']|; s|subjectBodies:.*|subjectBodies: ['$S']|; s|dataObjects:.*|dataObjects: []|" \
-        "$BASE" > "$CFG"
+    # No temp config: body/source/object are CLI overrides now. The sed this
+    # replaces rewrote the `dataSub:` line and orphaned the `- sub2` beneath it on
+    # any block-style list, which is every per-arm config.
     echo "[replay] $S -> renders/replay_$S.mp4 ($FRAMES frames, kinematic)"
     RECORD_VIDEO="renders/replay_$S.mp4" MAX_VIDEO_FRAMES="$FRAMES" \
         python -u -m intermimic.run --task InterMimic \
-            --cfg_env "$CFG" --cfg_train "$TRAIN" \
+            --cfg_env "$BASE" --cfg_train "$TRAIN" \
+            --subject_bodies "$S" --data_sub "$S" --data_objects all \
             --test --play_dataset --headless --num_envs 1
 done
 

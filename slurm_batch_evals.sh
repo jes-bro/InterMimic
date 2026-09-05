@@ -53,11 +53,11 @@ for E in "${RUNS[@]}"; do
     C=$(ls -1v checkpoints/*"$R"*final*/nn/*.pth 2>/dev/null | tail -1)
     if [ -z "$C" ]; then echo "[batch-eval] SKIP $R: no final checkpoint found"; continue; fi
     if [ "$A" = xf ]; then
-        BY=isaacgym/src/intermimic/data/cfg/omomo_test_multibody_xf.yaml
+        BY=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_xf.yaml
         TY=$(ls -t curriculum_work/"$R"/cfgs/train_*.yaml 2>/dev/null | head -1)
         if [ -z "$TY" ]; then echo "[batch-eval] SKIP $R: no transformer train yaml"; continue; fi
     else
-        BY=isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml
+        BY=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml
         TY=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
     fi
     echo "======== eval $R ($A)  ckpt=$C ========"

@@ -216,7 +216,7 @@ def main():
         "omomo_train_multibody.yaml",
         "omomo_train_multibody_stage2.yaml",
         "omomo_train_multibody_nobetas.yaml",
-        "omomo_test_multibody.yaml",
+        "omomo_eval_v1_multibody_mlp.yaml",
     ]
     for name in legacy:
         path = CFG_DIR / name

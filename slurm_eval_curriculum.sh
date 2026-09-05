@@ -15,7 +15,7 @@
 
 # Eval a curriculum checkpoint -> REAL metrics (success rate, human/object pose
 # error, avg steps) per (body, source) pair, written to a CSV. Uses the existing
-# eval_per_pair.py + omomo_test_multibody.yaml (Start mode, enableEvaluation,
+# eval_per_pair.py + the old shared template (omomo_test_multibody.yaml) (Start mode, enableEvaluation,
 # numObs 3230 -- matches the curriculum checkpoint arch [1024,1024,512]). This
 # turns a checkpoint you ALREADY have into a result -- no more training needed.
 #
@@ -24,7 +24,8 @@
 #   off-diagonal            = cross-retarget
 # Override via env vars:
 #   CHECKPOINT=path/to.pth   BODIES="sub2 sub3"   SOURCES="sub2"
-#   NUM_ENVS=1024  TIMEOUT=900  OUT=eval_results/foo.csv
+#   TIMEOUT=900  OUT=eval_results/foo.csv
+# (numEnvs is NOT a launcher knob -- it lives in the eval config; see below.)
 #
 # FAST first read (~12 min, 1 pair) -- do this before the full matrix:
 #   BODIES=sub2 SOURCES=sub2 sbatch slurm_eval_curriculum.sh
@@ -37,10 +38,12 @@ conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
-# REQUIRED (no silent defaults): a stale hardcoded checkpoint/OUT would eval
-# the WRONG run and mis-attribute the CSV; a missing BETAS_FILE would fall back
-# to the base yaml's GENDERED betas (omomo_betas.npz) and silently corrupt the
-# 32 beta obs dims for any neutral/aug run. Fail loudly instead.
+# REQUIRED (no silent defaults): a stale hardcoded checkpoint/OUT would eval the
+# WRONG run and mis-attribute the CSV. ENV_YAML is required for the same reason
+# it used to have a default and must not: the default was the old shared template (omomo_test_multibody.yaml),
+# a chunk-1 smoke-test template that silently supplied its own retargeting (none),
+# betas, obs horizons, reset gating and PhysX buffer to whatever checkpoint it was
+# handed. Pass the ARM'S OWN eval config.
 require() {   # require VAR "hint"
     eval "_v=\${$1:-}"
     if [ -z "$_v" ]; then
@@ -50,7 +53,17 @@ require() {   # require VAR "hint"
 }
 require CHECKPOINT "e.g. CHECKPOINT=checkpoints/<run>/nn/mimic_XXXX.pth"
 require OUT        "e.g. OUT=eval_results/<run>__<ckpt>__heldout.csv"
-require BETAS_FILE "must match the run's training betas (scripts/omomo_betas.npz gendered, _neutral, or _neutral_aug); set BETAS_FILE=none only if the run trained with no betas"
+require ENV_YAML   "the arm's own eval config, e.g. ENV_YAML=isaacgym/src/intermimic/data/cfg/omomo_eval_g3_bball__f0.yaml (resolve it with: scripts/check_eval_cfg.py --arm <arm>)"
+require TRAIN_YAML "the arm's rl_games train config (it carries the network arch)"
+
+# BETAS_FILE is gone. It existed to patch the template's betas_file to match the
+# checkpoint -- but an arm's own eval config already states its betas, including
+# stating them by ABSENCE for a no-betas arm. The old encoding could not express
+# that: BETAS_FILE=none meant "send no override", which LEFT the template's
+# gendered omomo_betas.npz in force and would have evaluated a no-betas policy
+# with betas. ALL_OBJECTS is gone for the same reason: it existed only to undo
+# the template's ['largetable','woodchair'] student-eval leftover.
+[ -f "$ENV_YAML" ] || { echo "[eval] ERROR: ENV_YAML not found: $ENV_YAML" >&2; exit 2; }
 
 # Diagnostics: forwarded EXPLICITLY so they cannot be lost between the caller's
 # shell, sbatch, and eval_per_pair's subprocess. TERM_REASON=1 prints the
@@ -64,36 +77,37 @@ export REWARD_BREAKDOWN="${REWARD_BREAKDOWN:-0}"
 
 BODIES="${BODIES:-sub1 sub2 sub3 sub5 sub9 sub17}"     # the 6 folded-in subjects
 SOURCES="${SOURCES:-sub1 sub2 sub3 sub5 sub9 sub17}"
-NUM_ENVS="${NUM_ENVS:-1024}"
+# NUM_ENVS is deliberately GONE. The eval config owns numEnvs, full stop.
+# It is a scoring-budget knob, not a resource knob: success is the BEST attempt
+# per CLIP -- _max_execution_steps is a running max indexed by seq_id, over a
+# clip-count denominator (intermimic.py:1685-1703) -- so more envs can only raise
+# the success rate and lower the pose errors. A launcher default of 1024 silently
+# beat whatever the config said, which is how two arms could be compared on
+# different scoring budgets. To change it, change the eval config, where it is
+# reviewable and shared by every arm compared against it.
 TIMEOUT="${TIMEOUT:-900}"
-# The base test config restricts to dataObjects ['largetable','woodchair'] (a
-# student-eval leftover) -- the curriculum trained on ALL objects, so by default
-# we drop that restriction. Set ALL_OBJECTS=0 to keep the base config's filter.
-ALL_OBJ=""
-[ "${ALL_OBJECTS:-1}" = "1" ] && ALL_OBJ="--all-objects"
-# Arch-matched configs. Default = MLP. For a TRANSFORMER checkpoint set
-#   BASE_YAML=.../omomo_test_multibody_xf.yaml  TRAIN_YAML=<transformer train yaml>.
-# BETAS_FILE overrides the base yaml's betas_file so the beta obs matches the
-# checkpoint's training betas (neutral vs gendered vs neutral_aug).
-BASE_YAML="${BASE_YAML:-isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml}"
-TRAIN_YAML="${TRAIN_YAML:-isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml}"
-# BETAS_FILE is required above. "none" is the explicit opt-out (run trained with
-# no betas -> use the base yaml as-is, no override); anything else must be a real
-# file (checked below) and overrides the base yaml's betas_file.
-BETAS_ARG=""
-if [ "$BETAS_FILE" != "none" ]; then
-    [ -f "$BETAS_FILE" ] || { echo "[eval] ERROR: BETAS_FILE not found: $BETAS_FILE (use BETAS_FILE=none only for no-betas runs)" >&2; exit 2; }
-    BETAS_ARG="--betas-file $BETAS_FILE"
-fi
 
 # Rename the job so `squeue` shows which eval this is (the output CSV stem).
 scontrol update JobId="$SLURM_JOB_ID" JobName="ev-$(basename "${OUT%.csv}")" 2>/dev/null || true
 
 mkdir -p "$(dirname "$OUT")"
 echo "[eval] checkpoint = $CHECKPOINT"
-echo "[eval] bodies=($BODIES)  x  sources=($SOURCES)  all_objects=${ALL_OBJECTS:-1}"
+echo "[eval] bodies=($BODIES)  x  sources=($SOURCES)"
 echo "[eval] -> $OUT"
-echo "[eval] base=$BASE_YAML train=$TRAIN_YAML betas=${BETAS_FILE:-<base default>}"
+# Echo the settings that decide what the numbers MEAN, straight out of the config,
+# so the job log records them rather than the reader having to go find the file.
+echo "[eval] env=$ENV_YAML train=$TRAIN_YAML"
+python3 - "$ENV_YAML" <<'PY'
+import sys, yaml
+e = (yaml.safe_load(open(sys.argv[1])) or {}).get("env", {})
+g = (e.get("rewardTerms") or {}).get("freeFlightGate") or {}
+print(f"[eval] numEnvs={e.get('numEnvs')} rolloutLength={e.get('rolloutLength')} "
+      f"stateInit={e.get('stateInit')} numObs={e.get('numObs')} "
+      f"obsHorizons={e.get('obsHorizons', '<stock>')}")
+print(f"[eval] betas={e.get('betas_file', '<none>')} "
+      f"retarget={e.get('retargetedMotionDir', '<none>')} "
+      f"motion={e.get('motion_file')} ffgResets={g.get('resets', False)}")
+PY
 [ -f "$CHECKPOINT" ] || { echo "[eval] ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 
 # RESUME=1 keeps the pairs an earlier run of this same CSV already completed and
@@ -108,10 +122,9 @@ python -u scripts/eval_per_pair.py \
     --bodies $BODIES \
     --sources $SOURCES \
     --output-csv "$OUT" \
-    --base-yaml "$BASE_YAML" \
+    --env-yaml "$ENV_YAML" \
     --train-yaml "$TRAIN_YAML" \
-    --num-envs "$NUM_ENVS" \
-    --timeout-per-pair "$TIMEOUT" $ALL_OBJ $BETAS_ARG $RESUME_ARG
+    --timeout-per-pair "$TIMEOUT" $RESUME_ARG
 
 echo
 echo "================ EVAL SUMMARY ================"

@@ -16,8 +16,8 @@
 set -u
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 CFG=isaacgym/src/intermimic/data/cfg
-XF_BASE="$CFG/omomo_test_multibody_xf.yaml"
-MLP_BASE="$CFG/omomo_test_multibody.yaml"
+XF_BASE="$CFG/omomo_eval_v1_multibody_xf.yaml"
+MLP_BASE="$CFG/omomo_eval_v1_multibody_mlp.yaml"
 TEST_TGT="sub10 sub16"
 MARK=eval_results/.watched; mkdir -p "$MARK"
 

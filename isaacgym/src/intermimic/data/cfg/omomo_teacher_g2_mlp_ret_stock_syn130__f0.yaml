@@ -122,49 +122,6 @@ env:
   saveImages: false
   stateInit: Hybrid
   subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17', 'sub100', 'sub101', 'sub102', 'sub103', 'sub104', 'sub105', 'sub106', 'sub107', 'sub108', 'sub110', 'sub111', 'sub112', 'sub113', 'sub114', 'sub115', 'sub116', 'sub117', 'sub118', 'sub119', 'sub120', 'sub124', 'sub127', 'sub128', 'sub130', 'sub131', 'sub132', 'sub133', 'sub136', 'sub137', 'sub139', 'sub140', 'sub141', 'sub142', 'sub143', 'sub144', 'sub145', 'sub146', 'sub147', 'sub148', 'sub149', 'sub150', 'sub151', 'sub152', 'sub153', 'sub154', 'sub155', 'sub156', 'sub157', 'sub158', 'sub159', 'sub160', 'sub161', 'sub162', 'sub163', 'sub164', 'sub165', 'sub166', 'sub167', 'sub168', 'sub169', 'sub170', 'sub171', 'sub172', 'sub173', 'sub174', 'sub175', 'sub176', 'sub177', 'sub178', 'sub179', 'sub180', 'sub181', 'sub182', 'sub183', 'sub184', 'sub185', 'sub186', 'sub187', 'sub188', 'sub189', 'sub190', 'sub191', 'sub192', 'sub193', 'sub194', 'sub195', 'sub196', 'sub197', 'sub198', 'sub199', 'sub200', 'sub201', 'sub202', 'sub203', 'sub204', 'sub205', 'sub206', 'sub207', 'sub208', 'sub209', 'sub210', 'sub211', 'sub212', 'sub213', 'sub214', 'sub215', 'sub216', 'sub217', 'sub218', 'sub219', 'sub220', 'sub221', 'sub222', 'sub223', 'sub224', 'sub225', 'sub226', 'sub227', 'sub228', 'sub229', 'sub230', 'sub231', 'sub232', 'sub233', 'sub234', 'sub235', 'sub236', 'sub237', 'sub238', 'sub239']
-  - sub1
-  - sub2
-  - sub3
-  - sub5
-  - sub6
-  - sub7
-  - sub8
-  - sub9
-  - sub11
-  - sub12
-  - sub14
-  - sub15
-  - sub17
-  - sub100
-  - sub101
-  - sub102
-  - sub103
-  - sub104
-  - sub105
-  - sub106
-  - sub107
-  - sub108
-  - sub110
-  - sub111
-  - sub112
-  - sub113
-  - sub114
-  - sub115
-  - sub116
-  - sub117
-  - sub118
-  - sub119
-  - sub120
-  - sub124
-  - sub127
-  - sub128
-  - sub130
-  - sub131
-  - sub132
-  - sub133
-  - sub136
-  - sub137
-  - sub139
   subjectHeightsFile: scripts/synthetic_heights_v2.json
   terminationHeight: 0.15
 sim:

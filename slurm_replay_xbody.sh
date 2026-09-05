@@ -43,17 +43,23 @@ SOURCE="${SOURCE:-sub4}"       # ground-truth motion played (dataSub)
 OBJECT="${OBJECT:-}"           # empty = all objects
 CLIP="${CLIP:-}"               # empty = all clips; set e.g. sub2_largetable_005 to pin ONE
 FRAMES="${FRAMES:-300}"
-BASE=isaacgym/src/intermimic/data/cfg/omomo_test_multibody.yaml
+# ARM=<arm> replays through that arm's own environment (its motion dir, object
+# set and object physics); otherwise the v1 config, correct only for v1-era OMOMO.
+if [ -n "${ARM:-}" ]; then
+    BASE=$(python3 scripts/check_eval_cfg.py --arm "$ARM") || exit 2
+else
+    BASE=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml
+fi
 TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
 
-OBJLINE="dataObjects: []"
-[ -n "$OBJECT" ] && OBJLINE="dataObjects: ['$OBJECT']"
+OBJ_ARG="--data_objects all"
+[ -n "$OBJECT" ] && OBJ_ARG="--data_objects $OBJECT"
 TAG="${BODY}_${SOURCE}${OBJECT:+_$OBJECT}${CLIP:+_${CLIP##*_}}"
 scontrol update JobId="$SLURM_JOB_ID" JobName="rxb-$TAG" 2>/dev/null || true
 
 # CLIP pin: load exactly one clip so every body sees the IDENTICAL motion. Build a
 # temp motion dir holding only that clip and override motion_file to point at it.
-MOTLINE=""
+MOT_ARG=""
 if [ -n "$CLIP" ]; then
     case "$CLIP" in
         "${SOURCE}"_*) : ;;   # must belong to SOURCE or the dataSub filter drops it
@@ -63,20 +69,21 @@ if [ -n "$CLIP" ]; then
     [ -f "$SRC_CLIP" ] || { echo "[replayxb] ERROR: clip not found: $SRC_CLIP" >&2; exit 1; }
     CLIPDIR="/tmp/replayxb_clip_${CLIP}"
     mkdir -p "$CLIPDIR"; ln -sf "$SRC_CLIP" "$CLIPDIR/${CLIP}.pt"
-    MOTLINE="; s|motion_file:.*|motion_file: $CLIPDIR|"
+    MOT_ARG="--motion_file $CLIPDIR"
     echo "[replayxb] CLIP pinned: only ${CLIP}.pt (motion_file -> $CLIPDIR)"
 fi
 
 mkdir -p renders
-CFG="/tmp/replayxb_$TAG.yaml"
-# play SOURCE's motion (dataSub) on BODY's MJCF (subjectBodies)
-sed "s|dataSub:.*|dataSub: ['$SOURCE']|; s|subjectBodies:.*|subjectBodies: ['$BODY']|; s|dataObjects:.*|$OBJLINE|$MOTLINE" \
-    "$BASE" > "$CFG"
+# No temp config: body / source / object / motion_file are all CLI overrides, so
+# --cfg_env gets the committed file untouched. The sed this replaces rewrote the
+# `dataSub:` line and orphaned the `- sub2` items beneath it on any block-style
+# list -- which is every generated and hand-written per-arm config.
 
 echo "[replayxb] body=$BODY  source=$SOURCE  object=${OBJECT:-ALL}  -> renders/replayxb_$TAG.mp4"
 RECORD_VIDEO="renders/replayxb_$TAG.mp4" MAX_VIDEO_FRAMES="$FRAMES" \
     python -u -m intermimic.run --task InterMimic \
-        --cfg_env "$CFG" --cfg_train "$TRAIN" \
+        --cfg_env "$BASE" --cfg_train "$TRAIN" \
+        --subject_bodies "$BODY" --data_sub "$SOURCE" $OBJ_ARG $MOT_ARG \
         --test --play_dataset --headless --num_envs 1
 
 echo

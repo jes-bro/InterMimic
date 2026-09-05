@@ -122,49 +122,6 @@ env:
   saveImages: false
   stateInit: Hybrid
   subjectBodies: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']
-  - sub1
-  - sub2
-  - sub3
-  - sub5
-  - sub6
-  - sub7
-  - sub8
-  - sub9
-  - sub11
-  - sub12
-  - sub14
-  - sub15
-  - sub17
-  - sub100
-  - sub101
-  - sub102
-  - sub103
-  - sub104
-  - sub105
-  - sub106
-  - sub107
-  - sub108
-  - sub110
-  - sub111
-  - sub112
-  - sub113
-  - sub114
-  - sub115
-  - sub116
-  - sub117
-  - sub118
-  - sub119
-  - sub120
-  - sub124
-  - sub127
-  - sub128
-  - sub130
-  - sub131
-  - sub132
-  - sub133
-  - sub136
-  - sub137
-  - sub139
   subjectHeightsFile: scripts/synthetic_heights_v2.json
   terminationHeight: 0.15
 sim:
