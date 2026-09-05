@@ -16,6 +16,10 @@
 # is an error rather than a silent fall back to a generic template.
 evalFor:
   - g3_bball_geoall__f0
+  # The single-body twin differs from the multi-body arm ONLY in
+  # subjectBodies, which is eval-owned (set per pair), so one eval
+  # environment serves both.
+  - g3_bball_geoall_sub2__f0
 
 env:
   numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.

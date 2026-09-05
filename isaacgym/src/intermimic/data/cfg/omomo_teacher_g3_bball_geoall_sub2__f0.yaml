@@ -1,0 +1,167 @@
+# BBALL OVERFIT with geometric_all -- the SINGLE-BODY twin of g3_bball_geoall__f0.
+#
+# ONE functional edit vs that arm: subjectBodies 43 bodies -> ['sub2'].
+# Everything else is byte-identical -- geometric_all, obsHorizons [1,4,7,10,13,16],
+# numObs 9594 (no betas), freeFlightGate {reward: false, resets: true}, all four
+# resetThresholds live, rolloutLength 50, initVel true, PSI 3, bball object
+# physics (density 86, restitution 0.85 on object AND plane), and the SAME
+# body-major retarget tree, which already contains sub2.
+#
+# WHY ONE BODY. The multi-body arm asks whether the recipe transfers across 43
+# bodies at once; this asks whether it can fit the clip AT ALL on the body the
+# r-series ladder used. A failure here is a recipe failure; a failure only in the
+# multi-body arm is a cross-body failure. Keeping the diff to a single key is
+# what makes that distinction readable.
+#
+# NOTE this is NOT r12. r12 turns the object-side resets OFF entirely
+# (object/igRatio/contactSteps all false); this keeps all four live and lets the
+# free-flight gate handle the ballistic frames, which is the g3 recipe.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub:
+  - sub100
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_optj3d_cf2
+  numEnvs: 4096
+  numObs: 9594
+  objectDensity: 86
+  objectShapeProps:
+    restitution: 0.85
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.85
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_bball_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies: ['sub2']
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
