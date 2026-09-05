@@ -52,8 +52,28 @@ def main():
         body_line = "  subjectBodies: [" + ", ".join(f"'{b}'" for b in roster) + "]"
 
         env = (CFG / f"omomo_teacher_{BASE}.yaml").read_text()
-        env, n = re.subn(r"^  subjectBodies:.*$", body_line, env, count=1, flags=re.M)
+        # Replace the subjectBodies KEY *and the block-style items under it*.
+        #
+        # This used to be r"^  subjectBodies:.*$", which matches only the key line.
+        # The base cfg writes the roster as a block list --
+        #     subjectBodies:
+        #     - sub1
+        #     ... 43 items
+        # -- so swapping the key line for a flow-style one left 43 orphaned
+        # `- subN` entries dangling under it, and all three generated cells failed
+        # yaml.safe_load outright. They were committed broken and could never have
+        # launched. Worse, tests/test_generate_synladder_cfgs.py runs this script,
+        # so every `pytest tests/` rewrote the corruption back into the repo --
+        # repairing the output files could never stick while this line was wrong.
+        env, n = re.subn(r"^  subjectBodies:.*(?:\n  - .*)*$", body_line,
+                         env, count=1, flags=re.M)
         assert n == 1
+        # Belt and braces: the whole point is that the result PARSES. Assert it
+        # here rather than discovering it at sbatch time.
+        import yaml as _yaml
+        _bodies = _yaml.safe_load(env)["env"]["subjectBodies"]
+        assert _bodies == roster, (
+            f"{cell}: emitted roster {len(_bodies)} bodies, expected {len(roster)}")
         env, n = re.subn(r"betas_file:.*", "betas_file: scripts/omomo_betas_neutral_aug2.npz", env, count=1)
         assert n == 1
         env, n = re.subn(r"subjectHeightsFile:.*",

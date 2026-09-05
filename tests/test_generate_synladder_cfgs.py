@@ -37,11 +37,37 @@ def test_functional_edits_and_no_drift():
         assert "synthetic_heights_v2.json" in txt
         assert "retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2" in txt
         assert "cpuMotionData: true" in txt
-        # every line outside the 4 intended edits matches the base cell exactly
-        skip = ("subjectBodies:", "betas_file:", "subjectHeightsFile:", "# SYN-LADDER")
-        left = [l for l in txt.splitlines() if not any(k in l for k in skip)]
-        right = [l for l in base.splitlines() if not any(k in l for k in skip)]
-        assert left == right, f"{cell}: unexpected drift from base cfg"
+
+        # Compare PARSED configs, not lines.
+        #
+        # This was a line-by-line diff with a skip list containing
+        # "subjectBodies:", which only matches the KEY line -- while the base
+        # cfg writes its roster as 43 separate "  - subN" lines that the skip
+        # never covered. It passed only because the generator left those same 43
+        # lines orphaned in the output, i.e. the test was asserting the presence
+        # of the corruption that made all three cells fail yaml.safe_load. A
+        # structural comparison cannot be fooled that way, and it also proves the
+        # emitted file parses at all.
+        import yaml
+        def flat(node, pre=""):
+            out = {}
+            for k, v in (node or {}).items():
+                key = f"{pre}{k}"
+                if isinstance(v, dict):
+                    out.update(flat(v, key + "."))
+                else:
+                    out[key] = v
+            return out
+
+        got, want = yaml.safe_load(txt), yaml.safe_load(base)
+        a, b = flat(got.get("env")), flat(want.get("env"))
+        a.update(flat({"sim": got.get("sim")}))
+        b.update(flat({"sim": want.get("sim")}))
+        intended = {"subjectBodies", "betas_file", "subjectHeightsFile"}
+        drift = sorted(k for k in set(a) | set(b)
+                       if k.split(".")[-1] not in intended
+                       and a.get(k, "<absent>") != b.get(k, "<absent>"))
+        assert not drift, f"{cell}: unexpected drift from base cfg: {drift}"
 
 
 def test_train_cfg_and_slurm():
