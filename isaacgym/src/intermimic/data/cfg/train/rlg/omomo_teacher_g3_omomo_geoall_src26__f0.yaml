@@ -31,7 +31,7 @@ params:
     reward_shaper:
       scale_value: 1
     save_best_after: 100
-    save_frequency: 100
+    save_frequency: 1000
     save_intermediate: true
     score_to_win: 20000
     seq_len: 4
