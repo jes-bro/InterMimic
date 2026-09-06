@@ -1,22 +1,36 @@
-# MULTI-SOURCE teacher: 3 sources (sub2, sub6, sub9).
+# SOURCE-QUANTITY ladder, top single-source rung: ONE source, sub1 (532 clips).
 #
 # TWO functional edits vs g3_omomo_nobetas__f0 -- and they are one change, not two:
-#   dataSub             ['sub2'] -> ['sub2', 'sub6', 'sub9']
-#   retargetedMotionDir src2 tree -> the MERGED tree
+#   dataSub             ['sub2'] -> ['sub1']
+#   retargetedMotionDir src2 tree -> the src1 tree
 #
-# The second follows from the first. Retargeting is solved per SOURCE, so each
-# tree holds one source's clips laid out by target body
-# (<dir>/<body>/sub<SRC>_<obj>_<idx>.pt). The task reads exactly ONE directory
-# (intermimic.py:302-334), so an arm loading 3 sources needs all 3 sources'
-# clips under each body. Build it with scripts/merge_retarget_trees.py -- it is
-# a symlink farm over the existing per-source trees, no re-solving.
+# The second follows from the first. Retargeting is solved per SOURCE, so an arm
+# reading sub1's clips must point at sub1's tree
+# (<dir>/<body>/sub1_<obj>_<idx>.pt). ONE source means NO merge is needed here --
+# slurm_retarget_gen.sh writes InterAct/OMOMO_retarget_contact_src1 directly,
+# unlike the src26/src269/srctop3 arms which need merge_retarget_trees.py.
 #
-# WHAT THIS ASKS. Every teacher so far is single-source. Before scaling to one
-# teacher per source subject, we need to know whether ONE teacher can carry
-# several sources without losing per-source quality. Read it by evaluating each
-# source separately and comparing against g3_omomo_nobetas__f0, which is the same recipe on
-# sub2 alone -- so the ladder 1 -> 2 -> 3 sources has its first rung already
-# trained and this arm differs from it in the source set and nothing else.
+# WHAT THIS ASKS. Does the AMOUNT of source motion matter, holding the NUMBER of
+# sources fixed? The existing ladder cannot say: g3_omomo_nobetas__f0 -> src26 ->
+# src269 raises clip count AND source diversity together, so an improvement is
+# attributable to neither. This arm moves quantity alone:
+#
+#   g3_omomo_nobetas__f0   sub2    52 clips   1 source
+#   THIS ARM               sub1   532 clips   1 source    (10x the motion)
+#
+# sub1 is the largest single source in f0's training set -- 532 clips, measured
+# from the rt-gen batch header (532 x 43 bodies = 22876 pairs), against 52 for
+# sub2 and 278 for sub6. So this is also the CEILING for a single-source teacher:
+# the bar the multi-source arms have to clear to justify themselves.
+#
+# Its partner is g3_omomo_nobetas_src1src2__f0 (584 clips, 2 sources), which holds
+# clip count near-fixed and varies source diversity instead -- the other axis of
+# the 2x2.
+#
+# MEMORY: 532 x 43 = 22876 per-body references, ~141 GB resident (hoi_data plus
+# 3x hoi_refs under PSI 3), so the slurm script asks for 192G. The 64G inherited
+# from the single-source arms is sized for 2236 motions and OOM-kills here (job
+# 17285379): CPU RAM, not VRAM -- cpuMotionData keeps these tensors on the host.
 #
 # NO BETAS. With betas_file absent, _use_betas_obs is False, so the 32-dim
 # (source_betas, target_betas) block is NEVER concatenated into the observation
@@ -67,7 +81,7 @@ env:
   cpuMotionData: true
   dataFPS: 30
   dataFramesScale: 1
-  dataSub: ['sub2', 'sub6', 'sub9']
+  dataSub: ['sub1']
   enableDebugVis: false
   enableEarlyTermination: true
   envSpacing: 2
@@ -124,7 +138,7 @@ env:
     human: 0.5
     igRatio: 2.0
     object: 0.5
-  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2src6src9
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src1
   rewardShape: geometric
   rewardTerms:
     freeFlightGate:

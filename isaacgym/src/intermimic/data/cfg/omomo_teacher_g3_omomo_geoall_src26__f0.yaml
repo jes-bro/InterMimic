@@ -18,9 +18,14 @@
 # sub2 alone -- so the ladder 1 -> 2 -> 3 sources has its first rung already
 # trained and this arm differs from it in the source set and nothing else.
 #
-# NO BETAS, so source_betas stays a zero vector and adding sources does not
-# change what the conditioning vector means. On a betas arm it would, and the
-# comparison against the single-source rung would not be clean.
+# NO BETAS. With betas_file absent, _use_betas_obs is False, so the 32-dim
+# (source_betas, target_betas) block is NEVER concatenated into the observation
+# (intermimic.py:1574-1581) -- numObs 9594 here against 9626 on the betas arm.
+# source_betas IS still allocated, as zeros (line 388), but nothing ever reads
+# it: both call sites are guarded by _use_betas_obs. So changing the source set
+# cannot shift the conditioning vector, because there is no conditioning vector
+# to shift. On a betas arm there would be, and the comparison against the
+# single-source rung would not be clean.
 env:
   asset:
     assetRoot: intermimic/data/assets

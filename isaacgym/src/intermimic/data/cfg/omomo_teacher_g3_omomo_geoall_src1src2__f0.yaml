@@ -1,22 +1,37 @@
-# MULTI-SOURCE teacher: 3 sources (sub2, sub6, sub9).
+# SOURCE-DIVERSITY control: TWO sources (sub1 + sub2), 584 clips.
 #
-# TWO functional edits vs g3_omomo_nobetas__f0 -- and they are one change, not two:
-#   dataSub             ['sub2'] -> ['sub2', 'sub6', 'sub9']
+# TWO functional edits vs g3_omomo_geoall__f0 -- and they are one change, not two:
+#   dataSub             ['sub2'] -> ['sub1', 'sub2']
 #   retargetedMotionDir src2 tree -> the MERGED tree
 #
 # The second follows from the first. Retargeting is solved per SOURCE, so each
 # tree holds one source's clips laid out by target body
 # (<dir>/<body>/sub<SRC>_<obj>_<idx>.pt). The task reads exactly ONE directory
-# (intermimic.py:302-334), so an arm loading 3 sources needs all 3 sources'
-# clips under each body. Build it with scripts/merge_retarget_trees.py -- it is
-# a symlink farm over the existing per-source trees, no re-solving.
+# (intermimic.py:302-334), so an arm loading 2 sources needs both sources' clips
+# under each body. Build it with scripts/merge_retarget_trees.py -- a symlink
+# farm over the existing per-source trees, no re-solving:
 #
-# WHAT THIS ASKS. Every teacher so far is single-source. Before scaling to one
-# teacher per source subject, we need to know whether ONE teacher can carry
-# several sources without losing per-source quality. Read it by evaluating each
-# source separately and comparing against g3_omomo_nobetas__f0, which is the same recipe on
-# sub2 alone -- so the ladder 1 -> 2 -> 3 sources has its first rung already
-# trained and this arm differs from it in the source set and nothing else.
+#   python3 scripts/merge_retarget_trees.py \
+#     --sources InterAct/OMOMO_retarget_contact_src1 \
+#               InterAct/OMOMO_retarget_contact_src2 \
+#     --out InterAct/OMOMO_retarget_contact_src1src2 \
+#     --bodies-from isaacgym/src/intermimic/data/cfg/omomo_teacher_g3_omomo_geoall_src1src2__f0.yaml
+#
+# WHAT THIS ASKS. Paired with g3_omomo_geoall_src1__f0, this isolates source
+# DIVERSITY from source QUANTITY -- the two things every other multi-source arm
+# changes at once:
+#
+#   g3_omomo_geoall_src1__f0   sub1        532 clips   1 source
+#   THIS ARM                   sub1+sub2   584 clips   2 sources   (+10% clips)
+#
+# A 10% clip difference against a doubling of the source count. If this beats
+# src1, the gain is diversity rather than data volume; if it does not, the
+# multi-source story is really a more-data story, and the src26/src269/srctop3
+# ladder should be read that way.
+#
+# MEMORY: 584 x 43 = 25112 per-body references, ~155 GB resident (hoi_data plus
+# 3x hoi_refs under PSI 3), so the slurm script asks for 224G. That is CPU RAM,
+# not VRAM -- cpuMotionData keeps these tensors on the host (intermimic.py:864).
 #
 # NO BETAS. With betas_file absent, _use_betas_obs is False, so the 32-dim
 # (source_betas, target_betas) block is NEVER concatenated into the observation
@@ -67,7 +82,7 @@ env:
   cpuMotionData: true
   dataFPS: 30
   dataFramesScale: 1
-  dataSub: ['sub2', 'sub6', 'sub9']
+  dataSub: ['sub1', 'sub2']
   enableDebugVis: false
   enableEarlyTermination: true
   envSpacing: 2
@@ -124,8 +139,8 @@ env:
     human: 0.5
     igRatio: 2.0
     object: 0.5
-  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src2src6src9
-  rewardShape: geometric
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src1src2
+  rewardShape: geometric_all
   rewardTerms:
     freeFlightGate:
       resets: true
