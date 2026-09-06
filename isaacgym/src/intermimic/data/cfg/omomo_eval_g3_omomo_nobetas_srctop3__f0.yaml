@@ -1,0 +1,124 @@
+# EVAL config -- g3_omomo_nobetas_srctop3__f0 (3 sources: sub1, sub12, sub14).
+# Mirrors omomo_teacher_g3_omomo_nobetas_srctop3__f0.yaml. Cannot share the single-source eval
+# config: retargetedMotionDir is NOT eval-owned and this arm reads the
+# merged tree. Read PER SOURCE against the single-source rung -- an
+# aggregate hides one source collapsing while another improves.
+evalFor:
+  - g3_omomo_nobetas_srctop3__f0
+
+env:
+  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
+                                           # Success is the BEST attempt per CLIP:
+                                           # _max_execution_steps is indexed by
+                                           # seq_id and is a running MAXIMUM, and the
+                                           # denominator is the clip count, not the
+                                           # env count (intermimic.py:1685-1703). So
+                                           # more envs = more attempts per clip = a
+                                           # success rate that can only rise and pose
+                                           # errors that can only fall. It must be
+                                           # IDENTICAL across every arm compared.
+                                           # 2048 = the count all 30 g2/g3 arms
+                                           # actually trained at (the launchers pass
+                                           # --num_envs "${NUM_ENVS:-2048}", which
+                                           # overrides the 4096 in their train yamls).
+                                           # NOTE: eval CSVs written before 2026-09-04
+                                           # used 1024 and are NOT comparable to these.
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  enableEvaluation: True
+  rolloutLength: 1000
+  physicalBufferSize: 1
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub1', 'sub12', 'sub14']   # all sources; overwritten per pair by --data_sub
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src1src12src14
+  cpuMotionData: true
+  subjectHeightsFile: scripts/synthetic_heights.json
+  bodyNormalizedReward: true
+  ballSize: 1.
+  numObs: 9594                             # 6 horizons x 1599, no betas block
+  obsHorizons: [1, 4, 7, 10, 13, 16]
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  resetThresholds:
+    human: 0.5
+    object: 0.5
+    igRatio: 2.0
+    contactSteps: 10
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardShape: geometric
+
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+    freeFlightGate:
+      reward: false
+      resets: true
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25

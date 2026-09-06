@@ -1,0 +1,212 @@
+# MULTI-SOURCE teacher: the three LARGEST non-held-out sources (sub1, sub12, sub14).
+#
+# TWO functional edits vs g3_omomo_nobetas__f0: dataSub and retargetedMotionDir (the second
+# follows from the first -- retargeting is per source, and the task reads one
+# directory, so N sources need a merged tree; scripts/merge_retarget_trees.py).
+#
+# WHY THESE THREE. Chosen by clip count in InterAct/OMOMO_new:
+#   sub1 532 | sub12 315 | sub14 304  = 1151 clips
+# The three largest overall are sub1 532, sub10 398, sub12 315 -- but sub10 is an
+# f0 HELD-OUT BODY. Using it as a SOURCE would not violate the holdout (sources
+# and target bodies are separate axes, and the policy would still never train on
+# sub10's body), but the eval sweeps body x source, so it would score
+# body=sub10 against source=sub10: a held-out body driven by a motion the policy
+# trained on. Defensible, and one more thing to explain. sub14 (304) costs 94
+# clips and removes the question.
+#
+# WHAT THIS ASKS, AND WHAT IT IS NOT. This is a SCALE point, not a rung on the
+# src2/src6/src9 ladder: it changes which subjects AND how much data at once
+# (1151 clips vs 623). Read it as "does the recipe hold up on a lot of source
+# motion", not as a controlled step from the 3-source src2/6/9 arm.
+#
+# NO BETAS on either recipe, so the observation carries no conditioning vector
+# and adding sources cannot change its meaning.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub1', 'sub12', 'sub14']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/OMOMO_new
+  numEnvs: 4096
+  numObs: 9594
+  objectDensity: 200
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_src1src12src14
+  rewardShape: geometric
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2

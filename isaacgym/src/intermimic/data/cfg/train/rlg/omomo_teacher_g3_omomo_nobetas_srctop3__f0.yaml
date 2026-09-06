@@ -1,0 +1,69 @@
+# Train cfg -- identical to the other g3 arms' except full_experiment_name.
+# Stock upstream optimizer; the recipe lives entirely in the env cfg.
+params:
+  algo:
+    name: intermimic
+  config:
+    bounds_loss_coef: 10
+    clip_value: false
+    critic_coef: 5
+    e_clip: 0.2
+    enable_eps_greedy: false
+    entropy_coef: 0.0
+    env_name: rlgpu
+    full_experiment_name: smplx_teacher_g3_omomo_nobetas_srctop3__f0
+    gamma: 0.99
+    grad_norm: 1.0
+    horizon_length: 32
+    learning_rate: 2e-5
+    lr_schedule: constant
+    max_epochs: 100000
+    mini_epochs: 6
+    minibatch_size: 16384
+    mixed_precision: false
+    multi_gpu: false
+    name: mimic
+    normalize_advantage: true
+    normalize_input: true
+    normalize_value: false
+    ppo: true
+    print_stats: true
+    resume_from: None
+    reward_shaper:
+      scale_value: 1
+    save_best_after: 100
+    save_frequency: 100
+    save_intermediate: true
+    score_to_win: 20000
+    seq_len: 4
+    tau: 0.95
+    truncate_grads: false
+  load_checkpoint: false
+  model:
+    name: intermimic
+  network:
+    mlp:
+      activation: relu
+      d2rl: false
+      initializer:
+        name: default
+      regularizer:
+        name: None
+      units:
+      - 1024
+      - 1024
+      - 512
+    name: intermimic
+    separate: true
+    space:
+      continuous:
+        fixed_sigma: true
+        learn_sigma: false
+        mu_activation: None
+        mu_init:
+          name: default
+        sigma_activation: None
+        sigma_init:
+          name: const_initializer
+          val: -2.9
+  seed: -1
