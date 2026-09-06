@@ -40,6 +40,7 @@ from rl_games.algos_torch import torch_ext
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
 
 from . import common_player
+from . import takeover as _takeover_mod
 
 class InterMimicPlayerContinuous(common_player.CommonPlayer):
     def __init__(self, config):
@@ -60,6 +61,24 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         games_played = 0
         has_masks = False
         has_masks_func = getattr(self.env, "has_action_mask", None) is not None
+
+        # TAKEOVER: drive the first k steps of each episode with a NOISED copy of
+        # the teacher's action, then hand the teacher the wheel for the rest.
+        # Measures whether the teacher can act competently from states it did not
+        # choose -- the property distillation actually depends on and the one
+        # `stateInit: Start` guarantees the ordinary eval cannot see.
+        # None when TAKEOVER_K is unset or 0, and then nothing below runs, so a
+        # normal eval executes the same code it did before this existed.
+        _takeover = _takeover_mod.TakeoverConfig.from_env()
+        _tk_gen = None
+        _tk_wander_deaths = 0
+        if _takeover is not None:
+            if _takeover.seed is not None:
+                _tk_gen = torch.Generator(device=self.device)
+                _tk_gen.manual_seed(_takeover.seed)
+            print(f"[takeover] {_takeover} -- first {_takeover.k} steps of each "
+                  f"episode are driven by teacher+N(0,{_takeover.noise}); the "
+                  f"teacher takes over after that", flush=True)
 
         _record_path = os.environ.get("RECORD_VIDEO")
         _max_video_frames = int(os.environ.get("MAX_VIDEO_FRAMES", "1000"))
@@ -274,7 +293,25 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                         action = self.get_masked_action(obs_dict, masks, is_determenistic)
                     else:
                         action = self.get_action(obs_dict, is_determenistic)
+
+                    # Perturb ONLY the envs still inside their wander window.
+                    # progress_buf is per-env steps since that env's own reset,
+                    # so staggered resets stay aligned to each episode's start.
+                    _tk_wandering = None
+                    if _takeover is not None:
+                        _prog = self.env.task.progress_buf
+                        _tk_wandering = _takeover_mod.wander_mask(_prog, _takeover)
+                        action = _takeover_mod.apply(action, _prog, _takeover,
+                                                     generator=_tk_gen)
+
                     obs_dict, r, done, info =  self.env_step(self.env, action)
+
+                    # An env that died DURING the noise was killed by the noise,
+                    # not by a teacher that could not recover. Counted apart so
+                    # the two never silently sum into one success rate.
+                    if _tk_wandering is not None:
+                        _tk_wander_deaths += _takeover_mod.count_wander_deaths(
+                            done, _tk_wandering)
                     # A policy rollout dumps the same way a replay does, so the
                     # two render identically and can be compared frame to frame.
                     if _traj is not None:
@@ -360,6 +397,16 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         # Print final evaluation summary if evaluation is enabled
         if hasattr(self.env.task, 'print_final_eval_summary'):
             self.env.task.print_final_eval_summary()
+
+        # Printed AFTER the eval summary so the success rate above is always read
+        # next to how many episodes never survived to be the teacher's problem.
+        # A large share here means TAKEOVER_NOISE is measuring the noise rather
+        # than the teachers, and the comparison should be rerun lower.
+        if _takeover is not None:
+            print(f"[takeover] k={_takeover.k} noise={_takeover.noise} "
+                  f"wander_deaths={_tk_wander_deaths} "
+                  f"(episodes that died BEFORE the teacher took over; these are "
+                  f"not teacher failures)", flush=True)
 
         if _writer is not None:
             _writer.close()
