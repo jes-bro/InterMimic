@@ -21,11 +21,22 @@ failures = []
 
 
 def check(label, cond, detail=""):
+    """Record AND enforce.
+
+    This used to only append to `failures`, which is inspected exclusively by
+    main(). Under pytest the test functions therefore printed "FAIL" and then
+    returned normally, so the whole file passed no matter what the script did --
+    verified by deleting a protected pattern and watching all 5 tests stay
+    green. The assert is what makes these tests load-bearing; the print and the
+    list are kept so `python3 tests/test_prune_checkpoints.py` still reads as a
+    report rather than stopping at the first problem.
+    """
     if cond:
         print(f"  PASS  {label}")
     else:
         print(f"  FAIL  {label} {detail}")
         failures.append(label)
+    assert cond, f"{label} {detail}"
 
 
 def mk(root, run, names, age_s=86400, size=4096):
@@ -49,9 +60,20 @@ def build(root):
     mk(root, "smplx_curriculum_a", numbered + ["mimic.pth"])
     mk(root, "smplx_teacher_g2_mlp_plain_stock__f0", numbered)   # protected family
     mk(root, "smplx_cari4d_bball_r6_cf2", ["mimic.pth"])         # protected family
+    # Aged well past --live-minutes ON PURPOSE: the point is that the g3 grid
+    # is protected by NAME, not merely by having been touched recently. The
+    # live guard expires; the current experiment must stay safe after it does.
+    mk(root, "smplx_teacher_g3_omomo_geoall__f0", numbered)      # protected family
     mk(root, "smplx_curriculum_mixed", ["mimic_00001000.pth", "alpha.pth", "beta.pth"])
     mk(root, "smplx_curriculum_live", numbered[:9], age_s=60)    # still training
     mk(root, "smplx_curriculum_tiny", ["mimic_00000500.pth", "mimic_00001000.pth"])
+    # OFF-CONVENTION names for the three protected families. These are the
+    # cases the old prefix patterns (smplx_teacher_g2*, smplx_cari4d_bball*)
+    # silently failed to protect: a live experiment whose directory does not
+    # start the way the pattern assumed would have been thinned.
+    mk(root, "smplx_collab_g3_omomo_geoall__f0", numbered)
+    mk(root, "smplx_teacher_bball_r12_sub2_ret", numbered)
+    mk(root, "smplx_run_g2_xf_ret_nvadlr__f1", numbered)
 
 
 def test_dry_run_is_default():
@@ -76,6 +98,14 @@ def test_refusals():
         ck = root / "checkpoints"
         check("PROTECTED: the g2 family is untouched",
               len(list((ck / "smplx_teacher_g2_mlp_plain_stock__f0/nn").glob("*.pth"))) == 43)
+        for d in ("smplx_collab_g3_omomo_geoall__f0",
+                  "smplx_teacher_bball_r12_sub2_ret",
+                  "smplx_run_g2_xf_ret_nvadlr__f1"):
+            check(f"PROTECTED by SUBSTRING, not prefix: {d}",
+                  len(list((ck / d / "nn").glob("*.pth"))) == 43,
+                  f"({len(list((ck / d / 'nn').glob('*.pth')))} left)")
+        check("PROTECTED: the g3 family is untouched (current experiment)",
+              len(list((ck / "smplx_teacher_g3_omomo_geoall__f0/nn").glob("*.pth"))) == 43)
         check("PROTECTED: the bball family is untouched",
               len(list((ck / "smplx_cari4d_bball_r6_cf2/nn").glob("*.pth"))) == 1)
         check("LIVE: a run touched minutes ago is skipped",

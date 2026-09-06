@@ -42,7 +42,30 @@ from pathlib import Path
 
 EPOCH_RE = re.compile(r"(\d+)(?=\.pth$)")
 ROLLING = "mimic.pth"
-DEFAULT_PROTECT = ["smplx_cari4d_bball*", "smplx_teacher_g2*"]
+# NOTE: --protect REPLACES this list, it does not extend it (see `protect = ...`
+# below), so anything named on the CLI must repeat the patterns it still wants.
+# That is why the live grid belongs HERE and not in a command line: a prune run
+# that passed --protect for one family would otherwise silently un-protect the
+# others.
+# SUBSTRING patterns (*x*), not prefixes. The prefix forms smplx_teacher_g2* and
+# smplx_cari4d_bball* only protected runs whose directory happened to follow the
+# usual naming; a run named collab_g3_..., smplx_teacher_bball_..., or anything
+# else off-convention was NOT protected and would have been thinned. Since the
+# cost of a too-WIDE protect pattern is some disk left unreclaimed, and the cost
+# of a too-NARROW one is destroying the current experiment's checkpoints, these
+# are deliberately wide (Jess, 2026-09-06: "any directory with a g3 or g2 in it
+# or a bball in it (in case your naming convention is wrong) is spared").
+#
+# NOTE: --protect REPLACES this list, it does not extend it (see `protect = ...`
+# below), so anything named on the CLI must repeat the patterns it still wants.
+DEFAULT_PROTECT = [
+    "*bball*",   # EgoExo4D arms: save_intermediate False, one ckpt each
+    "*g2*",      # the gen-2 grid, kept whole
+    "*g3*",      # the gen-3 arms -- the CURRENT experiment; several were still
+                 # training when /simurgh2/projects hit 100% (2026-09-06) and
+                 # they resume from their own checkpoints, so thinning them
+                 # costs real work.
+]
 
 
 def human(n):
