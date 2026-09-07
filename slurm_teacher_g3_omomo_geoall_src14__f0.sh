@@ -6,7 +6,6 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=192G
 #SBATCH --gres=gpu:1
-#SBATCH --exclude=simurgh6
 
 #SBATCH --job-name="tch-g3_omomo_geoall_src14__f0"
 #SBATCH --output=teacher-g3_omomo_geoall_src14__f0-%j.out
