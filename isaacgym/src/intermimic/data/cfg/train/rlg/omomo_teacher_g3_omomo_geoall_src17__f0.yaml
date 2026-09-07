@@ -10,7 +10,7 @@ params:
     enable_eps_greedy: false
     entropy_coef: 0.0
     env_name: rlgpu
-    full_experiment_name: smplx_teacher_g3_bball_geoall_sub2__f0
+    full_experiment_name: smplx_teacher_g3_omomo_geoall_src17__f0
     gamma: 0.99
     grad_norm: 1.0
     horizon_length: 32
