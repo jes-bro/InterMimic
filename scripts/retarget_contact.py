@@ -73,6 +73,15 @@ FK_TOL_M = 0.005
 FK_ROT_TOL_DEG = 0.5
 
 
+def regression_exceeds(before_cm, after_cm, tol_cm=0.0):
+    """True when the retargeted clip is worse than the source by MORE than tol_cm.
+
+    tol_cm=0.0 is the historical behaviour (any regression at all is refused) and
+    stays the default everywhere; only an explicit --allow-worse-cm relaxes it.
+    """
+    return after_cm > before_cm + tol_cm
+
+
 def _geodesic_deg(A, B):
     """Angle between two sets of rotation matrices (...,3,3) -> degrees."""
     rel = A.transpose(-1, -2) @ B
@@ -325,7 +334,7 @@ def _one(job):
     # One thread per worker: torch grabs ~n_cores threads per process by default, so
     # a pool of W workers oversubscribes W*n_cores threads and thrashes to a standstill.
     torch.set_num_threads(1)
-    clip_path, source, target, scale, iters, out_dir, source_mjcf = job
+    clip_path, source, target, scale, iters, out_dir, source_mjcf, allow_worse = job
     dst = os.path.join(out_dir, target, os.path.basename(clip_path))
     if os.path.exists(dst):                       # resume: never redo finished work
         return (target, os.path.basename(clip_path), None, None, "skip")
@@ -336,21 +345,33 @@ def _one(job):
         # An under-converged solve can end up WORSE than not retargeting at all
         # (measured: 25 iters took sub16 from 2.72cm to 4.86cm). Never write that --
         # it would silently hand training a reference worse than the original.
-        if st["contact_after_cm"] > st["contact_before_cm"]:
+        #
+        # --allow-worse-cm is the opt-in escape hatch for the OTHER case: a
+        # CONVERGED solve that lands a hair on the wrong side. 12 (body, clip)
+        # pairs across src5/src15/src17 regress by 0.01-0.02 cm and do not
+        # improve at 900 iters; the clips are healthy (100% contact frames, no
+        # NaN, normal object distance), so refusing them left holes that blocked
+        # three arms outright. It defaults to 0.0 -- byte-for-byte the old
+        # behaviour -- so nothing changes unless a run asks for it, and the
+        # clips it lets through are reported, never silently written.
+        if regression_exceeds(st["contact_before_cm"], st["contact_after_cm"],
+                              allow_worse):
             return (target, os.path.basename(clip_path),
                     st["contact_before_cm"], st["contact_after_cm"],
                     f"WORSE {st['contact_before_cm']:.2f}->{st['contact_after_cm']:.2f}cm "
                     f"(raise --iters)")
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         torch.save(out, dst)
+        worse = st["contact_after_cm"] > st["contact_before_cm"]
         return (target, os.path.basename(clip_path),
-                st["contact_before_cm"], st["contact_after_cm"], "ok")
+                st["contact_before_cm"], st["contact_after_cm"],
+                "ok_worse" if worse else "ok")
     except Exception as e:                        # never let one clip kill the sweep
         return (target, os.path.basename(clip_path), None, None, f"ERROR {e!r}")
 
 
 def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=None,
-          source_mjcf=None):
+          source_mjcf=None, allow_worse=0.0):
     """Retarget EVERY clip of `source` onto EVERY target body. This is the
     preprocessing step that makes the retargeted reference usable for training:
     one file per (target_body, clip), written to <out_dir>/<body>/<clip>.pt."""
@@ -364,16 +385,23 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
         clips = clips[:limit]
     if not clips:
         raise SystemExit(f"no clips for source '{source}' in {motion_dir}")
-    jobs = [(os.path.join(motion_dir, c), source, t, scale, iters, out_dir, source_mjcf)
+    jobs = [(os.path.join(motion_dir, c), source, t, scale, iters, out_dir, source_mjcf,
+             allow_worse)
             for t in targets for c in clips]
     print(f"[batch] {len(clips)} clips x {len(targets)} bodies = {len(jobs)} pairs, "
           f"{workers} workers -> {out_dir}")
 
-    agg, errs, skipped = defaultdict(list), [], 0
+    agg, errs, skipped, nearmiss = defaultdict(list), [], 0, []
     with mp.Pool(workers) as pool:
         for i, (tgt, clip, before, after, status) in enumerate(pool.imap_unordered(_one, jobs), 1):
             if status == "ok":
                 agg[tgt].append((before, after))
+            elif status == "ok_worse":
+                # Written under --allow-worse-cm. Counted in the per-body mean
+                # like any other clip, AND listed separately below so a run can
+                # never quietly accumulate them.
+                agg[tgt].append((before, after))
+                nearmiss.append((tgt, clip, before, after))
             elif status == "skip":
                 skipped += 1
             else:
@@ -404,13 +432,20 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
         summary[t] = dict(before_cm=b, after_cm=a, n=len(live), n_no_contact=n_nc)
         note = f"   [{n_nc} clip(s) had no contact frames, excluded]" if n_nc else ""
         print(f"    {t:>8}: {b:6.2f} -> {a:6.2f}   ({len(live)} clips){note}")
+    if nearmiss:
+        print(f"\n[batch] {len(nearmiss)} written under --allow-worse-cm {allow_worse} "
+              f"(converged but marginally worse than the source):")
+        for t, c, b, a in nearmiss[:20]:
+            print(f"    {t}/{c}: {b:.3f} -> {a:.3f} cm  (+{a - b:.3f})")
     if errs:
         print(f"\n[batch] {len(errs)} FAILURES (not silently dropped):")
         for t, c, s in errs[:10]:
             print(f"    {t}/{c}: {s}")
     with open(os.path.join(out_dir, "retarget_summary.json"), "w") as f:
         json.dump(dict(source=source, object_scale=list(scale), iters=iters,
-                       summary=summary, errors=[list(e) for e in errs]), f, indent=2)
+                       allow_worse_cm=allow_worse, summary=summary,
+                       errors=[list(e) for e in errs],
+                       near_misses=[list(n) for n in nearmiss]), f, indent=2)
     print(f"\n[batch] done -> {out_dir} (summary in retarget_summary.json)")
 
 
@@ -438,6 +473,13 @@ def main():
     ap.add_argument("--target", required=False)
     ap.add_argument("--object-scale", nargs=3, type=float, default=[1., 1., 1.])
     ap.add_argument("--iters", type=int, default=300)
+    ap.add_argument("--allow-worse-cm", type=float, default=0.0,
+                    help="write a clip whose solve came out worse than the source "
+                         "by at most this many cm. Default 0.0 = refuse ANY "
+                         "regression (the historical behaviour). Use a small value "
+                         "(0.05) only for converged solves that miss by noise; it "
+                         "does NOT substitute for raising --iters on an "
+                         "under-converged one.")
     ap.add_argument("--out-dir", default="InterAct/OMOMO_retarget_contact")
     a = ap.parse_args()
     if a.selftest:
@@ -451,7 +493,7 @@ def main():
             ap.error("--batch needs --targets or --targets-from")
         batch(a.motion_dir, a.source, targets, a.out_dir, tuple(a.object_scale),
               a.iters, a.workers, a.limit,
-              source_mjcf=a.source_mjcf)
+              source_mjcf=a.source_mjcf, allow_worse=a.allow_worse_cm)
         return
     if not (a.clip and a.target):
         ap.error("--clip and --target required (or --selftest / --batch)")

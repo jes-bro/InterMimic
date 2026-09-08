@@ -50,8 +50,14 @@ fi
 echo "[rt-gen] host=$(hostname) job=$SLURM_JOB_ID  source=$SOURCE iters=$ITERS -> $OUT"
 echo
 
+# ALLOW_WORSE_CM: opt-in, default 0 = refuse ANY regression (unchanged behaviour).
+# Set it (0.05) only to let CONVERGED solves that miss by noise be written; the
+# clips it admits are listed in the log and in retarget_summary.json.
+ALLOW_WORSE_CM="${ALLOW_WORSE_CM:-0}"
+[ "$ALLOW_WORSE_CM" != 0 ] && echo "[rt-gen] --allow-worse-cm $ALLOW_WORSE_CM"
+
 python3 scripts/retarget_contact.py --batch --source "$SOURCE" \
-    "${TARG_ARGS[@]}" --iters "$ITERS" \
+    "${TARG_ARGS[@]}" --iters "$ITERS" --allow-worse-cm "$ALLOW_WORSE_CM" \
     --workers "${SLURM_CPUS_PER_TASK:-16}" --out-dir "$OUT"
 
 echo
