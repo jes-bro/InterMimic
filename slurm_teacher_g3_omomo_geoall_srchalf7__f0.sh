@@ -4,7 +4,7 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
+#SBATCH --mem=320G
 #SBATCH --gres=gpu:1
 
 #SBATCH --job-name="tch-g3_omomo_geoall_srchalf7__f0"
@@ -21,7 +21,7 @@
 # the auto-resume below is the fallback if the node dies, not the schedule.
 # Eval when done:  HELDOUT="sub10 sub13 sub16" sh scripts/eval_one.sh g3_omomo_geoall_srchalf7__f0
 #
-# --mem=256G is the RAGGED budget under the PADDED loader's 2.02x RAM model
+# --mem=320G is ~30% over the RAGGED budget under the PADDED loader's 2.02x model
 # (14.2 + 2.02 x 114 GiB = 244; scripts/motion_memory_budget.py). Padded would
 # have needed ~796 GiB (sub11's 652-frame outlier sets the pad). If the srcall13
 # run has reported MaxRSS by the time this is submitted, size from its measured
@@ -65,7 +65,7 @@ if ! grep -qE '^\s*raggedMotionData:\s*[Tt]rue' "$CFG_ENV"; then
     echo "[teacher] ERROR: srchalf7 without raggedMotionData in $CFG_ENV" >&2; exit 1
 fi
 # The merged tree must exist and cover every source, or the task dies at startup
-# anyway -- say so here, with the fix, instead of from a 256G job that got scheduled.
+# anyway -- say so here, with the fix, instead of from a 320G job that got scheduled.
 RT=$(grep -oE '^\s*retargetedMotionDir:\s*\S+' "$CFG_ENV" | awk '{print $2}')
 for s in sub2 sub6 sub7 sub8 sub9 sub11 sub14; do
     if ! ls "$RT"/sub2/${s}_*.pt >/dev/null 2>&1; then
