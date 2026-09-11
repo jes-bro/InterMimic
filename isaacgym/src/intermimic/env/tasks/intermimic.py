@@ -106,7 +106,8 @@ class InterMimic(Humanoid_SMPLX):
         'obsHorizons', 'numObservations', 'numStates', 'objectDensity', 'objectShapeProps',
         'pairSampleCountsFile',
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
-        'projtype', 'resetThresholds', 'retargetedMotionDir', 'rewardTerms', 'rewardWeights',
+        'projtype', 'raggedMotionData', 'resetThresholds', 'retargetedMotionDir',
+        'rewardTerms', 'rewardWeights',
         'rewardShape', 'robotType', 'rolloutLength',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'staticScene',
@@ -164,6 +165,12 @@ class InterMimic(Humanoid_SMPLX):
         # in VRAM. Trades a small per-step transfer for ~all the motion data's memory,
         # so the curriculum scales to far more source data than fits on the GPU.
         self._cpu_motion = cfg['env'].get('cpuMotionData', False)
+        # raggedMotionData: store clips back-to-back instead of padding every clip
+        # to the longest one. Same values at every (motion, t) a reader can ask
+        # for; only the memory changes (3.4x less on the 13-source OMOMO set,
+        # scripts/motion_memory_budget.py). Default OFF = the padded tensors,
+        # byte-identical to every run before it. See utils/ragged_motion.py.
+        self._ragged_motion = bool(cfg['env'].get('raggedMotionData', False))
         # Evaluation only works with stateInit "Start"
         state_init_is_start = (state_init == "Start")
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
@@ -733,6 +740,30 @@ class InterMimic(Humanoid_SMPLX):
         object_points_cpu = self.object_points.cpu()
         object_id_cpu = self.object_id.cpu()
 
+        # Ragged storage: one flat buffer per tensor, sized by a shape-only pass
+        # over the files, written clip by clip below. The padded path keeps a list
+        # of every processed clip and stacks it at the end (a 2x transient).
+        ragged = self._ragged_motion       # set in __init__ before super().__init__
+        if ragged:
+            if initk != 0:
+                # The padded loader prepends initk frames to hoi_data but NOT to
+                # hoi_refs, so the two end up initk frames apart. Reproducing that
+                # misalignment in ragged form is not worth it; refuse loudly.
+                raise NotImplementedError(
+                    "[ragged] raggedMotionData supports initk=0 only (the G1 task "
+                    "passes initk=15); use the padded loader there.")
+            from ...utils.ragged_motion import RaggedMotion, scan_clip_lengths
+            motion_dev = 'cpu' if self._cpu_motion else self.device
+            # The scan and the loop below walk the SAME list in the SAME order;
+            # the store keeps the paths and write_clip refuses a path that is not
+            # the one slot idx was sized from, so a reorder cannot go unnoticed.
+            clip_lengths = scan_clip_lengths(motion_file, startk=startk, initk=initk)
+            ragged_data = RaggedMotion(clip_lengths, device=motion_dev, paths=motion_file)
+            ragged_refs = RaggedMotion(clip_lengths, topk=topk, device=motion_dev, paths=motion_file)
+            print(f"[ragged] {len(clip_lengths)} clips, {sum(clip_lengths):,} frames "
+                  f"(padded would be {len(clip_lengths)} x {max(clip_lengths)} = "
+                  f"{len(clip_lengths) * max(clip_lengths):,})", flush=True)
+
         for idx, data_path in enumerate(motion_file):
             loaded_dict = {}
             hoi_data = torch.load(data_path)[startk:]
@@ -832,7 +863,6 @@ class InterMimic(Humanoid_SMPLX):
                                                     ),dim=-1)
             assert(self.ref_hoi_obs_size == loaded_dict['hoi_data'].shape[-1])
             loaded_dict['hoi_data'] = torch.cat([loaded_dict['hoi_data'][0:1] for _ in range(initk)]+[loaded_dict['hoi_data']], dim=0)
-            hoi_datas.append(loaded_dict['hoi_data'])
 
             hoi_ref = torch.cat((
                                 loaded_dict['root_pos'].clone(), 
@@ -846,33 +876,54 @@ class InterMimic(Humanoid_SMPLX):
                                 loaded_dict['obj_pos_vel'].clone(),
                                 loaded_dict['obj_rot_vel'].clone(),
                                 ),dim=-1)
-            hoi_refs.append(hoi_ref)
+            if ragged:
+                # Written in place and dropped: nothing per-clip survives the loop.
+                ragged_data.write_clip(idx, loaded_dict['hoi_data'], path=data_path)
+                ragged_refs.write_clip(idx, hoi_ref, path=data_path)
+            else:
+                hoi_datas.append(loaded_dict['hoi_data'])
+                hoi_refs.append(hoi_ref)
         max_length = max(max_episode_length) + initk
-        self.num_motions = len(hoi_refs)
+        self.num_motions = len(max_episode_length)
         self.max_episode_length = to_torch(max_episode_length, dtype=torch.long, device=self.device) + initk
-        hoi_data = []
-        self.hoi_refs = []
-        for i, data in enumerate(hoi_datas):
-            pad_size = (0, 0, 0, max_length - data.size(0))
-            padded_data = F.pad(data, pad_size, "constant", 0)
-            hoi_data.append(padded_data)
-            self.hoi_refs.append(F.pad(hoi_refs[i], pad_size, "constant", 0))
-        # Stack on CPU. With cpuMotionData we KEEP them on CPU and stream per step
-        # (_motion_gather); otherwise move the whole thing to GPU as before.
-        hoi_data = torch.stack(hoi_data, dim=0)
-        self.hoi_refs = torch.stack(self.hoi_refs, dim=0).unsqueeze(1).repeat(1, topk, 1, 1)
-        if not self._cpu_motion:
-            hoi_data = hoi_data.to(self.device)
-            self.hoi_refs = self.hoi_refs.to(self.device)
+        if ragged:
+            # Same index tuples as the padded tensors (see RaggedMotion), so every
+            # reader below, _motion_gather, and psi_buffer_update are unchanged.
+            hoi_data = ragged_data.assert_complete()
+            self.hoi_refs = ragged_refs.assert_complete()
+        else:
+            hoi_data = []
+            self.hoi_refs = []
+            for i, data in enumerate(hoi_datas):
+                pad_size = (0, 0, 0, max_length - data.size(0))
+                padded_data = F.pad(data, pad_size, "constant", 0)
+                hoi_data.append(padded_data)
+                self.hoi_refs.append(F.pad(hoi_refs[i], pad_size, "constant", 0))
+            # Stack on CPU. With cpuMotionData we KEEP them on CPU and stream per step
+            # (_motion_gather); otherwise move the whole thing to GPU as before.
+            hoi_data = torch.stack(hoi_data, dim=0)
+            self.hoi_refs = torch.stack(self.hoi_refs, dim=0).unsqueeze(1).repeat(1, topk, 1, 1)
+            if not self._cpu_motion:
+                hoi_data = hoi_data.to(self.device)
+                self.hoi_refs = self.hoi_refs.to(self.device)
 
         # --- GPU memory diagnostic (read-only) -- how big are the motion tensors,
         # and total GPU used (incl PhysX, via mem_get_info) right after loading them?
+        # For a RaggedMotion, nelement() is what is actually stored and .shape is the
+        # logical padded shape, so the line reads the same either way.
         _gb = lambda t: t.element_size() * t.nelement() / 1024 ** 3
         free, total = torch.cuda.mem_get_info()
         print(f"[mem] motion tensors: hoi_data {_gb(hoi_data):.2f}G {tuple(hoi_data.shape)} + "
               f"hoi_refs {_gb(self.hoi_refs):.2f}G {tuple(self.hoi_refs.shape)} = "
               f"{_gb(hoi_data) + _gb(self.hoi_refs):.2f}G "
-              f"{'on CPU (streamed per step)' if self._cpu_motion else 'on GPU'}", flush=True)
+              f"{'on CPU (streamed per step)' if self._cpu_motion else 'on GPU'}"
+              f"{' [ragged]' if ragged else ''}", flush=True)
+        if ragged:
+            _pad_gb = (hoi_data.padded_nelement() + self.hoi_refs.padded_nelement()) \
+                * hoi_data.element_size() / 1024 ** 3
+            print(f"[mem] ragged storage: {hoi_data.total_frames:,} frames stored; padded "
+                  f"would have been {_pad_gb:.2f}G "
+                  f"({_pad_gb / max(_gb(hoi_data) + _gb(self.hoi_refs), 1e-9):.2f}x)", flush=True)
         print(f"[mem] after motion load: torch {torch.cuda.memory_allocated() / 1024 ** 3:.2f}G | "
               f"GPU used {(total - free) / 1024 ** 3:.1f}/{total / 1024 ** 3:.0f}G (incl PhysX/other)",
               flush=True)
