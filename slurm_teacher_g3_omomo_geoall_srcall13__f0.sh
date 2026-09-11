@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=simurgh
 #SBATCH --partition=simurgh --qos=normal
-#SBATCH --time=24:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=480G
@@ -15,7 +15,10 @@
 
 # ALL-SOURCE g3 teacher: 13 sources x 43 bodies, RAGGED motion storage.
 # Hand-written from slurm_teacher_g3_omomo_geoall_srctop3__f0.sh.
-# 24h walltime for fast iteration -- resubmit to auto-resume.
+# 7-day walltime (every g3 arm ran 7 days in practice, via override or bash);
+# the auto-resume below is the fallback if the node dies, not the schedule.
+# Startup opens all 144k retargeted files twice, so a daily cadence would
+# repay that every day for nothing.
 # Eval when done:  HELDOUT="sub10 sub13 sub16" sh scripts/eval_one.sh g3_omomo_geoall_srcall13__f0
 #
 # --mem=480G is the RAGGED budget under the PADDED loader's 2.02x RAM model
