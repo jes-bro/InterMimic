@@ -133,6 +133,19 @@ def test_resume_skips_done_and_does_not_lose_rows_to_stdin(tmp_path):
         "sub412_bballd08s12t012a_000.pt"]
 
 
+def test_crlf_manifest_does_not_poison_the_mesh_path(tmp_path):
+    """The manifest the cluster job failed on three times: csv-module \\r\\n line
+    endings put a \\r on the last field. The driver must strip it."""
+    root, bundles, log = make_tree(tmp_path)
+    (bundles / "manifest.csv").write_text(MANIFEST.replace("\n", "\r\n"))
+    r = run(root, bundles)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for line in log.read_text().splitlines():
+        if line.startswith("wrapper "):
+            assert "\r" not in line
+    assert "converted 3, skipped 0, of 3" in r.stdout
+
+
 def test_refuses_without_inputs(tmp_path):
     root, bundles, log = make_tree(tmp_path)
     r = run(root, bundles, BETAS_NPZ=str(root / "nope.npz"))

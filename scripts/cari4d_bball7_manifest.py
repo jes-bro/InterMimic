@@ -177,7 +177,9 @@ def main(argv=None):
 
     path = a.manifest or (os.path.join(out_dir, "manifest.csv") if out_dir else None)
     fh = open(path, "w", newline="") if path else sys.stdout
-    w = csv.DictWriter(fh, fieldnames=COLUMNS)
+    # lineterminator: the csv module's default is \r\n, and a shell `read` on
+    # the cluster would keep the \r on the last field (the mesh path).
+    w = csv.DictWriter(fh, fieldnames=COLUMNS, lineterminator="\n")
     w.writeheader()
     w.writerows(rows)
     if path:

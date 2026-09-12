@@ -60,6 +60,10 @@ n_done=0; n_skip=0
 while IFS=, read -r clip subject subject_id clip_idx object take gender n_frames lo hi export bundle mesh; do
     [ "$clip" = "clip" ] && continue            # header
     [ -z "$clip" ] && continue
+    # Python's csv module ends lines with \r\n; `read` leaves the \r on the LAST
+    # field, which is the mesh path -- invisible in any log, and "missing input"
+    # on every clip. Strip it.
+    mesh="${mesh%$'\r'}"
     PT="InterAct/$DATASET_TAG/sub${subject_id}_${object}_${clip_idx}.pt"
     if [ -f "$PT" ]; then
         echo "[bball7] $clip -> $PT exists, skipping"; n_skip=$((n_skip + 1)); continue
