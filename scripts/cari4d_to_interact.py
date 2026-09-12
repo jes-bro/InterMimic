@@ -145,6 +145,15 @@ def main() -> int:
                              "(what you almost always want).")
     parser.add_argument("--fps", type=float, default=30.0,
                         help="Source video FPS (default 30).")
+    parser.add_argument("--betas-npz", default=None,
+                        help="Use a SHARED per-subject betas vector instead of this clip's "
+                             "own: an .npz with one (10,) array per key (see "
+                             "scripts/cari4d_subject_betas.py). With several clips per "
+                             "person, each clip's own fit would leave the last clip's "
+                             "body on disk and every other clip's joint positions "
+                             "computed on a rig that no longer exists.")
+    parser.add_argument("--betas-key", default=None,
+                        help="Key into --betas-npz (default: sub<subject-id>).")
     parser.add_argument("--prerotate-x", type=float, default=0.0,
                         help="Degrees to pre-rotate the SMPL pose + object pose "
                              "around the X axis before writing. NOT RECOMMENDED — "
@@ -227,6 +236,19 @@ def main() -> int:
         drift = float(np.max(np.abs(betas_all - betas_all[0:1])))
         print(f"[cari4d->interact] note: betas not constant across frames "
               f"(max drift {drift:.4g}); using frame 0")
+    if args.betas_npz:
+        key = args.betas_key or f"sub{args.subject_id}"
+        store = np.load(args.betas_npz)
+        if key not in store.files:
+            raise SystemExit(f"[cari4d->interact] --betas-npz {args.betas_npz} has no key "
+                             f"'{key}' (keys: {sorted(store.files)})")
+        shared = store[key].astype(np.float64)
+        if shared.shape != (10,):
+            raise SystemExit(f"[cari4d->interact] {args.betas_npz}[{key}] is {shared.shape}, "
+                             f"expected (10,)")
+        print(f"[cari4d->interact] betas: SHARED {key} from {args.betas_npz} "
+              f"(L2 from this clip's own fit: {float(np.linalg.norm(shared - beta)):.3f})")
+        beta = shared
 
     obj_trans = pose_abs[:, :3, 3].astype(np.float64)
     obj_angles = sRot.from_matrix(pose_abs[:, :3, :3]).as_rotvec().astype(np.float64)

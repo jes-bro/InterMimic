@@ -33,9 +33,9 @@
 
 set -euo pipefail
 
-INTERMIMIC=/simurgh2/projects/ret-hoi/InterMimic
-INTERACT=/simurgh2/projects/ret-hoi/InterAct
-CARI4D=/simurgh2/projects/ret-hoi/CARI4D
+INTERMIMIC="${INTERMIMIC:-/simurgh2/projects/ret-hoi/InterMimic}"
+INTERACT="${INTERACT:-/simurgh2/projects/ret-hoi/InterAct}"
+CARI4D="${CARI4D:-/simurgh2/projects/ret-hoi/CARI4D}"
 CACHE_ROOT=/simurgh2/projects/ret-hoi
 
 # The reconstruction to convert. Defaults to the egoexo4d basketball take.
@@ -147,6 +147,16 @@ if [ "$REPLAY_ONLY" != "1" ]; then
 # Step 1: CARI4D bundle -> InterAct format (human.npz, object.npz, mesh).
 log "step 1/4: cari4d_to_interact"
 cd "$INTERMIMIC"
+# BETAS_NPZ: shared per-subject body (scripts/cari4d_subject_betas.py). Unset =
+# this clip's own betas, the single-clip behaviour. Multi-clip subjects MUST set
+# it, or each conversion rewrites the subject's MJCF from a different fit.
+BETAS_NPZ="${BETAS_NPZ:-}"
+BETAS_FLAGS=""
+if [ -n "$BETAS_NPZ" ]; then
+    [ -f "$BETAS_NPZ" ] || { echo "ERROR: BETAS_NPZ=$BETAS_NPZ not found" >&2; exit 1; }
+    BETAS_FLAGS="--betas-npz $BETAS_NPZ --betas-key sub$SUBJECT_ID"
+    log "betas: shared sub$SUBJECT_ID from $BETAS_NPZ"
+fi
 python scripts/cari4d_to_interact.py \
     --bundle "$BUNDLE" \
     --mesh "$MESH" \
@@ -155,7 +165,8 @@ python scripts/cari4d_to_interact.py \
     --gender "$GENDER" \
     --subject-id "$SUBJECT_ID" \
     --object-name "$OBJECT_NAME" \
-    --clip-idx "$((10#$CLIP_IDX))"
+    --clip-idx "$((10#$CLIP_IDX))" \
+    $BETAS_FLAGS
 
 # Step 2: InterAct -> InterMimic. Either rig derives its proportions from the
 # subject's betas; see MESH above for why hulls are not the default.

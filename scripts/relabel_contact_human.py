@@ -88,6 +88,23 @@ def spans(flags):
     return " ".join(out)
 
 
+def radius_from_mesh(obj_path):
+    """Half the largest axis extent of the mesh's vertices -- the ball's radius
+    for a (near-)spherical reconstruction. Pure file read, no trimesh needed."""
+    lo = [float("inf")] * 3
+    hi = [float("-inf")] * 3
+    with open(obj_path) as fh:
+        for line in fh:
+            if line.startswith("v "):
+                x, y, z = (float(v) for v in line.split()[1:4])
+                for i, v in enumerate((x, y, z)):
+                    lo[i] = min(lo[i], v)
+                    hi[i] = max(hi[i], v)
+    if lo[0] == float("inf"):
+        raise ValueError(f"{obj_path}: no vertices")
+    return max(h - l for h, l in zip(hi, lo)) / 2.0
+
+
 def surface_gap(t, ball_radius):
     """Per-frame, per-hand-body distance to the ball SURFACE.
 
@@ -207,6 +224,15 @@ def main():
     ap.add_argument("--dst-dir", help="required unless --census")
     ap.add_argument("--mjcf", required=True,
                     help="subject MJCF -- used only to VERIFY the body order")
+    ap.add_argument("--ball-radius-from-mesh", metavar="OBJECTS_DIR",
+                    help="per-clip radius instead of --ball-radius: read each clip's "
+                         "object mesh at <OBJECTS_DIR>/<object>/<object>.obj (the "
+                         "task's assets/objects/objects layout; <object> is the "
+                         "filename token before the clip index) and use half its "
+                         "largest extent. For a dataset where every clip has its "
+                         "own reconstructed ball (0.21-0.26 m across), one radius "
+                         "would misjudge contact by up to 2.5 cm against a 2 cm "
+                         "threshold.")
     ap.add_argument("--ball-radius", type=float, default=0.13,
                     help="object radius in m (bball recon sphere is 0.26 m dia)")
     ap.add_argument("--threshold", type=float, default=0.02,
@@ -257,13 +283,25 @@ def main():
     if not clips:
         sys.exit(f"FATAL: no .pt clips in {src}")
 
+    # Radius per clip: one value for the directory, or each clip's own mesh.
+    radius = {}
+    for f in clips:
+        if args.ball_radius_from_mesh:
+            obj = f.stem.split("_")[-2]
+            mesh = Path(args.ball_radius_from_mesh) / obj / f"{obj}.obj"
+            if not mesh.is_file():
+                sys.exit(f"FATAL: --ball-radius-from-mesh: no mesh for {f.name} at {mesh}")
+            radius[f.name] = radius_from_mesh(mesh)
+        else:
+            radius[f.name] = args.ball_radius
+
     # --- Pass 1: census + the guard, on every clip, before writing anything. ---
     stats = {}
     for f in clips:
         t = torch.load(f, map_location="cpu", weights_only=False).detach()
-        st = census(t, args.ball_radius, args.threshold)
+        st = census(t, radius[f.name], args.threshold)
         stats[f.name] = st
-        print(f"\n{f.name}: {st['frames']} frames")
+        print(f"\n{f.name}: {st['frames']} frames  (ball radius {radius[f.name]:.4f} m)")
         print(f"  contact_human hand values present: {st['distinct_values']}")
         print(f"  -> writing contact={st['contact_value']}; clearing false "
               f"claims to {st['clear_value']} "
@@ -298,7 +336,7 @@ def main():
 
     for f in clips:
         t = torch.load(f, map_location="cpu", weights_only=False).detach()
-        out, touching = relabel(t, args.ball_radius, args.threshold, args.smooth,
+        out, touching = relabel(t, radius[f.name], args.threshold, args.smooth,
                                 args.keep_contact_obj, args.free_value)
         # Positions must be byte-identical: this script relabels, never moves.
         assert torch.equal(out[:, I_BODY], t[:, I_BODY]), "positions changed!"
