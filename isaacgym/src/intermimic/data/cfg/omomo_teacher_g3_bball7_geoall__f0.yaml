@@ -1,0 +1,232 @@
+# THE g3 RECIPE ON THE MULTI-SUBJECT EGOEXO4D BASKETBALL RECONSTRUCTION.
+# Twin of omomo_teacher_g3_bball_geoall__f0.yaml (one clip, one subject). What
+# differs, and only this (python3 scripts/cfg_diff.py the two files):
+#
+#   motion_file           InterAct/behave_cari4d_bball7_cf2   52 clips, 7 people
+#   dataSub               sub401 sub402 sub404 sub409 sub411 sub412 sub458
+#   retargetedMotionDir   the merged 7-source tree, f0's 43 bodies, body-major
+#   objectMass 0.624      instead of objectDensity 86 -- see OBJECT below
+#
+# THE DATA (2026-09-12). CARI4D reconstructions of EgoExo4D basketball takes,
+# 52 approved clips from 7 participants (Sub01 02 04 09 11 12 58 in CARI4D's
+# manifest; verified 7 distinct EgoExo4D participants via takes.json). Subject
+# id = 400 + Sub, so sub401 is the same person as the old single-clip sub100.
+# Manifest: scripts/cari4d_bball7_manifest.py; conversion:
+# scripts/slurm_cari4d_bball7_convert.sh (one shared body per person from the
+# mean of that person's per-clip betas, scripts/cari4d_subject_betas.py);
+# retarget: scripts/slurm_cari4d_bball7_retarget.sh + merge_retarget_trees.py.
+#
+# OBJECT. Every clip keeps ITS OWN reconstructed ball (a decision: the clip's
+# object trajectory and contact labels are calibrated to that mesh), so there
+# are 52 object names (bballd03s01rev003b, ...) and 52 URDFs. The task pins
+# each env to one object round-robin, which with one clip per object is
+# uniform-per-clip sampling (~39 envs per clip at 2048). The recon balls span
+# 0.21-0.26 m; with one objectDensity their masses would scatter +-35%, so
+# objectMass sets each ball to 0.624 kg (FIBA size 7) from its own mesh volume.
+# Restitution 0.85 on object and plane as in the single-clip arm.
+#
+# BODIES. Target bodies are f0's 43 OMOMO bodies, exactly the srcall13 /
+# g3_bball training set; sub10 sub13 sub16 stay held out. The CARI4D subjects'
+# own bodies are NOT targets here (humanoid.py resolves subjectBodies to
+# smplx_omomo_<sub>.xml); that is the follow-up arm.
+#
+# CLIP LENGTH. 15 of the 52 clips are shorter than rolloutLength 50 (30-49
+# frames): they train from frame 0 without PSI, as the whole r-series did
+# before r3. Kept (decision). The longest is 189 frames.
+#
+# Recipe verbatim: obsHorizons [1,4,7,10,13,16], numObs 9594, no betas,
+# geometric_all, rollout 50, initVel, PSI 3, pose 0.02, bodyNormalizedReward,
+# cpuMotionData, gate resets, all four resetThresholds, buffer 12.0, 2048 envs
+# via the launcher. Padded motion storage (to the 189-frame longest clip):
+# 2236 motions x 189 frames x 8.8 kB is ~4 GB; no ragged flag needed.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub401', 'sub402', 'sub404', 'sub409', 'sub411', 'sub412', 'sub458']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_bball7_cf2
+  numEnvs: 4096
+  numObs: 9594
+  objectMass: 0.624
+  objectShapeProps:
+    restitution: 0.85
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.85
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_bball7_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
