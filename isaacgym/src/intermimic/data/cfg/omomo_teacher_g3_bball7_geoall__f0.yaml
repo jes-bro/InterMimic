@@ -2,15 +2,20 @@
 # Twin of omomo_teacher_g3_bball_geoall__f0.yaml (one clip, one subject). What
 # differs, and only this (python3 scripts/cfg_diff.py the two files):
 #
-#   motion_file           InterAct/behave_cari4d_bball7_cf2   52 clips, 7 people
+#   motion_file           InterAct/behave_cari4d_bball7_cf2   48 clips, 7 people
 #   dataSub               sub401 sub402 sub404 sub409 sub411 sub412 sub458
 #   retargetedMotionDir   the merged 7-source tree, f0's 43 bodies, body-major
 #   objectMass 0.624      instead of objectDensity 86 -- see OBJECT below
 #
 # THE DATA (2026-09-12). CARI4D reconstructions of EgoExo4D basketball takes,
-# 52 approved clips from 7 participants (Sub01 02 04 09 11 12 58 in CARI4D's
-# manifest; verified 7 distinct EgoExo4D participants via takes.json). Subject
-# id = 400 + Sub, so sub401 is the same person as the old single-clip sub100.
+# 48 clips from 7 participants (Sub01 02 04 09 11 12 58 in CARI4D's manifest;
+# verified 7 distinct EgoExo4D participants via takes.json). 52 were approved;
+# 4 were DROPPED because the solve never brings a hand within 2 cm of the ball
+# surface although CARI4D's own contact classifier (and the video) say the ball
+# is caught -- a solve miss, not a labelling one: Sub02 mik029c (+3.6 cm),
+# mik032b (+8.7), Sub09 t030as01 (+9.5), t033bs01 (+3.8). Jess 2026-09-12:
+# drop, do not allow-list; re-add if re-solved. Subject id = 400 + Sub, so
+# sub401 is the same person as the old single-clip sub100.
 # Manifest: scripts/cari4d_bball7_manifest.py; conversion:
 # scripts/slurm_cari4d_bball7_convert.sh (one shared body per person from the
 # mean of that person's per-clip betas, scripts/cari4d_subject_betas.py);
@@ -18,9 +23,9 @@
 #
 # OBJECT. Every clip keeps ITS OWN reconstructed ball (a decision: the clip's
 # object trajectory and contact labels are calibrated to that mesh), so there
-# are 52 object names (bballd03s01rev003b, ...) and 52 URDFs. The task pins
+# are 48 object names (bballd03s01rev003b, ...) and 48 URDFs. The task pins
 # each env to one object round-robin, which with one clip per object is
-# uniform-per-clip sampling (~39 envs per clip at 2048). The recon balls span
+# uniform-per-clip sampling (~43 envs per clip at 2048). The recon balls span
 # 0.21-0.26 m; with one objectDensity their masses would scatter +-35%, so
 # objectMass sets each ball to 0.624 kg (FIBA size 7) from its own mesh volume.
 # Restitution 0.85 on object and plane as in the single-clip arm.
@@ -30,7 +35,7 @@
 # own bodies are NOT targets here (humanoid.py resolves subjectBodies to
 # smplx_omomo_<sub>.xml); that is the follow-up arm.
 #
-# CLIP LENGTH. 15 of the 52 clips are shorter than rolloutLength 50 (30-49
+# CLIP LENGTH. 11 of the 48 clips are shorter than rolloutLength 50 (30-49
 # frames): they train from frame 0 without PSI, as the whole r-series did
 # before r3. Kept (decision). The longest is 189 frames.
 #
@@ -38,7 +43,7 @@
 # geometric_all, rollout 50, initVel, PSI 3, pose 0.02, bodyNormalizedReward,
 # cpuMotionData, gate resets, all four resetThresholds, buffer 12.0, 2048 envs
 # via the launcher. Padded motion storage (to the 189-frame longest clip):
-# 2236 motions x 189 frames x 8.8 kB is ~4 GB; no ragged flag needed.
+# 2064 motions x 189 frames x 8.8 kB is ~3.4 GB; no ragged flag needed.
 env:
   asset:
     assetRoot: intermimic/data/assets

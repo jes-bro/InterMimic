@@ -32,7 +32,7 @@
 #                 InterAct/behave_cari4d_bball7_retarget_src412 \
 #                 InterAct/behave_cari4d_bball7_retarget_src458 \
 #       --out InterAct/behave_cari4d_bball7_f0_bodymajor
-#   (expect: 46 body dirs, 46 x 52 = 2392 links; check_retarget_coverage.py
+#   (expect: 46 body dirs, 46 x 48 = 2208 links; check_retarget_coverage.py
 #    confirms the held-out bodies are covered before an eval)
 #
 # --source-mjcf IS LOAD-BEARING: the solver resolves a bare subject id to

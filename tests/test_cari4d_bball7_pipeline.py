@@ -121,6 +121,21 @@ def test_manifest_rows(exports, tmp_path):
     assert b["pr"]["smpl_pose"].shape[0] == 68
 
 
+def test_keep_idx_from_preserves_indices_when_a_clip_is_dropped(exports, tmp_path):
+    """Dropping Sub01's first clip must NOT renumber rev009c from 001 to 000:
+    its converted file on the cluster is named with 001."""
+    out = tmp_path / "bundles"
+    manifest.main([str(exports), "--out-dir", str(out), "--exclude", "Date06_Sub04_bball_t014bt"])
+    old = out / "manifest_v1.csv"
+    (out / "manifest.csv").rename(old)
+    manifest.main([str(exports), "--out-dir", str(out), "--keep-idx-from", str(old),
+                   "--exclude", "Date06_Sub04_bball_t014bt", "Date03_Sub01_bball_rev003b"])
+    rows = {r["clip"]: r for r in csv.DictReader(open(out / "manifest.csv"))}
+    assert set(rows) == {"Date03_Sub01_bball_rev009c", "Date08_Sub12_bball_t012a"}
+    assert rows["Date03_Sub01_bball_rev009c"]["clip_idx"] == "001"     # kept, not renumbered
+    assert rows["Date08_Sub12_bball_t012a"]["clip_idx"] == "000"
+
+
 def test_manifest_refuses_unknown_exclude(exports, tmp_path):
     with pytest.raises(SystemExit):
         manifest.main([str(exports), "--out-dir", str(tmp_path / "b"), "--exclude", "Date99_Sub99_bball_x"])

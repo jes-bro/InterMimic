@@ -13,23 +13,23 @@
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=ALL
 
-# g3 RECIPE ON THE MULTI-SUBJECT BASKETBALL RECONSTRUCTION: 52 clips from 7
+# g3 RECIPE ON THE MULTI-SUBJECT BASKETBALL RECONSTRUCTION: 48 clips from 7
 # people (sub401 402 404 409 411 412 458) x f0's 43 bodies, every clip with its
 # own reconstructed ball. Hand-written from slurm_teacher_g3_bball_geoall__f0.sh.
 # 7-day walltime; the auto-resume below is the fallback if the node dies.
 # Eval when done:  HELDOUT="sub10 sub13 sub16" sh scripts/eval_one.sh g3_bball7_geoall__f0
 #
-# --mem=64G: 2236 (body, clip) motions padded to the 189-frame longest clip is
-# ~4 GB; the single-clip bball arm ran at 64G with the same 43 bodies.
+# --mem=64G: 2064 (body, clip) motions padded to the 189-frame longest clip is
+# ~3.4 GB; the single-clip bball arm ran at 64G with the same 43 bodies.
 #
 # BEFORE THE FIRST SUBMISSION, in this order (each refuses to run on missing input):
 #   1. rclone the extracted bundles + manifest + scripts/bball7_subject_betas.npz
 #   2. MANIFEST=... BUNDLES_ROOT=... sbatch scripts/slurm_cari4d_bball7_convert.sh
 #   3. sbatch --array=0-6 scripts/slurm_cari4d_bball7_retarget.sh   (read the verdicts)
 #   4. the merge_retarget_trees.py command in that script's header
-# Expect InterAct/behave_cari4d_bball7_cf2 with 52 clips and
+# Expect InterAct/behave_cari4d_bball7_cf2 with 48 clips and
 # InterAct/behave_cari4d_bball7_f0_bodymajor with 46 bodies (43 training + the
-# 3 held-out eval bodies) x 52 = 2392 files.
+# 3 held-out eval bodies) x 48 = 2208 files.
 
 source ~/.bashrc
 conda deactivate

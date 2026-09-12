@@ -118,7 +118,11 @@ def read_bundle_info(path, extract_to=None):
     return meta, gender, os.path.basename(pth[0].name), os.path.basename(obj[0].name)
 
 
-def build_rows(found, exclude, out_dir=None):
+def build_rows(found, exclude, out_dir=None, base_idx=None):
+    """base_idx: {clip: clip_idx} from a previous manifest. Clips in it KEEP their
+    index (so files already converted under that name stay valid); new clips
+    get the next free index per subject. Without it, indices are contiguous
+    per subject in sorted clip order."""
     rows = []
     for clip in sorted(found):
         if clip in exclude:
@@ -136,13 +140,28 @@ def build_rows(found, exclude, out_dir=None):
             "export": os.path.basename(tarball),
             "bundle": f"{clip}/{pth_name}", "mesh": f"{clip}/{obj_name}",
         })
-    # clip index: per subject, in sorted clip-name order (rows are already sorted)
-    counters = {}
+    # clip index: per subject, in sorted clip-name order (rows are already sorted),
+    # except that a clip with an index in base_idx keeps it.
+    base_idx = base_idx or {}
+    used = {}
     for r in rows:
-        n = counters.get(r["subject_id"], 0)
-        r["clip_idx"] = f"{n:03d}"
-        counters[r["subject_id"]] = n + 1
+        if r["clip"] in base_idx:
+            r["clip_idx"] = base_idx[r["clip"]]
+            used.setdefault(r["subject_id"], set()).add(int(r["clip_idx"]))
+    for r in rows:
+        if r["clip_idx"] is None:
+            taken = used.setdefault(r["subject_id"], set())
+            n = 0
+            while n in taken:
+                n += 1
+            r["clip_idx"] = f"{n:03d}"
+            taken.add(n)
     return rows
+
+
+def read_base_idx(path):
+    with open(path, newline="") as fh:
+        return {r["clip"]: r["clip_idx"] for r in csv.DictReader(fh)}
 
 
 def main(argv=None):
@@ -152,7 +171,12 @@ def main(argv=None):
     p.add_argument("--exclude", nargs="*", default=[], help="full clip ids to leave out")
     p.add_argument("--out-dir", help="extract bundle + mesh per clip here (also gets manifest.csv)")
     p.add_argument("--manifest", help="CSV path (default <out-dir>/manifest.csv, or stdout)")
+    p.add_argument("--keep-idx-from", metavar="OLD_MANIFEST",
+                   help="keep each surviving clip's clip_idx from this earlier manifest, so "
+                        "motion files already converted under those names stay valid when "
+                        "clips are added or excluded")
     a = p.parse_args(argv)
+    base_idx = read_base_idx(a.keep_idx_from) if a.keep_idx_from else None
 
     found = scan(os.path.expanduser(a.directory), a.activity)
     if not found:
@@ -161,7 +185,7 @@ def main(argv=None):
     if unknown:
         raise SystemExit(f"--exclude names clips that are not on disk: {unknown}")
     out_dir = os.path.expanduser(a.out_dir) if a.out_dir else None
-    rows = build_rows(found, set(a.exclude), out_dir)
+    rows = build_rows(found, set(a.exclude), out_dir, base_idx)
 
     dups = {c: v for c, v in found.items() if len(v) > 1 and c not in a.exclude}
     for c, v in sorted(dups.items()):
