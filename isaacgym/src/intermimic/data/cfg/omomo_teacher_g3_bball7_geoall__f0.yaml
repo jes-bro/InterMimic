@@ -6,6 +6,7 @@
 #   dataSub               sub401 sub402 sub404 sub409 sub411 sub412 sub458
 #   retargetedMotionDir   the merged 7-source tree, f0's 43 bodies, body-major
 #   objectMass 0.624      instead of objectDensity 86 -- see OBJECT below
+#   objectConvexHull      single convex hull per ball, no VHACD (see OBJECT)
 #
 # THE DATA (2026-09-12). CARI4D reconstructions of EgoExo4D basketball takes,
 # 48 clips from 7 participants (Sub01 02 04 09 11 12 58 in CARI4D's manifest;
@@ -29,6 +30,10 @@
 # 0.21-0.26 m; with one objectDensity their masses would scatter +-35%, so
 # objectMass sets each ball to 0.624 kg (FIBA size 7) from its own mesh volume.
 # Restitution 0.85 on object and plane as in the single-clip arm.
+# objectConvexHull: the Hunyuan meshes are triangle soups, and VHACD split 14
+# of the 48 into 64 slivers (PhysX mass 0.11 kg, caught by the read-back guard
+# on the first launch, 2026-09-12). A ball is convex; its single hull is the
+# right collision shape and gives the mass the density was computed for.
 #
 # BODIES. Target bodies are f0's 43 OMOMO bodies, exactly the srcall13 /
 # g3_bball training set; sub10 sub13 sub16 stay held out. The CARI4D subjects'
@@ -120,6 +125,7 @@ env:
   motion_file: InterAct/behave_cari4d_bball7_cf2
   numEnvs: 4096
   numObs: 9594
+  objectConvexHull: true
   objectMass: 0.624
   objectShapeProps:
     restitution: 0.85

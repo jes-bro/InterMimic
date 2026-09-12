@@ -239,12 +239,18 @@ def test_bball7_cfgs_are_the_bball_recipe_plus_data_keys():
     base = yaml.safe_load(open(os.path.join(C, "omomo_teacher_g3_bball_geoall__f0.yaml")))
     new = yaml.safe_load(open(os.path.join(C, "omomo_teacher_g3_bball7_geoall__f0.yaml")))
     diff = {k for k in set(base["env"]) | set(new["env"]) if base["env"].get(k) != new["env"].get(k)}
-    assert diff == {"motion_file", "dataSub", "retargetedMotionDir", "objectDensity", "objectMass"}
+    assert diff == {"motion_file", "dataSub", "retargetedMotionDir", "objectDensity", "objectMass",
+                    "objectConvexHull"}
+    assert new["env"]["objectConvexHull"] is True
     assert base["sim"] == new["sim"]
     assert new["env"]["subjectBodies"] == base["env"]["subjectBodies"]     # f0's 43 bodies
     assert new["env"]["dataSub"] == ["sub401", "sub402", "sub404", "sub409", "sub411", "sub412", "sub458"]
     assert "objectDensity" not in new["env"] and new["env"]["objectMass"] == 0.624
     ev = yaml.safe_load(open(os.path.join(C, "omomo_eval_g3_bball7_geoall__f0.yaml")))
     assert ev["evalFor"] == ["g3_bball7_geoall__f0"]
-    for k in ("motion_file", "retargetedMotionDir", "dataSub", "objectMass", "rewardShape"):
+    for k in ("motion_file", "retargetedMotionDir", "dataSub", "objectMass", "objectConvexHull",
+              "rewardShape"):
         assert ev["env"][k] == new["env"][k], k
+    src = open(os.path.join(REPO, "isaacgym/src/intermimic/env/tasks/intermimic.py")).read()
+    assert "if self.cfg['env'].get('objectConvexHull', False):" in src
+    assert "asset_options.vhacd_enabled = False" in src

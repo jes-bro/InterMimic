@@ -55,6 +55,7 @@ env:
   motion_file: InterAct/behave_cari4d_bball7_cf2
   robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
   objectMass: 0.624                        # 0.62 kg basketball, per-mesh density
+  objectConvexHull: true                   # single hull per ball, no VHACD slivers
   objectShapeProps:
     restitution: 0.85
   localRootObs: False

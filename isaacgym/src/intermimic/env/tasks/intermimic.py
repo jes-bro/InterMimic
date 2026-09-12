@@ -103,8 +103,8 @@ class InterMimic(Humanoid_SMPLX):
         'keyBodies', 'keyIndex', 'localRootObs', 'maskDeadEnvs', 'maxClipsPerObject',
         'moreRigid', 'motion_file', 'motion_file_retarget', 'numActions', 'numDoF',
         'numDoFHand', 'numDoFWrist', 'numEnvs', 'numObs', 'numObsRetarget',
-        'obsHorizons', 'numObservations', 'numStates', 'objectDensity', 'objectMass',
-        'objectShapeProps',
+        'obsHorizons', 'numObservations', 'numStates', 'objectConvexHull', 'objectDensity',
+        'objectMass', 'objectShapeProps',
         'pairSampleCountsFile',
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'raggedMotionData', 'resetThresholds', 'retargetedMotionDir',
@@ -1135,10 +1135,20 @@ class InterMimic(Humanoid_SMPLX):
 
             asset_options.density = density
             asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-            asset_options.vhacd_enabled = True
-            asset_options.vhacd_params.max_convex_hulls = max_convex_hulls
-            asset_options.vhacd_params.max_num_vertices_per_ch = 64
-            asset_options.vhacd_params.resolution = 300000
+            # objectConvexHull: use the mesh's single convex hull as the collision
+            # shape instead of a VHACD decomposition. For a CONVEX object (a ball)
+            # the decomposition buys nothing, and on the reconstructed triangle-soup
+            # meshes it sometimes sees a thin shell and splits it into 64 slivers:
+            # measured 2026-09-12, 14 of 48 balls came out as 64 hulls with a PhysX
+            # mass of 0.11 kg against 0.62 (the 1-hull ones landed within 2%).
+            # Default False = the historical VHACD path for OMOMO's furniture.
+            if self.cfg['env'].get('objectConvexHull', False):
+                asset_options.vhacd_enabled = False
+            else:
+                asset_options.vhacd_enabled = True
+                asset_options.vhacd_params.max_convex_hulls = max_convex_hulls
+                asset_options.vhacd_params.max_num_vertices_per_ch = 64
+                asset_options.vhacd_params.resolution = 300000
 
 
             self._target_asset.append(self.gym.load_asset(self.sim, str(asset_root), asset_file, asset_options))
