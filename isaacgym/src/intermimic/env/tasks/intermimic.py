@@ -103,7 +103,8 @@ class InterMimic(Humanoid_SMPLX):
         'keyBodies', 'keyIndex', 'localRootObs', 'maskDeadEnvs', 'maxClipsPerObject',
         'moreRigid', 'motion_file', 'motion_file_retarget', 'numActions', 'numDoF',
         'numDoFHand', 'numDoFWrist', 'numEnvs', 'numObs', 'numObsRetarget',
-        'obsHorizons', 'numObservations', 'numStates', 'objectDensity', 'objectShapeProps',
+        'obsHorizons', 'numObservations', 'numStates', 'objectDensity', 'objectMass',
+        'objectShapeProps',
         'pairSampleCountsFile',
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'raggedMotionData', 'resetThresholds', 'retargetedMotionDir',
@@ -282,7 +283,15 @@ class InterMimic(Humanoid_SMPLX):
         self.obj2motion = torch.stack([self.object_id == k for k in range(len(object_name_set))], dim=0)
         self.object_name = object_name_set
         self.robot_type = cfg['env']['robotType']
-        self.object_density = cfg['env']['objectDensity']
+        # objectDensity (kg/m^3, one value for every object) OR objectMass (kg,
+        # each object's density derived from its own mesh volume). Exactly one:
+        # a dataset where every clip brings its own mesh of the same real object
+        # (CARI4D bball) needs the mass form, or masses scatter with recon size.
+        self.object_density = cfg['env'].get('objectDensity', None)
+        self.object_mass = cfg['env'].get('objectMass', None)
+        if (self.object_density is None) == (self.object_mass is None):
+            raise ValueError("[intermimic] set exactly one of objectDensity (kg/m^3) or "
+                             "objectMass (kg) in the env cfg")
         self.ref_hoi_obs_size = 7 + 51 * 6 + 52 * 13 + 13 + 52 * 3 + 52 + 1
         self.num_motions = len(self.motion_file)
 
@@ -1107,8 +1116,19 @@ class InterMimic(Humanoid_SMPLX):
             asset_file = object_name + ".urdf"
             obj_file = resolve_data_path("assets", "objects", "objects", object_name, object_name + ".obj")
             max_convex_hulls = 64
-            density = self.object_density
-        
+            if self.object_mass is not None:
+                # Density from the CONVEX-HULL volume: that is what PhysX's VHACD
+                # hulls amount to for a ball; the raw recon meshes are triangle
+                # soups whose own volume is off by up to a third. The mass PhysX
+                # actually assigns is read back and checked in _build_target.
+                from ...utils.object_mass import density_for_mass
+                density, _vol, _raw = density_for_mass(obj_file, self.object_mass)
+                print(f"[object] {object_name}: hull volume {_vol * 1e3:.3f} L (raw mesh "
+                      f"{_raw * 1e3:.3f} L) -> density {density:.1f} kg/m^3 for "
+                      f"{self.object_mass} kg", flush=True)
+            else:
+                density = self.object_density
+
             asset_options = gymapi.AssetOptions()
             asset_options.angular_damping = 0.01
             asset_options.linear_damping = 0.01
@@ -1176,6 +1196,22 @@ class InterMimic(Humanoid_SMPLX):
 
         self._target_handles.append(target_handle)
         self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size)
+
+        # objectMass: read back what PhysX assigned (VHACD hull volume x the
+        # density derived in _load_target_asset) for the first env of each object,
+        # and refuse to start if it is off. A wrong mass would otherwise never be
+        # seen -- nothing else reads it back.
+        if self.object_mass is not None and env_id < len(self.object_name):
+            rb = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
+            mass = float(sum(p.mass for p in rb))
+            name = self.object_name[env_id % len(self.object_name)]
+            err = abs(mass - self.object_mass) / self.object_mass
+            print(f"[object] {name}: PhysX mass {mass:.4f} kg (target {self.object_mass} kg, "
+                  f"{100 * err:.1f}% off)", flush=True)
+            if err > 0.10:
+                raise ValueError(f"[intermimic] {name}: PhysX assigned {mass:.4f} kg for "
+                                 f"objectMass {self.object_mass} kg ({100 * err:.1f}% off); the "
+                                 f"hull-volume density did not land -- inspect the mesh")
 
         return
 
