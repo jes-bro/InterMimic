@@ -28,8 +28,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cari4d_to_interact import _load_bundle  # noqa: E402
 
 
-def subject_means(manifest, bundles_root):
-    """{'sub401': {'mean': (10,), 'n_clips': int, 'spread': float, 'clips': [...]}}"""
+def subject_means(manifest, bundles_root, aggregate="mean"):
+    """{'sub401': {'mean': (10,), 'n_clips': int, 'n_fits': int, 'spread': float, 'clips': [...]}}
+
+    aggregate='mean'   : mean over clips (the basketball default; spreads there
+                         were 0.05-0.26, well inside the between-person 0.4+).
+    aggregate='median' : per-coordinate median over DISTINCT fits -- sections cut
+                         from one parent solve carry byte-identical betas and are
+                         counted once. Robust to a single outlier solve (soccer
+                         sub487: three sections of one take at betas[0] 2.04 vs
+                         ~1.1 on its other five clips would drag a mean to 1.46,
+                         a body that matches none of the clips).
+    'spread' is always the mean L2 of each clip's betas to the chosen body."""
     per = {}
     with open(manifest) as fh:
         for r in csv.DictReader(fh):
@@ -41,9 +51,16 @@ def subject_means(manifest, bundles_root):
     out = {}
     for s, items in per.items():
         arr = np.stack([v for _, v in items])
-        mean = arr.mean(0)
-        spread = float(np.mean(np.linalg.norm(arr - mean, axis=1))) if len(arr) > 1 else 0.0
-        out[s] = dict(mean=mean, n_clips=len(arr), spread=spread, clips=[c for c, _ in items])
+        fits = np.unique(np.round(arr, 6), axis=0)              # distinct solves
+        if aggregate == "mean":
+            body = arr.mean(0)
+        elif aggregate == "median":
+            body = np.median(fits, axis=0)
+        else:
+            raise ValueError(f"aggregate must be mean or median, got {aggregate!r}")
+        spread = float(np.mean(np.linalg.norm(arr - body, axis=1))) if len(arr) > 1 else 0.0
+        out[s] = dict(mean=body, n_clips=len(arr), n_fits=len(fits), spread=spread,
+                      clips=[c for c, _ in items])
     return out
 
 
@@ -52,13 +69,17 @@ def main(argv=None):
     p.add_argument("--manifest", required=True)
     p.add_argument("--bundles-root", required=True)
     p.add_argument("--out", required=True, help=".npz with one (10,) array per sub<id> key")
+    p.add_argument("--aggregate", choices=["mean", "median"], default="mean",
+                   help="mean over clips (default, basketball) or median over distinct "
+                        "solves (robust to one outlier take; see subject_means)")
     a = p.parse_args(argv)
 
-    stats = subject_means(a.manifest, os.path.expanduser(a.bundles_root))
-    print(f"{'subject':>7} {'clips':>5} {'spread':>7}  betas[0:4]")
+    stats = subject_means(a.manifest, os.path.expanduser(a.bundles_root), a.aggregate)
+    print(f"aggregate = {a.aggregate}")
+    print(f"{'subject':>7} {'clips':>5} {'fits':>4} {'spread':>7}  betas[0:4]")
     for s in sorted(stats, key=lambda k: int(k[3:])):
         st = stats[s]
-        print(f"{s:>7} {st['n_clips']:>5} {st['spread']:>7.3f}  {np.round(st['mean'][:4], 3)}")
+        print(f"{s:>7} {st['n_clips']:>5} {st['n_fits']:>4} {st['spread']:>7.3f}  {np.round(st['mean'][:4], 3)}")
     np.savez(a.out, **{s: st["mean"].astype(np.float32) for s, st in stats.items()})
     print(f"wrote {a.out} ({len(stats)} subjects)")
     return 0

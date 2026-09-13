@@ -166,6 +166,23 @@ def test_subject_betas_mean(exports, tmp_path):
     assert sorted(store.files) == ["sub401", "sub412"] and store["sub401"].shape == (10,)
 
 
+def test_subject_betas_median_ignores_one_outlier_solve(tmp_path):
+    """Three sections of one outlier solve must count once; the median lands on
+    the majority body, the mean does not."""
+    d = tmp_path / "dl"; d.mkdir()
+    for i, b in enumerate([1.0, 1.1, 1.2]):
+        make_tarball(d, f"Date62_Sub87_soccer_t00{i}a", "20260912-010000", 20, [b] * 10)
+    for s in ("s01", "s02", "s03"):                       # sections of ONE solve: identical betas
+        make_tarball(d, f"Date62_Sub87_soccer_t004h{s}", "20260912-010000", 20, [2.0] * 10)
+    out = tmp_path / "b"
+    manifest.main([str(d), "--activity", "soccer", "--out-dir", str(out)])
+    mean = subject_betas.subject_means(str(out / "manifest.csv"), str(out), "mean")["sub487"]
+    med = subject_betas.subject_means(str(out / "manifest.csv"), str(out), "median")["sub487"]
+    assert mean["n_clips"] == 6 and mean["n_fits"] == 4
+    assert mean["mean"][0] == pytest.approx((1.0 + 1.1 + 1.2 + 3 * 2.0) / 6)     # dragged to 1.55
+    assert med["mean"][0] == pytest.approx(1.15)                                  # median of 1.0 1.1 1.2 2.0
+
+
 # ---- adapter override -------------------------------------------------------
 def test_adapter_uses_shared_betas(exports, tmp_path):
     out = tmp_path / "bundles"
