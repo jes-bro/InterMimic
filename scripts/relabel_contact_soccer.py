@@ -188,39 +188,51 @@ def observed_levels(t, body_ids):
 
 
 IMPULSE_MIN = 0.5        # m/s: smallest frame-to-frame ball speed change we call a kick
+SPEED_MAX = 15.0         # m/s: faster than any kick here; a ball "moving" faster teleported
 FPS = 30.0
 
 
 def kick_impulse(t, ball_radius, per_frame_gap):
     """Is there a KICK in this clip, and was the foot there when it happened?
 
-    A kick is an impulse: the ball's velocity jumps between two frames. A floor
-    bounce is also an impulse, so jumps that happen with the ball at floor
-    height and its vertical velocity flipping sign are set aside. Returns the
-    largest remaining jump, its frame, the ball speed before/after, and the
-    foot-surface gap at that frame (min over the frame and its neighbours).
-    Verdicts: 'no-kick' (no jump >= IMPULSE_MIN), else 'kick' with the gap for
-    the caller to judge."""
+    A kick is an impulse: the ball's velocity jumps between two frames. Two
+    other things also look like impulses and are set aside: a floor bounce
+    (ball at floor height, vertical velocity flipping sign) and a TRACKING
+    GLITCH, where the ball track teleports (the first census run on the soccer
+    set found "kicks" of 24-46 m/s with the foot 3-5 m away -- the table's
+    "object jumps N m between frames" rows). A frame is a kick candidate only
+    if the ball speed before and after is physically plausible (<= SPEED_MAX).
+
+    A clip can hold a real kick AND a glitch, so the verdict uses the candidate
+    with the foot CLOSEST to the ball, not the biggest jump. Returns that
+    candidate's frame/jump/speeds/gap, how many candidates there were, and the
+    largest single-frame teleport (0 if the track is continuous)."""
     obj = t[:, I_OBJP].numpy().astype(np.float64)
     T = obj.shape[0]
+    empty = dict(verdict="no-kick", jump=0.0, frame=-1, v_before=0.0, v_after=0.0,
+                 gap_at=float("nan"), ball_z=float("nan"), n_candidates=0, glitch=0.0)
     if T < 3:
-        return dict(verdict="no-kick", jump=0.0, frame=-1, v_before=0.0, v_after=0.0, gap_at=float("nan"), ball_z=float("nan"))
+        return empty
     v = (obj[1:] - obj[:-1]) * FPS                                  # (T-1, 3) velocity per interval
+    speed = np.linalg.norm(v, axis=1)
+    step = speed / FPS                                              # metres moved per frame
+    glitch = float(step.max())
     dv = np.linalg.norm(v[1:] - v[:-1], axis=1)                     # (T-2,) jump at frame i+1
     z = obj[1:-1, 2]
     bounce = (z < ball_radius + 0.03) & (v[:-1, 2] < 0) & (v[1:, 2] > 0)
-    dv_kick = np.where(bounce, 0.0, dv)
-    i = int(np.argmax(dv_kick))
-    jump = float(dv_kick[i])
-    frame = i + 1
-    if jump < IMPULSE_MIN:
-        return dict(verdict="no-kick", jump=jump, frame=frame,
-                    v_before=float(np.linalg.norm(v[i])), v_after=float(np.linalg.norm(v[i + 1])),
-                    gap_at=float(per_frame_gap[max(0, frame - 1):frame + 2].min()), ball_z=float(obj[frame, 2]))
-    gap_at = float(per_frame_gap[max(0, frame - 1):frame + 2].min())
-    return dict(verdict="kick", jump=jump, frame=frame,
-                v_before=float(np.linalg.norm(v[i])), v_after=float(np.linalg.norm(v[i + 1])),
-                gap_at=gap_at, ball_z=float(obj[frame, 2]))
+    plausible = (speed[:-1] <= SPEED_MAX) & (speed[1:] <= SPEED_MAX)
+    cand = np.nonzero((dv >= IMPULSE_MIN) & ~bounce & plausible)[0]
+    empty["glitch"] = glitch
+    if cand.size == 0:
+        return empty
+    frames = cand + 1
+    gaps = np.array([per_frame_gap[max(0, f - 1):f + 2].min() for f in frames])
+    k = int(np.argmin(gaps))
+    i, frame = int(cand[k]), int(frames[k])
+    return dict(verdict="kick", jump=float(dv[i]), frame=frame,
+                v_before=float(speed[i]), v_after=float(speed[i + 1]),
+                gap_at=float(gaps[k]), ball_z=float(obj[frame, 2]),
+                n_candidates=int(cand.size), glitch=glitch)
 
 
 def census(t, ball_radius, threshold, body_ids, geoms=None):
@@ -349,13 +361,14 @@ def main():
         print(f"  of those, UNEARNABLE at 0 cm (no foot surface touching the ball): {st['unearnable_frames']}")
         print(f"  closest any foot SURFACE ever gets to the ball surface: {st['min_gap']:+.3f} m")
         k = st["kick"]
+        glitch = f"  (ball track teleports up to {k['glitch']:.2f} m in one frame)" if k["glitch"] > 0.5 else ""
         if k["verdict"] == "no-kick":
-            print(f"  kick: NONE (largest non-bounce ball velocity jump {k['jump']:.2f} m/s < {IMPULSE_MIN})")
+            print(f"  kick: NONE (no plausible ball velocity jump >= {IMPULSE_MIN} m/s){glitch}")
         else:
             verdict = "KICK-OK" if k["gap_at"] < threshold else "KICK-MISS"
-            print(f"  kick: frame {k['frame']}, ball {k['v_before']:.1f} -> {k['v_after']:.1f} m/s "
-                  f"(jump {k['jump']:.1f}), ball z {k['ball_z']:.2f} m, foot gap there {100 * k['gap_at']:+.1f} cm "
-                  f"-> {verdict}")
+            print(f"  kick: {k['n_candidates']} candidate impulse(s); closest-foot one at frame {k['frame']}, "
+                  f"ball {k['v_before']:.1f} -> {k['v_after']:.1f} m/s (jump {k['jump']:.1f}), "
+                  f"foot gap there {100 * k['gap_at']:+.1f} cm -> {verdict}{glitch}")
         print(f"  old: {spans(st['old_any'])}")
         print(f"  new: {spans(st['new_any'])}   (threshold {threshold} m)")
 
@@ -366,15 +379,18 @@ def main():
             k = st["kick"]
             key = "NO-KICK" if k["verdict"] == "no-kick" else ("KICK-OK" if k["gap_at"] < threshold else "KICK-MISS")
             groups[key].append((n, k))
-        print(f"\nKICK CHECK at threshold {threshold} m (largest non-bounce ball velocity jump per clip, "
-              f"foot gap at that frame):")
+        n_glitch = sum(1 for st in stats.values() if st["kick"]["glitch"] > 0.5)
+        print(f"\nKICK CHECK at threshold {threshold} m (plausible ball velocity jumps only, "
+              f"speeds <= {SPEED_MAX} m/s; verdict from the candidate with the foot closest to the ball):")
         print(f"  KICK-OK   {len(groups['KICK-OK']):>2}  impulse present, foot on the ball when it happens")
         print(f"  KICK-MISS {len(groups['KICK-MISS']):>2}  impulse present, foot NOT on the ball: "
               f"the ball was kicked by nothing -- body and ball tracks contradict")
-        print(f"  NO-KICK   {len(groups['NO-KICK']):>2}  no impulse >= {IMPULSE_MIN} m/s: the section contains no kick")
+        print(f"  NO-KICK   {len(groups['NO-KICK']):>2}  no plausible impulse >= {IMPULSE_MIN} m/s: the section contains no kick")
+        print(f"  ({n_glitch} clips have a ball-track teleport > 0.5 m in one frame; marked with *)")
         for key in ("KICK-MISS", "NO-KICK"):
             for n, k in sorted(groups[key], key=lambda x: -x[1]["gap_at"] if x[1]["gap_at"] == x[1]["gap_at"] else 0):
-                print(f"    {key:<9} {n:<40} jump {k['jump']:>4.1f} m/s  gap {100 * k['gap_at']:>+6.1f} cm")
+                print(f"    {key:<9} {n:<40} jump {k['jump']:>4.1f} m/s  gap {100 * k['gap_at']:>+6.1f} cm"
+                      f"{'  *' if k['glitch'] > 0.5 else ''}")
         dead = [n for n, st in stats.items() if not st["ever_touches"]]
         print(f"\ncensus only -- nothing written. At {threshold} m the guard would refuse "
               f"{len(dead)} clip(s): {', '.join(dead) or 'none'}")

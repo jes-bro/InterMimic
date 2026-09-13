@@ -178,6 +178,22 @@ def test_kick_impulse_classifies_kick_miss_and_none():
     t4 = make_clip(T=T); obj4 = np.zeros((T, 3)); obj4[:, 0] = np.arange(T) * 0.02; obj4[:, 2] = R
     t4[:, soc.I_OBJP] = torch.tensor(obj4, dtype=torch.float32)
     assert soc.census(t4, R, 0.02, FEET, fixture_geoms())["kick"]["verdict"] == "no-kick"
+    # a tracking GLITCH (5 m teleport at frame 9) must not become the kick: the
+    # real 6 m/s kick at frame 6 with the foot on the ball still wins
+    t5 = make_clip(T=T)
+    obj5 = rolling_then_kick(); obj5[9:, 1] += 5.0
+    t5[:, soc.I_OBJP] = torch.tensor(obj5, dtype=torch.float32)
+    bp = t5[:, soc.I_BODY].view(T, 52, 3).clone()
+    bp[6, FEET[1]] = torch.tensor(obj5[6], dtype=torch.float32) + torch.tensor([R - 0.01, 0, 0])
+    t5[:, soc.I_BODY] = bp.view(T, -1)
+    k5 = soc.census(t5, R, 0.02, FEET, fixture_geoms())["kick"]
+    assert k5["verdict"] == "kick" and k5["frame"] == 6 and k5["gap_at"] < 0.02
+    assert k5["glitch"] == pytest.approx(5.0, abs=0.3)
+    # a glitch with NO real kick is not a kick either
+    t6 = make_clip(T=T); obj6 = np.zeros((T, 3)); obj6[:, 2] = R; obj6[9:, 1] += 5.0
+    t6[:, soc.I_OBJP] = torch.tensor(obj6, dtype=torch.float32)
+    k6 = soc.census(t6, R, 0.02, FEET, fixture_geoms())["kick"]
+    assert k6["verdict"] == "no-kick" and k6["glitch"] > 4.0
 
 
 def test_guard_and_threshold_required(tmp_path):
