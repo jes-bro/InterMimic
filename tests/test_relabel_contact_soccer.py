@@ -11,8 +11,10 @@ import os
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 import torch
+from scipy.spatial.transform import Rotation as sRot
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "scripts"))
@@ -25,10 +27,14 @@ HANDS = list(range(17, 33)) + list(range(36, 52))
 R = 0.11
 
 
+TOE_BOX_HALF = 0.02      # the fixture rig's toe geom: a 4 cm cube at the body origin
+
+
 def make_clip(T=12, touch_frames=(), claim_frames=(), hand_claim_frames=()):
     """Ball at (1,0,0.11). Foot bodies 2 m away except on touch_frames, where the
-    L_Toe body sits 1 cm inside the surface. Source flags: +1 on claim_frames for
-    the feet, +1 on hand_claim_frames for L_Wrist (must survive untouched)."""
+    L_Toe body ORIGIN sits 1 cm inside the ball surface (so its 2 cm box surface is
+    3 cm inside). All body rotations identity. Source flags: +1 on claim_frames
+    for the feet, +1 on hand_claim_frames for L_Wrist (must survive untouched)."""
     t = torch.zeros(T, 591)
     bp = torch.full((T, 52, 3), 3.0)
     centre = torch.tensor([1.0, 0.0, R])
@@ -36,6 +42,8 @@ def make_clip(T=12, touch_frames=(), claim_frames=(), hand_claim_frames=()):
         bp[f, FEET[1]] = centre + torch.tensor([R - 0.01, 0.0, 0.0])
     t[:, soc.I_BODY] = bp.view(T, -1)
     t[:, soc.I_OBJP] = centre
+    rot = torch.zeros(T, 52, 4); rot[:, :, 3] = 1.0                  # identity, xyzw
+    t[:, soc.I_BODY_ROT] = rot.view(T, -1)
     ch = torch.zeros(T, 52)
     for f in claim_frames:
         ch[f, FEET] = 1.0
@@ -47,9 +55,16 @@ def make_clip(T=12, touch_frames=(), claim_frames=(), hand_claim_frames=()):
     return t
 
 
+def fixture_geoms():
+    """Each foot body: one cube of half-size TOE_BOX_HALF at its origin, unrotated."""
+    g = dict(type="box", pos=np.zeros(3), R=np.eye(3), size=np.full(3, TOE_BOX_HALF))
+    return {n: [g] for n in soc.FOOT_BODY_NAMES}
+
+
 def test_relabel_rewrites_feet_only():
     t = make_clip(touch_frames=(4, 5, 6), claim_frames=(0, 1, 4, 5, 6, 9), hand_claim_frames=(2, 3))
-    out, touching = soc.relabel(t, R, 0.02, smooth=1, keep_contact_obj=False, body_ids=FEET)
+    out, touching = soc.relabel(t, R, 0.02, smooth=1, keep_contact_obj=False, body_ids=FEET,
+                                geoms=fixture_geoms())
     feet = out[:, soc.I_CONTACT_HUMAN][:, FEET]
     assert feet[4:7, 1].tolist() == [1.0, 1.0, 1.0]           # geometry says touching -> +1
     assert feet[[0, 1, 9]].abs().sum() == 0                   # false claims cleared to 0
@@ -62,10 +77,68 @@ def test_relabel_rewrites_feet_only():
 
 def test_census_sweep_separates_claimed_from_free():
     t = make_clip(touch_frames=(4, 5, 6), claim_frames=(4, 5, 6))
-    st = soc.census(t, R, 0.02, FEET)
+    st = soc.census(t, R, 0.02, FEET, fixture_geoms())
     assert st["ever_touches"] and st["claimed_contact_frames"] == 3 and st["unearnable_frames"] == 0
     assert st["gap_claimed"].max() < 0 and st["gap_free"].min() > 1.0
-    assert st["min_gap"] == pytest.approx(-0.01, abs=1e-6)
+    # origin 1 cm inside the ball surface, box face 2 cm further out toward the
+    # ball: the box SURFACE is 3 cm inside
+    assert st["min_gap"] == pytest.approx(-0.01 - TOE_BOX_HALF, abs=1e-6)
+    # origin-based fallback (geoms=None) still gives the old -1 cm
+    assert soc.census(t, R, 0.02, FEET)["min_gap"] == pytest.approx(-0.01, abs=1e-6)
+
+
+def test_geom_distances_box_capsule_sphere():
+    """Point-to-geom signed distances, and the rotation/offset handling."""
+    box = dict(type="box", pos=np.zeros(3), R=np.eye(3), size=np.array([0.1, 0.05, 0.02]))
+    q = np.array([[0.0, 0.0, 0.0], [0.3, 0.0, 0.0], [0.0, 0.0, 0.05], [0.1, 0.05, 0.02]])
+    d = soc._point_to_geom(q, box)
+    assert d[0] == pytest.approx(-0.02)            # deepest inside: nearest face is z
+    assert d[1] == pytest.approx(0.2)              # 0.2 beyond the +x face
+    assert d[2] == pytest.approx(0.03)             # 0.03 above the top face
+    assert d[3] == pytest.approx(0.0)              # on a corner
+    cap = dict(type="capsule", pos=np.zeros(3), R=np.eye(3), size=np.array([0.03, 0.1]))
+    d = soc._point_to_geom(np.array([[0.0, 0.0, 0.0], [0.05, 0.0, 0.2]]), cap)
+    assert d[0] == pytest.approx(-0.03)
+    assert d[1] == pytest.approx(np.hypot(0.05, 0.1) - 0.03)
+    sph = dict(type="sphere", pos=np.zeros(3), R=np.eye(3), size=np.array([0.04]))
+    assert soc._point_to_geom(np.array([[0.0, 0.1, 0.0]]), sph)[0] == pytest.approx(0.06)
+    # a body rotated 90 deg about z with a box offset along its local +x: the
+    # ball straight ahead in WORLD +y must be found in front of the box face
+    t = make_clip(T=1)
+    T = 1
+    bp = torch.full((T, 52, 3), 3.0); bp[0, FEET[1]] = torch.tensor([1.0, -0.2, R])   # ball at (1,0,R)
+    t[:, soc.I_BODY] = bp.view(T, -1)
+    rot = torch.zeros(T, 52, 4); rot[:, :, 3] = 1.0
+    rot[0, FEET[1]] = torch.tensor(sRot.from_euler("z", 90, degrees=True).as_quat(), dtype=torch.float32)
+    t[:, soc.I_BODY_ROT] = rot.view(T, -1)
+    geoms = {n: [dict(type="box", pos=np.array([0.1, 0.0, 0.0]), R=np.eye(3), size=np.full(3, 0.02))]
+             for n in soc.FOOT_BODY_NAMES}
+    gap = soc.surface_gap(t, R, FEET, geoms)[0, 1].item()
+    # body local +x points along world +y; box centre sits 0.1 along it, i.e. at
+    # world (1, -0.1, R); its +x face at (1, -0.08, R); ball surface at (1, -R, R)
+    assert gap == pytest.approx(0.2 - 0.1 - 0.02 - R, abs=1e-6)
+
+
+def test_foot_geoms_from_rig(tmp_path):
+    mjcf = tmp_path / "rig.xml"
+    names = ["Pelvis", "L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe"] + \
+            [f"B{i}" for i in range(9, 52)]
+    names[17], names[36] = "L_Wrist", "R_Wrist"
+    def geom(n):
+        if n in ("L_Ankle", "R_Ankle"):
+            return '<geom type="box" pos="0.05 0.01 -0.02" size="0.09 0.05 0.02" quat="1 0 0 0"/>'
+        if n in ("L_Toe", "R_Toe"):
+            return '<geom type="capsule" fromto="0 0 0 0.04 0 0" size="0.02"/>'
+        return ""
+    body = "".join(f'<body name="{n}" pos="0 0 0">{geom(n)}' for n in names)
+    mjcf.write_text(f'<mujoco><worldbody>{body}{"</body>" * len(names)}</worldbody></mujoco>')
+    g = soc.foot_geoms(str(mjcf))
+    assert set(g) == set(soc.FOOT_BODY_NAMES)
+    assert g["L_Ankle"][0]["type"] == "box" and g["L_Ankle"][0]["size"].tolist() == [0.09, 0.05, 0.02]
+    cap = g["L_Toe"][0]
+    assert cap["type"] == "capsule" and cap["size"].tolist() == pytest.approx([0.02, 0.02])
+    assert cap["pos"].tolist() == pytest.approx([0.02, 0, 0])
+    assert (cap["R"] @ np.array([0, 0, 1.0])).tolist() == pytest.approx([1, 0, 0], abs=1e-9)
 
 
 def test_guard_and_threshold_required(tmp_path):
@@ -76,7 +149,9 @@ def test_guard_and_threshold_required(tmp_path):
     names = ["Pelvis", "L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe"] + \
             [f"B{i}" for i in range(9, 52)]
     names[17], names[36] = "L_Wrist", "R_Wrist"
-    body = "".join(f'<body name="{n}" pos="0 0 0"><joint name="{n}_j" type="hinge" axis="1 0 0"/>' for n in names)
+    def geom(n):
+        return '<geom type="box" pos="0 0 0" size="0.02 0.02 0.02"/>' if n in soc.FOOT_BODY_NAMES else ""
+    body = "".join(f'<body name="{n}" pos="0 0 0"><joint name="{n}_j" type="hinge" axis="1 0 0"/>{geom(n)}' for n in names)
     mjcf.write_text(f'<mujoco><worldbody>{body}{"</body>" * len(names)}</worldbody></mujoco>')
     ids = soc.foot_body_ids(str(mjcf))
     assert ids == [3, 4, 7, 8]

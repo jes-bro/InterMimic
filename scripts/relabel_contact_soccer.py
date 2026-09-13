@@ -24,15 +24,29 @@ WHAT IS MIRRORED from the hand script, unchanged:
     REFUSED, not silently written all-free
   * --census: measure and print, write nothing
 WHAT DIFFERS: the body set (4 feet, by NAME from the rig, not by hard-coded
-index), and the body-order check looks for the ankle/toe names.
+index), the body-order check looks for the ankle/toe names, AND THE GAP IS
+MEASURED FROM THE FOOT'S COLLISION SURFACE, not from the body origin.
 
-THE THRESHOLD IS NOT COPIED. 2 cm suited hands because reconstructed grips put
-finger joints 8-11 cm INSIDE the ball. Foot body origins sit inside the shoe
-(toe joint) or above the sole (ankle), so a real kick can register as a small
-positive gap. --census therefore also prints a SWEEP: at each candidate
-threshold, the fraction of frames the recon itself labelled foot-contact that
-fall inside it, vs the fraction of recon-free frames that do. Pick the value
-where those separate, then run the relabel with --threshold set explicitly.
+WHY THE SURFACE. The hand script measures joint ORIGIN to ball surface, which
+works because reconstructed grips put finger joints 8-11 cm inside the ball. A
+kicking foot does not penetrate: its surface touches, and the ankle origin
+(~8 cm above the sole) and toe origin (inside the shoe) stay 5-12 cm away.
+Measured on the first 50 soccer clips (2026-09-12), origin-to-surface gaps on
+recon-labelled contact frames had median +12 cm and no threshold separated
+them from free frames. So this script reads each foot body's collision geoms
+(box / capsule / sphere: type, size, offset, orientation) from the rig, poses
+them with the clip's per-body rotations, and takes the distance from the ball
+centre to the nearest geom surface minus the ball radius -- the quantity the
+simulator's contacts are actually decided on. 2 cm then means for feet what
+it means for hands.
+
+THE THRESHOLD IS STILL CHOSEN FROM DATA. --census prints a SWEEP: at each
+candidate threshold, the fraction of frames the recon itself labelled
+foot-contact that fall inside it, vs the fraction of recon-free frames that do.
+Note the recon's own labels over-claim: the upstream converter flags contact
+whenever the ball is airborne and not falling and then marks the nearest body,
+so "claimed" frames include the ball rising after a kick. Pick the value where
+the two populations separate, then write with an explicit --threshold.
 
     python3 scripts/relabel_contact_soccer.py --src-dir InterAct/behave_cari4d_soccer \\
         --mjcf isaacgym/src/intermimic/data/assets/smplx/smplh_behave_sub405.xml \\
@@ -44,15 +58,19 @@ import argparse
 import os
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import numpy as np
 import torch
+from scipy.spatial.transform import Rotation as sRot
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smplx_pose import _parse_mjcf_tree                                   # noqa: E402
 from relabel_contact_human import (I_BODY, I_OBJP, I_CONTACT_OBJ, I_CONTACT_HUMAN,  # noqa: E402
                                    spans, majority_smooth, radius_from_mesh)
 
+I_BODY_ROT = slice(383, 591)          # 52 x 4 per-body quaternions, xyzw (rotate_pt.py:32)
 FOOT_BODY_NAMES = ["L_Ankle", "L_Toe", "R_Ankle", "R_Toe"]
 SWEEP_THRESHOLDS = [0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.15]
 
@@ -69,13 +87,91 @@ def foot_body_ids(mjcf):
     return [names.index(n) for n in FOOT_BODY_NAMES]
 
 
-def surface_gap(t, ball_radius, body_ids):
-    """[T, len(body_ids)] distance from each foot body origin to the ball SURFACE
-    (negative = inside)."""
+def _floats(s, n=None):
+    v = np.array([float(x) for x in s.split()], dtype=np.float64)
+    if n is not None and v.shape[0] != n:
+        raise ValueError(f"expected {n} numbers, got {s!r}")
+    return v
+
+
+def foot_geoms(mjcf):
+    """{foot body name: [geom, ...]} read from the rig, each geom a dict with
+    'type' (box|capsule|sphere), 'pos' (3,), 'R' (3,3) rotation of the geom in
+    the body frame, and its size: box half-extents (3,), capsule (radius,
+    half_length) along the geom's local z, sphere radius. MJCF quats are wxyz;
+    capsules may be given as fromto instead of pos/size."""
+    root = ET.parse(mjcf).getroot()
+    out = {}
+    for b in root.iter("body"):
+        if b.get("name") not in FOOT_BODY_NAMES:
+            continue
+        geoms = []
+        for g in b.findall("geom"):
+            gtype = g.get("type", "sphere")
+            if gtype not in ("box", "capsule", "sphere"):
+                raise SystemExit(f"FATAL: {mjcf} {b.get('name')}: geom type {gtype!r} not supported")
+            q = _floats(g.get("quat", "1 0 0 0"), 4)                    # wxyz
+            R = sRot.from_quat([q[1], q[2], q[3], q[0]]).as_matrix()  # -> xyzw
+            size = _floats(g.get("size", "0"))
+            pos = _floats(g.get("pos", "0 0 0"), 3)
+            if gtype == "capsule" and g.get("fromto"):
+                ft = _floats(g.get("fromto"), 6)
+                a, c = ft[:3], ft[3:]
+                pos = (a + c) / 2
+                axis = c - a
+                half = np.linalg.norm(axis) / 2
+                z = axis / (2 * half) if half > 0 else np.array([0, 0, 1.0])
+                # rotation taking local z onto the segment axis
+                R = sRot.align_vectors([z], [[0, 0, 1.0]])[0].as_matrix()
+                size = np.array([size[0], half])
+            geoms.append(dict(type=gtype, pos=pos, R=R, size=size))
+        if not geoms:
+            raise SystemExit(f"FATAL: {mjcf} {b.get('name')} has no collision geom")
+        out[b.get("name")] = geoms
+    missing = [n for n in FOOT_BODY_NAMES if n not in out]
+    if missing:
+        raise SystemExit(f"FATAL: {mjcf} lacks foot bodies {missing}")
+    return out
+
+
+def _point_to_geom(q, g):
+    """Signed distance (T,) from points q (T,3), already in the GEOM frame, to the
+    geom surface. Negative = inside."""
+    if g["type"] == "sphere":
+        return np.linalg.norm(q, axis=1) - g["size"][0]
+    if g["type"] == "box":
+        half = g["size"][:3]
+        d = np.abs(q) - half
+        outside = np.linalg.norm(np.maximum(d, 0), axis=1)
+        inside = np.minimum(np.max(d, axis=1), 0)            # <= 0 when inside
+        return outside + inside
+    r, h = g["size"][0], g["size"][1]                          # capsule along z
+    axis_pt = np.zeros_like(q)
+    axis_pt[:, 2] = np.clip(q[:, 2], -h, h)                    # nearest point ON the axis segment
+    return np.linalg.norm(q - axis_pt, axis=1) - r
+
+
+def surface_gap(t, ball_radius, body_ids, geoms=None):
+    """[T, len(body_ids)] distance from each foot body's collision SURFACE to the
+    ball SURFACE (negative = interpenetrating). With geoms=None (tests only), the
+    body origin is used instead."""
     T = t.shape[0]
-    bp = t[:, I_BODY].view(T, 52, 3)
-    obj = t[:, I_OBJP]
-    return (bp[:, body_ids, :] - obj[:, None, :]).norm(dim=-1) - ball_radius
+    bp = t[:, I_BODY].view(T, 52, 3).numpy().astype(np.float64)
+    obj = t[:, I_OBJP].numpy().astype(np.float64)
+    if geoms is None:
+        return torch.tensor(np.linalg.norm(bp[:, body_ids, :] - obj[:, None, :], axis=-1) - ball_radius)
+    br = t[:, I_BODY_ROT].view(T, 52, 4).numpy().astype(np.float64)   # xyzw
+    cols = []
+    for name, b in zip(FOOT_BODY_NAMES, body_ids):
+        Rb = sRot.from_quat(br[:, b]).as_matrix()                     # (T,3,3) body->world
+        local = np.einsum("tji,tj->ti", Rb, obj - bp[:, b])          # world -> body frame
+        best = None
+        for g in geoms[name]:
+            q = (local - g["pos"]) @ g["R"]                            # body -> geom frame
+            d = _point_to_geom(q, g)
+            best = d if best is None else np.minimum(best, d)
+        cols.append(best)
+    return torch.tensor(np.stack(cols, axis=1) - ball_radius)
 
 
 def observed_levels(t, body_ids):
@@ -91,8 +187,8 @@ def observed_levels(t, body_ids):
     return contact_v, clear_v, vals
 
 
-def census(t, ball_radius, threshold, body_ids):
-    gap = surface_gap(t, ball_radius, body_ids)
+def census(t, ball_radius, threshold, body_ids, geoms=None):
+    gap = surface_gap(t, ball_radius, body_ids, geoms)
     ch = t[:, I_CONTACT_HUMAN][:, body_ids]
     old_any = (ch > 0.1).any(dim=1)
     new_any = (gap < threshold).any(dim=1)
@@ -113,9 +209,9 @@ def census(t, ball_radius, threshold, body_ids):
 
 
 def relabel(t, ball_radius, threshold, smooth, keep_contact_obj, body_ids,
-            free_value="minimal"):
+            free_value="minimal", geoms=None):
     out = t.clone()
-    gap = surface_gap(t, ball_radius, body_ids)
+    gap = surface_gap(t, ball_radius, body_ids, geoms)
     touching = majority_smooth(gap < threshold, smooth)                # [T, 4] bool
     contact_v, clear_v, vals = observed_levels(t, body_ids)
     neg_v = min([v for v in vals if v < -0.1], default=-1.0)
@@ -139,7 +235,7 @@ def print_sweep(stats):
     claimed = np.concatenate([s["gap_claimed"] for s in stats.values()]) if stats else np.zeros(0)
     free = np.concatenate([s["gap_free"] for s in stats.values()]) if stats else np.zeros(0)
     print(f"\nTHRESHOLD SWEEP over {len(claimed)} recon-labelled foot-contact frames and "
-          f"{len(free)} recon-free frames (closest foot body to the surface):")
+          f"{len(free)} recon-free frames (closest foot SURFACE to the ball surface):")
     print(f"  {'thr (m)':>7} {'claimed inside':>15} {'free inside':>12}")
     for thr in SWEEP_THRESHOLDS:
         ci = float((claimed < thr).mean()) if len(claimed) else float("nan")
@@ -185,6 +281,10 @@ def main():
     threshold = 0.02 if args.threshold is None else args.threshold
 
     body_ids = foot_body_ids(args.mjcf)
+    geoms = foot_geoms(args.mjcf)
+    print("foot collision geoms from the rig: " + "; ".join(
+        f"{n}: " + ", ".join(f"{g['type']} size={np.round(g['size'], 3).tolist()}" for g in geoms[n])
+        for n in FOOT_BODY_NAMES))
     clips = sorted(src.glob("*.pt"))
     if not clips:
         sys.exit(f"FATAL: no .pt clips in {src}")
@@ -203,13 +303,13 @@ def main():
     stats = {}
     for f in clips:
         t = torch.load(f, map_location="cpu", weights_only=False).detach()
-        st = census(t, radius[f.name], threshold, body_ids)
+        st = census(t, radius[f.name], threshold, body_ids, geoms)
         stats[f.name] = st
         print(f"\n{f.name}: {st['frames']} frames  (ball radius {radius[f.name]:.4f} m)")
         print(f"  foot contact_human values present: {st['distinct_values']}")
         print(f"  frames claiming foot contact (source): {st['claimed_contact_frames']}")
-        print(f"  of those, UNEARNABLE at 0 cm (no foot body inside the surface): {st['unearnable_frames']}")
-        print(f"  closest any foot body ever gets to the surface: {st['min_gap']:+.3f} m")
+        print(f"  of those, UNEARNABLE at 0 cm (no foot surface touching the ball): {st['unearnable_frames']}")
+        print(f"  closest any foot SURFACE ever gets to the ball surface: {st['min_gap']:+.3f} m")
         print(f"  old: {spans(st['old_any'])}")
         print(f"  new: {spans(st['new_any'])}   (threshold {threshold} m)")
 
@@ -235,7 +335,7 @@ def main():
     for f in clips:
         t = torch.load(f, map_location="cpu", weights_only=False).detach()
         out, touching = relabel(t, radius[f.name], threshold, args.smooth,
-                                args.keep_contact_obj, body_ids, args.free_value)
+                                args.keep_contact_obj, body_ids, args.free_value, geoms)
         assert torch.equal(out[:, I_BODY], t[:, I_BODY]), "positions changed!"
         assert torch.equal(out[:, I_OBJP], t[:, I_OBJP]), "object moved!"
         assert torch.equal(out[:, I_CONTACT_HUMAN][:, others],
