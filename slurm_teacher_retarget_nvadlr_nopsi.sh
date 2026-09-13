@@ -50,7 +50,15 @@ EXP=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$CFG_TRAIN" | a
 CKPT="checkpoints/${EXP}/nn/mimic.pth"
 if [ -f "$CKPT" ]; then
     RESUME_TRAIN="/tmp/${EXP}_resume_${SLURM_JOB_ID}.yaml"
-    sed "s|resume_from: 'None'|resume_from: '${CKPT}'|" "$CFG_TRAIN" > "$RESUME_TRAIN"
+    # Match the line whether the yaml says `resume_from: None` or `'None'`: the g3
+    # train cfgs are UNQUOTED and the old pattern only matched the quoted form, so
+    # the rewrite was a no-op and every resubmission started fresh over its own
+    # checkpoints while printing RESUMING. Refuse to start if the rewrite fails.
+    sed -E "s|^(\s*resume_from:)\s*'?None'?\s*$|\1 '${CKPT}'|" "$CFG_TRAIN" > "$RESUME_TRAIN"
+    if ! grep -qF "resume_from: '${CKPT}'" "$RESUME_TRAIN"; then
+        echo "[teacher] ERROR: could not rewrite resume_from in $CFG_TRAIN -- refusing to" \
+             "start fresh over ${CKPT}" >&2; exit 1
+    fi
     CFG_TRAIN="$RESUME_TRAIN"
     echo "[teacher] RESUMING from ${CKPT}"
 else
