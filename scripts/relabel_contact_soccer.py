@@ -315,6 +315,13 @@ def main():
     ap.add_argument("--keep-contact-obj", action="store_true")
     ap.add_argument("--free-value", choices=["minimal", "negative"], default="minimal")
     ap.add_argument("--census", action="store_true", help="measure only, write nothing")
+    ap.add_argument("--allow-no-contact", nargs="*", default=[], metavar="CLIP.pt",
+                    help="clip files the guard may pass with ALL-FREE foot labels. For clips "
+                         "reviewed by eye and judged learnable although no foot surface comes "
+                         "within --threshold anywhere (the ball-trajectory reward still drives "
+                         "the kick; the contact term is simply inert), and for non-kick drills "
+                         "that are in scope for soccer. Each is printed with its closest gap so "
+                         "the override is on record; anything NOT listed is still refused.")
     args = ap.parse_args()
 
     src = Path(args.src_dir)
@@ -394,14 +401,32 @@ def main():
         dead = [n for n, st in stats.items() if not st["ever_touches"]]
         print(f"\ncensus only -- nothing written. At {threshold} m the guard would refuse "
               f"{len(dead)} clip(s): {', '.join(dead) or 'none'}")
+        if dead:
+            print(f"\nTo keep them anyway (reviewed, judged learnable / non-kick drills), write with:\n"
+                  f"  python3 scripts/relabel_contact_soccer.py --src-dir {src} --dst-dir {src}_cf "
+                  f"--mjcf {args.mjcf}"
+                  + (f" --ball-radius-from-mesh {args.ball_radius_from_mesh}" if args.ball_radius_from_mesh else "")
+                  + f" --threshold {threshold} --allow-no-contact {' '.join(dead)}")
         return
 
     dead = [n for n, st in stats.items() if not st["ever_touches"]]
+    allowed = set(args.allow_no_contact)
+    unknown = sorted(allowed - {f.name for f in clips})
+    if unknown:
+        sys.exit(f"FATAL: --allow-no-contact names clips not in {src}: {unknown}")
+    refused = [n for n in dead if n not in allowed]
+    if refused:
+        sys.exit(f"\nFATAL: no foot surface ever comes within {threshold} m of the ball surface in: "
+                 f"{', '.join(refused)}\n  Relabelling would produce an all-free clip. Drop the clip, "
+                 f"fix the recon, raise --threshold deliberately (see --census's sweep), or name it "
+                 f"in --allow-no-contact after reviewing it.")
     if dead:
-        sys.exit(f"\nFATAL: no foot body ever comes within {threshold} m of the ball surface in: "
-                 f"{', '.join(dead)}\n  Relabelling would produce an all-free clip and delete the "
-                 f"contact supervision entirely. Drop the clip, fix the recon, or raise "
-                 f"--threshold deliberately (see --census's sweep).")
+        print(f"\nALLOWED ALL-FREE by --allow-no-contact ({len(dead)} clips, reviewed by eye):")
+        for n in dead:
+            print(f"  {n:<40} closest foot surface {100 * stats[n]['min_gap']:+.1f} cm")
+    unused = sorted(allowed - set(dead))
+    if unused:
+        print(f"note: {len(unused)} allow-listed clip(s) did not need it at {threshold} m: {', '.join(unused)}")
 
     dst.mkdir(parents=True)
     for f in sorted(src.iterdir()):

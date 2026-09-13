@@ -216,11 +216,25 @@ def test_guard_and_threshold_required(tmp_path):
     assert r.returncode != 0 and "--threshold is required" in r.stderr
     r = subprocess.run([sys.executable, script, "--src-dir", str(src), "--dst-dir", str(tmp_path / "dst"),
                         "--mjcf", str(mjcf), "--threshold", "0.02"], capture_output=True, text=True)
-    assert r.returncode != 0 and "no foot body ever comes within" in r.stderr
+    assert r.returncode != 0 and "no foot surface ever comes within" in r.stderr
     assert not (tmp_path / "dst").exists()
     r = subprocess.run([sys.executable, script, "--src-dir", str(src), "--mjcf", str(mjcf), "--census"],
                        capture_output=True, text=True)
     assert r.returncode == 0 and "THRESHOLD SWEEP" in r.stdout and "would refuse 1 clip" in r.stdout
+    assert "--allow-no-contact sub405_ballx_000.pt" in r.stdout        # the census prints the write command
+    # allow-listed by name: written all-free, on record; a wrong name is refused
+    r = subprocess.run([sys.executable, script, "--src-dir", str(src), "--dst-dir", str(tmp_path / "dst"),
+                        "--mjcf", str(mjcf), "--threshold", "0.02", "--allow-no-contact", "nope.pt"],
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "names clips not in" in r.stderr and not (tmp_path / "dst").exists()
+    r = subprocess.run([sys.executable, script, "--src-dir", str(src), "--dst-dir", str(tmp_path / "dst"),
+                        "--mjcf", str(mjcf), "--threshold", "0.02", "--allow-no-contact", "sub405_ballx_000.pt"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "ALLOWED ALL-FREE" in r.stdout and "sub405_ballx_000.pt" in r.stdout
+    out = torch.load(tmp_path / "dst" / "sub405_ballx_000.pt", weights_only=False)
+    assert out[:, soc.I_CONTACT_HUMAN][:, FEET].abs().sum() == 0       # the false claim at frame 2 cleared
+    assert out[:, soc.I_CONTACT_OBJ].sum() == 0
 
 
 def test_basketball_script_untouched():
