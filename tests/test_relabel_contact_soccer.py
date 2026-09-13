@@ -141,6 +141,45 @@ def test_foot_geoms_from_rig(tmp_path):
     assert (cap["R"] @ np.array([0, 0, 1.0])).tolist() == pytest.approx([1, 0, 0], abs=1e-9)
 
 
+def test_kick_impulse_classifies_kick_miss_and_none():
+    """Ball velocity jump = kick; the foot gap at that frame decides OK vs MISS;
+    a floor bounce is not a kick; no jump = no kick."""
+    T = 12
+    # ball rolls slowly then is struck at frame 6 (velocity jumps by 6 m/s)
+    def rolling_then_kick(kick_at=6):
+        obj = np.zeros((T, 3)); obj[:, 2] = R
+        x = 0.0
+        for f in range(T):
+            obj[f, 0] = x
+            x += 0.01 if f < kick_at else 0.21           # 0.3 -> 6.3 m/s at 30 fps
+        return obj
+    t = make_clip(T=T)
+    obj = rolling_then_kick()
+    t[:, soc.I_OBJP] = torch.tensor(obj, dtype=torch.float32)
+    # foot ON the ball at the kick frame
+    bp = t[:, soc.I_BODY].view(T, 52, 3).clone()
+    bp[6, FEET[1]] = torch.tensor(obj[6], dtype=torch.float32) + torch.tensor([R - 0.01, 0, 0])
+    t[:, soc.I_BODY] = bp.view(T, -1)
+    st = soc.census(t, R, 0.02, FEET, fixture_geoms())
+    k = st["kick"]
+    assert k["verdict"] == "kick" and k["frame"] == 6 and k["jump"] == pytest.approx(6.0, abs=0.05)
+    assert k["gap_at"] < 0.02                                  # KICK-OK
+    # same impulse, foot 3 m away -> KICK-MISS
+    t2 = make_clip(T=T); t2[:, soc.I_OBJP] = torch.tensor(obj, dtype=torch.float32)
+    k2 = soc.census(t2, R, 0.02, FEET, fixture_geoms())["kick"]
+    assert k2["verdict"] == "kick" and k2["gap_at"] > 1.0
+    # a floor bounce (vertical velocity flips at floor height) is not a kick
+    t3 = make_clip(T=T)
+    obj3 = np.zeros((T, 3)); obj3[:, 2] = R + np.abs(np.linspace(-0.3, 0.3, T)) + 0.0
+    obj3[:, 2] = np.where(np.arange(T) < 6, R + 0.3 - 0.06 * np.arange(T), R + 0.06 * (np.arange(T) - 5))
+    t3[:, soc.I_OBJP] = torch.tensor(obj3, dtype=torch.float32)
+    assert soc.census(t3, R, 0.02, FEET, fixture_geoms())["kick"]["verdict"] == "no-kick"
+    # a ball that just rolls: no kick
+    t4 = make_clip(T=T); obj4 = np.zeros((T, 3)); obj4[:, 0] = np.arange(T) * 0.02; obj4[:, 2] = R
+    t4[:, soc.I_OBJP] = torch.tensor(obj4, dtype=torch.float32)
+    assert soc.census(t4, R, 0.02, FEET, fixture_geoms())["kick"]["verdict"] == "no-kick"
+
+
 def test_guard_and_threshold_required(tmp_path):
     """Refuses a clip with no foot contact; refuses to write without --threshold."""
     src = tmp_path / "src"; src.mkdir()

@@ -187,6 +187,42 @@ def observed_levels(t, body_ids):
     return contact_v, clear_v, vals
 
 
+IMPULSE_MIN = 0.5        # m/s: smallest frame-to-frame ball speed change we call a kick
+FPS = 30.0
+
+
+def kick_impulse(t, ball_radius, per_frame_gap):
+    """Is there a KICK in this clip, and was the foot there when it happened?
+
+    A kick is an impulse: the ball's velocity jumps between two frames. A floor
+    bounce is also an impulse, so jumps that happen with the ball at floor
+    height and its vertical velocity flipping sign are set aside. Returns the
+    largest remaining jump, its frame, the ball speed before/after, and the
+    foot-surface gap at that frame (min over the frame and its neighbours).
+    Verdicts: 'no-kick' (no jump >= IMPULSE_MIN), else 'kick' with the gap for
+    the caller to judge."""
+    obj = t[:, I_OBJP].numpy().astype(np.float64)
+    T = obj.shape[0]
+    if T < 3:
+        return dict(verdict="no-kick", jump=0.0, frame=-1, v_before=0.0, v_after=0.0, gap_at=float("nan"), ball_z=float("nan"))
+    v = (obj[1:] - obj[:-1]) * FPS                                  # (T-1, 3) velocity per interval
+    dv = np.linalg.norm(v[1:] - v[:-1], axis=1)                     # (T-2,) jump at frame i+1
+    z = obj[1:-1, 2]
+    bounce = (z < ball_radius + 0.03) & (v[:-1, 2] < 0) & (v[1:, 2] > 0)
+    dv_kick = np.where(bounce, 0.0, dv)
+    i = int(np.argmax(dv_kick))
+    jump = float(dv_kick[i])
+    frame = i + 1
+    if jump < IMPULSE_MIN:
+        return dict(verdict="no-kick", jump=jump, frame=frame,
+                    v_before=float(np.linalg.norm(v[i])), v_after=float(np.linalg.norm(v[i + 1])),
+                    gap_at=float(per_frame_gap[max(0, frame - 1):frame + 2].min()), ball_z=float(obj[frame, 2]))
+    gap_at = float(per_frame_gap[max(0, frame - 1):frame + 2].min())
+    return dict(verdict="kick", jump=jump, frame=frame,
+                v_before=float(np.linalg.norm(v[i])), v_after=float(np.linalg.norm(v[i + 1])),
+                gap_at=gap_at, ball_z=float(obj[frame, 2]))
+
+
 def census(t, ball_radius, threshold, body_ids, geoms=None):
     gap = surface_gap(t, ball_radius, body_ids, geoms)
     ch = t[:, I_CONTACT_HUMAN][:, body_ids]
@@ -194,7 +230,9 @@ def census(t, ball_radius, threshold, body_ids, geoms=None):
     new_any = (gap < threshold).any(dim=1)
     contact_v, clear_v, vals = observed_levels(t, body_ids)
     per_frame_min = gap.min(dim=1).values
+    kick = kick_impulse(t, ball_radius, per_frame_min.numpy())
     return {
+        "kick": kick,
         "frames": t.shape[0], "distinct_values": vals,
         "contact_value": contact_v, "clear_value": clear_v,
         "claimed_contact_frames": int(old_any.sum()),
@@ -310,11 +348,33 @@ def main():
         print(f"  frames claiming foot contact (source): {st['claimed_contact_frames']}")
         print(f"  of those, UNEARNABLE at 0 cm (no foot surface touching the ball): {st['unearnable_frames']}")
         print(f"  closest any foot SURFACE ever gets to the ball surface: {st['min_gap']:+.3f} m")
+        k = st["kick"]
+        if k["verdict"] == "no-kick":
+            print(f"  kick: NONE (largest non-bounce ball velocity jump {k['jump']:.2f} m/s < {IMPULSE_MIN})")
+        else:
+            verdict = "KICK-OK" if k["gap_at"] < threshold else "KICK-MISS"
+            print(f"  kick: frame {k['frame']}, ball {k['v_before']:.1f} -> {k['v_after']:.1f} m/s "
+                  f"(jump {k['jump']:.1f}), ball z {k['ball_z']:.2f} m, foot gap there {100 * k['gap_at']:+.1f} cm "
+                  f"-> {verdict}")
         print(f"  old: {spans(st['old_any'])}")
         print(f"  new: {spans(st['new_any'])}   (threshold {threshold} m)")
 
     if args.census:
         print_sweep(stats)
+        groups = {"KICK-OK": [], "KICK-MISS": [], "NO-KICK": []}
+        for n, st in stats.items():
+            k = st["kick"]
+            key = "NO-KICK" if k["verdict"] == "no-kick" else ("KICK-OK" if k["gap_at"] < threshold else "KICK-MISS")
+            groups[key].append((n, k))
+        print(f"\nKICK CHECK at threshold {threshold} m (largest non-bounce ball velocity jump per clip, "
+              f"foot gap at that frame):")
+        print(f"  KICK-OK   {len(groups['KICK-OK']):>2}  impulse present, foot on the ball when it happens")
+        print(f"  KICK-MISS {len(groups['KICK-MISS']):>2}  impulse present, foot NOT on the ball: "
+              f"the ball was kicked by nothing -- body and ball tracks contradict")
+        print(f"  NO-KICK   {len(groups['NO-KICK']):>2}  no impulse >= {IMPULSE_MIN} m/s: the section contains no kick")
+        for key in ("KICK-MISS", "NO-KICK"):
+            for n, k in sorted(groups[key], key=lambda x: -x[1]["gap_at"] if x[1]["gap_at"] == x[1]["gap_at"] else 0):
+                print(f"    {key:<9} {n:<40} jump {k['jump']:>4.1f} m/s  gap {100 * k['gap_at']:>+6.1f} cm")
         dead = [n for n, st in stats.items() if not st["ever_touches"]]
         print(f"\ncensus only -- nothing written. At {threshold} m the guard would refuse "
               f"{len(dead)} clip(s): {', '.join(dead) or 'none'}")
