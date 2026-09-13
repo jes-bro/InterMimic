@@ -1,0 +1,233 @@
+# THE g3 RECIPE ON THE EGOEXO4D SOCCER RECONSTRUCTION, ALL 15 PEOPLE.
+# Twin of omomo_teacher_g3_bball7_geoall__f0.yaml. What differs, and only this
+# (python3 scripts/cfg_diff.py the two files):
+#
+#   motion_file           InterAct/behave_cari4d_soccer_cf    61 clips, 15 people
+#   dataSub               sub405 480 482 484 485 487 488 489 490 491 493 494 495 496 497
+#   retargetedMotionDir   the merged 15-source tree, f0's 43 bodies, body-major
+#   objectMass 0.43       a size-5 soccer ball is 0.41-0.45 kg (bball: 0.624)
+#   restitution 0.65      ball and plane (bball: 0.85); PhysX averages the two
+#
+# THE DATA (2026-09-13). CARI4D reconstructions of EgoExo4D soccer takes:
+# 62 clips downloaded from 15 CARI4D Sub ids, verified 15 distinct EgoExo4D
+# participants via takes.json; 1 dropped (Sub05 t002bts07: the ball leaves with
+# the foot 28.8 cm away at the kick). Subject id = 400 + Sub. One body per
+# person = MEDIAN over that person's distinct solves (sub487 had one outlier
+# take at betas[0] 2.04 vs ~1.1 elsewhere; mean would fit no clip).
+#
+# CONTACT LABELS: scripts/relabel_contact_soccer.py, foot bodies only, from
+# the foot COLLISION SURFACE (rig geoms) to the ball surface, threshold 7 cm
+# (a 7 cm kick looks like a touch on video; recon-free frames leak 0.1%).
+# 16 clips have no foot within 7 cm anywhere and were kept ALL-FREE after Jess
+# reviewed them (kicks with the foot up to ~27 cm off at the impulse, judged
+# learnable: the ball-trajectory reward drives the kick; plus non-kick drills,
+# in scope for soccer). Names + gaps: soccer-relabel.txt on the cluster.
+# NOTE this is a looser standard than bball7's (4 clips dropped at 3.6-9.5 cm).
+#
+# OBJECT. Every clip keeps ITS OWN reconstructed ball (61 object names, 61
+# URDFs), each set to 0.43 kg from its own hull volume (objectMass), single
+# convex hull (objectConvexHull). 14 clips have a ball-track teleport > 0.5 m
+# in one frame; tolerated -- the object reward stays on in free flight (gate
+# reward:false) so it costs a few unearnable frames, no reset.
+#
+# BODIES: f0's 43 OMOMO bodies (same train/test split as every f0 arm; sub10
+# sub13 sub16 held out). CLIP LENGTH (manifest n_frames): 30-677; 8 clips are
+# under rolloutLength 50 (start pinned to 0 on those). Padded storage: 2623
+# motions x 677 frames x 8.8 kB ~ 15.7 GB -> ~44 GiB RSS by the validated RAM
+# model (14.2 + 2.02 x motion), under the launcher's 64G; no ragged flag.
+#
+# Recipe verbatim: obsHorizons [1,4,7,10,13,16], numObs 9594, no betas,
+# geometric_all, rollout 50, initVel, PSI 3, pose 0.02, bodyNormalizedReward,
+# cpuMotionData, gate resets, all four resetThresholds, buffer 12.0, 2048 envs.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub405', 'sub480', 'sub482', 'sub484', 'sub485', 'sub487', 'sub488', 'sub489', 'sub490', 'sub491', 'sub493', 'sub494', 'sub495', 'sub496', 'sub497']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_soccer_cf
+  numEnvs: 4096
+  numObs: 9594
+  objectConvexHull: true
+  objectMass: 0.43
+  objectShapeProps:
+    restitution: 0.65
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.65
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_soccer_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
