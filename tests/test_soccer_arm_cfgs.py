@@ -66,6 +66,10 @@ def test_eval_cfgs_mirror_their_train_cfgs():
                   "objectShapeProps", "plane", "rewardShape", "rewardTerms", "numObs", "obsHorizons"):
             assert ev["env"][k] == tr["env"][k], (arm, k)
         assert ev["env"]["numEnvs"] == 2048 and ev["env"]["stateInit"] == "Start"
+        # Eval episodes end at rolloutLength-1 and success needs the clip's last
+        # frame: three soccer clips run 333/359/677 frames, so bball7's 300 would
+        # cap success at 58/61 and 44/47. 1000 = every OMOMO eval cfg.
+        assert ev["env"]["rolloutLength"] == 1000, arm
 
 
 def test_train_cfgs_name_their_experiment():

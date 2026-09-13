@@ -39,7 +39,9 @@ env:
   controlFrequencyInv: 2 # 30 Hz
   stateInit: "Start"
   enableEvaluation: True
-  rolloutLength: 300                       # as the single-clip bball eval: start pinned to 0
+  rolloutLength: 1000                      # as every OMOMO eval cfg. NOT 300 (bball7): three soccer
+                                           # clips are 333/359/677 frames and success needs the last
+                                           # frame reached (audit 2026-09-13). Start pins to 0 anyway.
   physicalBufferSize: 1
   hybridInitProb: 0.1
   dataFPS: 30
