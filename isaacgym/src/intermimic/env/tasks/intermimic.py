@@ -1086,6 +1086,18 @@ class InterMimic(Humanoid_SMPLX):
                                         f"{os.path.join(str(asset_root), asset_file)}")
             opts = gymapi.AssetOptions()
             opts.fix_base_link = True     # static: no dofs, never simulated free
+            # `vhacd: true` (opt-in per entry, written by
+            # scripts/cari4d_prop_to_scene.py): a mesh prop -- a chair, a
+            # bench, a manikin -- collides as a convex decomposition instead of
+            # the loader's default single convex hull, which turns a chair into
+            # a solid block nobody can sit on. The hoop is primitives and does
+            # not set it, so existing configs load exactly as before. Same
+            # VHACD settings as the tracked object below.
+            if item.get('vhacd', False):
+                opts.vhacd_enabled = True
+                opts.vhacd_params.max_convex_hulls = int(item.get('vhacd_max_hulls', 64))
+                opts.vhacd_params.max_num_vertices_per_ch = 64
+                opts.vhacd_params.resolution = 300000
             asset = self.gym.load_asset(self.sim, str(asset_root), asset_file, opts)
             pose = gymapi.Transform()
             pose.p = gymapi.Vec3(*[float(v) for v in item['pos']])
