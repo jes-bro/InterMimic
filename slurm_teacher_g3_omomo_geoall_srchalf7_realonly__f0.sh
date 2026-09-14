@@ -98,7 +98,7 @@ for b in sub10 sub13 sub16; do
 done
 
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --num_envs $NUM_ENVS --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
-echo "[teacher] G3 RECIPE g3_omomo_geoall_srchalf7_realonly__f0 (OMOMO data, half B = 7 sources, RAGGED motion): 43 bodies, no betas, gate resets=true, rollout 50, buf=12.0 num_envs=$NUM_ENVS"
+echo "[teacher] G3 RECIPE g3_omomo_geoall_srchalf7_realonly__f0 (OMOMO data, half B = 7 sources, RAGGED motion): 13 REAL bodies (ablation, no synthetic), no betas, gate resets=true, rollout 50, buf=12.0 num_envs=$NUM_ENVS"
 echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_g3_omomo_geoall_srchalf7_realonly__f0/nn/"
 echo "[teacher] ABLATION realonly of g3_omomo_geoall_srchalf7__f0: subjectBodies 43 -> the 13 real OMOMO bodies (no synthetic sub1xx bodies)"
 

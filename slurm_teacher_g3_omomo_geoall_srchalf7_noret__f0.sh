@@ -4,7 +4,7 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=320G
+#SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 
 #SBATCH --job-name="tch-g3_omomo_geoall_srchalf7_noret__f0"
@@ -21,23 +21,13 @@
 # the auto-resume below is the fallback if the node dies, not the schedule.
 # Eval when done:  HELDOUT="sub10 sub13 sub16" sh scripts/eval_one.sh g3_omomo_geoall_srchalf7_noret__f0
 #
-# --mem=320G is ~30% over the RAGGED budget under the PADDED loader's 2.02x model
-# (14.2 + 2.02 x 114 GiB = 244; scripts/motion_memory_budget.py). Padded would
-# have needed ~796 GiB (sub11's 652-frame outlier sets the pad). If the srcall13
-# run has reported MaxRSS by the time this is submitted, size from its measured
-# factor instead.
+# --mem=64G (Jess 2026-09-13): NO retarget tree here, so the loader holds ONE
+# reference per clip instead of 43 -- 1679 ragged clips, ~2.6 GiB of motion
+# (the base's 114 GiB / 43 bodies), against the base's 320G.
 #
-# BEFORE THE FIRST SUBMISSION build the merged retarget tree (symlinks):
-#   python3 scripts/merge_retarget_trees.py \
-#       --sources InterAct/OMOMO_retarget_contact_src2 InterAct/OMOMO_retarget_contact_src6 \
-#                 InterAct/OMOMO_retarget_contact_src7 InterAct/OMOMO_retarget_contact_src8 \
-#                 InterAct/OMOMO_retarget_contact_src9 InterAct/OMOMO_retarget_contact_src11 \
-#                 InterAct/OMOMO_retarget_contact_src14 \
-#       --out InterAct/OMOMO_retarget_contact_srchalf7 \
-#       --bodies-from isaacgym/src/intermimic/data/cfg/omomo_teacher_g3_omomo_geoall_srchalf7_noret__f0.yaml
-# Expect: linked 72197 clips across 43 bodies.
-# The task refuses to start on a missing (body, clip) file, so a partial merge
-# fails at startup rather than training on a silent source fallback.
+# NO RETARGET TREE (this is the noret ablation): nothing to build before the first
+# submission beyond the source clips in InterAct/OMOMO_new, which the guard below
+# checks per source.
 
 source ~/.bashrc
 conda deactivate
@@ -64,8 +54,15 @@ CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoa
 if ! grep -qE '^\s*raggedMotionData:\s*[Tt]rue' "$CFG_ENV"; then
     echo "[teacher] ERROR: srchalf7 without raggedMotionData in $CFG_ENV" >&2; exit 1
 fi
-# The merged tree must exist and cover every source, or the task dies at startup
-# anyway -- say so here, with the fix, instead of from a 320G job that got scheduled.
+# No retarget tree for this arm: every body tracks the SOURCE reference, so the
+# only data it needs is the source clips. Check they exist per source here, with
+# the fix, instead of from a scheduled job.
+MF=$(grep -oE '^\s*motion_file:\s*\S+' "$CFG_ENV" | awk '{print $2}')
+for s in sub2 sub6 sub7 sub8 sub9 sub11 sub14; do
+    if ! ls "$MF"/${s}_*.pt >/dev/null 2>&1; then
+        echo "[teacher] ERROR: $MF has no ${s}_* clips" >&2; exit 1
+    fi
+done
 
 # Retarget arm: streamed motion -> fragmentation cap (job 16502149 post-mortem),
 # and the retarget knobs must actually be on.

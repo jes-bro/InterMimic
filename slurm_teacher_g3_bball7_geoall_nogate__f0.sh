@@ -93,7 +93,7 @@ for b in sub10 sub13 sub16; do
 done
 
 echo "[teacher] invocation: python -u -m intermimic.run --task InterMimic --cfg_env $CFG_ENV --cfg_train $CFG_TRAIN --num_envs $NUM_ENVS --headless --output checkpoints  (slurm=$0 job=$SLURM_JOB_ID)"
-echo "[teacher] G3 RECIPE g3_bball7_geoall_nogate__f0 (EgoExo4D bball, 7 people, 52 clips, per-clip balls): 43 bodies, no betas, gate resets=true, rollout 50, buf=12.0 num_envs=$NUM_ENVS"
+echo "[teacher] G3 RECIPE g3_bball7_geoall_nogate__f0 (EgoExo4D bball, 7 people, 52 clips, per-clip balls): 43 bodies, no betas, gate resets=FALSE (ablation), rollout 50, buf=12.0 num_envs=$NUM_ENVS"
 echo "[teacher] host=$(hostname) job=$SLURM_JOB_ID -> checkpoints/smplx_teacher_g3_bball7_geoall_nogate__f0/nn/"
 echo "[teacher] ABLATION nogate of g3_bball7_geoall__f0: rewardTerms.freeFlightGate.resets true -> false (object + igRatio resets no longer gated on reference contact)"
 

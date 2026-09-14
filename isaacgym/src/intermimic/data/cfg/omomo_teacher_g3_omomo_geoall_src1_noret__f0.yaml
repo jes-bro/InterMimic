@@ -8,7 +8,7 @@
 # against the source reference too.
 #
 # STORAGE: padded, exactly as the base trained (Jess 2026-09-13: no ragged here,
-# so the arm is comparable to the teacher run for run); hence 384G like the base.
+# so the arm is comparable run-for-run with the teacher); hence 384G like the base.
 #
 # Everything else -- data, bodies, recipe, physics -- is the base's; see its header.
 # Compare at a MATCHED EPOCH against the base, never at matched wall time.
