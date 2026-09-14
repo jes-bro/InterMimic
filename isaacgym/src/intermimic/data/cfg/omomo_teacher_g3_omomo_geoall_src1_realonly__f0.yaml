@@ -5,9 +5,8 @@
 # WHY: Do the 30 synthetic training bodies help the held-out bodies (sub10 sub13 sub16)?
 # Off = train on the 13 real f0 bodies only; eval is unchanged (held-out bodies).
 #
-# STORAGE: raggedMotionData true (the base ran padded at 384G; ragged is
-# audited byte-identical in behaviour and lets seven copies fit at 192G).
-# cfg_diff therefore shows TWO keys vs the base; only the first is the ablation.
+# STORAGE: padded, exactly as the base trained (Jess 2026-09-13: no ragged here,
+# so the arm is comparable to the teacher run for run); hence 384G like the base.
 #
 # Everything else -- data, bodies, recipe, physics -- is the base's; see its header.
 # Compare at a MATCHED EPOCH against the base, never at matched wall time.
@@ -50,7 +49,6 @@ env:
   - R_Thumb3
   controlFrequencyInv: 2
   cpuMotionData: true
-  raggedMotionData: true
   dataFPS: 30
   dataFramesScale: 1
   dataSub: ['sub1']

@@ -4,7 +4,7 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=192G
+#SBATCH --mem=384G
 #SBATCH --gres=gpu:1
 
 #SBATCH --job-name="tch-g3_omomo_geoall_src1_noret__f0"
@@ -43,10 +43,6 @@ CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoa
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 if ! grep -qE '^\s*cpuMotionData:\s*[Tt]rue' "$CFG_ENV"; then
     echo "[teacher] ERROR: retarget arm without cpuMotionData in $CFG_ENV" >&2; exit 1
-fi
-
-if ! grep -qE '^\s*raggedMotionData:\s*[Tt]rue' "$CFG_ENV"; then
-    echo "[teacher] ERROR: g3_omomo_geoall_src1_noret__f0 without raggedMotionData in $CFG_ENV" >&2; exit 1
 fi
 
 # Buffer guard: the cfg must carry exactly this cell's multiplier (12.0).

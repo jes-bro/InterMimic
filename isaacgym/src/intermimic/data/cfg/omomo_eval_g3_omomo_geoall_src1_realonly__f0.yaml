@@ -78,7 +78,6 @@ env:
   subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
   retargetedMotionDir: InterAct/OMOMO_retarget_contact_src1
   cpuMotionData: true
-  raggedMotionData: true
   subjectHeightsFile: scripts/synthetic_heights.json
   bodyNormalizedReward: true
   ballSize: 1.

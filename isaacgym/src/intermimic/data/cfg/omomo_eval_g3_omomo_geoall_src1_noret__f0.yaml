@@ -77,7 +77,6 @@ env:
   dataSub: ['sub1']                        # overwritten per pair by --data_sub
   subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
   cpuMotionData: true
-  raggedMotionData: true
   subjectHeightsFile: scripts/synthetic_heights.json
   bodyNormalizedReward: true
   ballSize: 1.

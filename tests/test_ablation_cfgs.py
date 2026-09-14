@@ -13,9 +13,8 @@ key off its base.
              noret    retargetedMotionDir removed
              obs2     obsHorizons [1, 16], numObs 3198
 
-The src1 ablations additionally turn on raggedMotionData (audited
-byte-identical; lets seven copies fit at 192G instead of 384G), so their
-env diff is the ablation key PLUS that flag, and nothing else.
+Storage is the base's in every case (the sub1 seven stay PADDED at 384G,
+exactly as the teacher trained -- Jess 2026-09-13 -- so no ragged flag).
 
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_ablation_cfgs.py -v
 """
@@ -28,8 +27,8 @@ import yaml
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 C = os.path.join(REPO, "isaacgym/src/intermimic/data/cfg")
 
-BASES = {
-    "g3_omomo_geoall_src1__f0": {"raggedMotionData"},     # extra, semantics-free diff
+BASES = {                     # base -> extra keys an ablation may differ on (none)
+    "g3_omomo_geoall_src1__f0": set(),
     "g3_omomo_geoall_srchalf7__f0": set(),
     "g3_bball7_geoall__f0": set(),
 }
@@ -97,8 +96,7 @@ def test_env_cfg_is_exactly_one_key_off_its_base(base, abl):
         assert e["cpuMotionData"] is True                           # still streams from host
     elif abl == "obs2":
         assert e["obsHorizons"] == [1, 16] and e["numObs"] == 2 * 1599
-    if "raggedMotionData" in BASES[base]:
-        assert e["raggedMotionData"] is True
+    assert e.get("raggedMotionData") == _env(base)["env"].get("raggedMotionData")
 
 
 @pytest.mark.parametrize("base,abl", PAIRS)
@@ -160,9 +158,8 @@ def test_launcher_points_at_its_own_files(base, abl):
         assert "retargetedMotionDir:'" not in code and 'RT=$(' not in code
     else:
         assert "retargetedMotionDir:'" in code
-    if "raggedMotionData" in BASES[base]:
-        assert "raggedMotionData:\\s*[Tt]rue" in code
-        assert "#SBATCH --mem=192G" in src
-    else:
-        m = re.search(r"^#SBATCH --mem=(\S+)$", open(os.path.join(REPO, f"slurm_teacher_{base}.sh")).read(), re.M)
-        assert f"#SBATCH --mem={m.group(1)}" in src          # same memory as the base
+    bsrc = open(os.path.join(REPO, f"slurm_teacher_{base}.sh")).read()
+    m = re.search(r"^#SBATCH --mem=(\S+)$", bsrc, re.M)
+    assert f"#SBATCH --mem={m.group(1)}" in src              # same memory as the base
+    # the ragged guard exists exactly where the base has it (srchalf7), nowhere else
+    assert ("raggedMotionData:\\s*[Tt]rue" in code) == ("raggedMotionData:\\s*[Tt]rue" in bsrc)
