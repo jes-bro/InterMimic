@@ -235,6 +235,12 @@ ROTATE_AROUND_ROOT="${ROTATE_AROUND_ROOT:-0}"
 # Re-seat the clip on the ground after rotating. interact2mimic.py:853 fits the
 # height in its own frame, which any rotation invalidates.
 DROP_TO_FLOOR="${DROP_TO_FLOOR:-1}"
+# Which bodies define the ground: 'all' (lowest of the 52 bodies; a kneeling CPR
+# subject lands on the knees) or 'feet' (the four feet). The bball7/soccer
+# conversions of 2026-09 ran an older 'feet' with SMPL joint ids in a MuJoCo-
+# ordered file (right foot + spine/chest, right foot in practice); pass
+# FLOOR_BODIES=feet to reproduce those as closely as the fixed script allows.
+FLOOR_BODIES="${FLOOR_BODIES:-all}"
 
 if [ -n "$ROTATE_CALIB" ] || [ -n "$ROTATE_AXIS" ]; then
     PT_PATH="$INTERMIMIC/InterAct/$DATASET_TAG/${SEQ_NAME}.pt"
@@ -249,7 +255,7 @@ if [ -n "$ROTATE_CALIB" ] || [ -n "$ROTATE_AXIS" ]; then
     AROUND_ROOT_FLAG=""
     if [ "$ROTATE_AROUND_ROOT" = "1" ]; then AROUND_ROOT_FLAG="--around-root"; fi
     FLOOR_FLAG=""
-    if [ "$DROP_TO_FLOOR" = "1" ]; then FLOOR_FLAG="--drop-to-floor"; fi
+    if [ "$DROP_TO_FLOOR" = "1" ]; then FLOOR_FLAG="--drop-to-floor --floor-bodies $FLOOR_BODIES"; fi
     if [ -n "$ROTATE_CALIB" ]; then
         log "step 3.5: rotate_pt --from-calib $ROTATE_CALIB"
         python scripts/rotate_pt.py "$PT_PATH" \

@@ -136,6 +136,16 @@ def main() -> int:
                              "root_pos at all, which leaves the body facing one "
                              "way while its path still runs the other -- the "
                              "figure appears to walk backwards.")
+    parser.add_argument("--floor-bodies", choices=["all", "feet"], default="all",
+                        help="Which bodies define the ground for --drop-to-floor. "
+                             "'all' (default): the lowest of all 52 bodies per frame, "
+                             "so a kneeling subject is seated on the knees and a "
+                             "standing one on the feet. 'feet': the four foot bodies "
+                             "only. NOTE the bball7/soccer conversions (2026-09) ran an "
+                             "earlier 'feet' whose indices [7, 8, 10, 11] were SMPL "
+                             "joint ids, not this file's MuJoCo body order -- they "
+                             "seated on R_Ankle, R_Toe, Spine, Chest (right foot in "
+                             "practice). 'feet' here is the corrected [3, 4, 7, 8].")
     parser.add_argument("--floor-percentile", type=float, default=10.0,
                         help="Percentile of per-frame lowest-foot height taken "
                              "as ground contact (default: 10). Not the minimum: "
@@ -239,16 +249,19 @@ def main() -> int:
         # Applied as one constant offset to every position channel, which leaves
         # the motion and the human-object relationship untouched -- only where
         # the whole scene sits vertically changes.
-        feet = [7, 8, 10, 11]                # L/R Ankle, L/R Toe
+        # Body order is the rig's (MuJoCo document order, omomo.xml):
+        # 3 L_Ankle, 4 L_Toe, 7 R_Ankle, 8 R_Toe. These are joint CENTRES, not the
+        # skin, so a toe/knee joint on the floor reads a couple of cm above z=0.
         body = data[:, 162:318].clone().reshape(T, -1, 3)
-        lowest = body[:, feet, 2].min(dim=1).values.numpy()
+        ground_ids = [3, 4, 7, 8] if args.floor_bodies == "feet" else list(range(body.shape[1]))
+        lowest = body[:, ground_ids, 2].min(dim=1).values.numpy()
         offset = float(-np.percentile(lowest, args.floor_percentile))
         data[:, 2] += offset                                      # root_pos z
         body[:, :, 2] += offset
         data[:, 162:318] = body.reshape(T, -1)
         data[:, 320] += offset                                    # obj_pos z
-        print(f"drop-to-floor: lowest foot ran {lowest.min():.2f}..{lowest.max():.2f} m, "
-              f"shifted by {offset:+.3f} m")
+        print(f"drop-to-floor ({args.floor_bodies}): lowest body ran "
+              f"{lowest.min():.2f}..{lowest.max():.2f} m, shifted by {offset:+.3f} m")
 
     if dst == src:
         # Kept OUT of the motion directory. InterMimic enumerates that directory
