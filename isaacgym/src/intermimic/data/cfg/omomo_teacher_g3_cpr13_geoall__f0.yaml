@@ -1,0 +1,234 @@
+# THE g3 RECIPE ON THE EGOEXO4D CPR RECONSTRUCTION, ALL 13 PEOPLE.
+# Twin of omomo_teacher_g3_bball7_geoall__f0.yaml. What differs, and only this
+# (python3 scripts/cfg_diff.py the two files):
+#
+#   motion_file           InterAct/behave_cari4d_cpr_kn     23 clips, 13 people
+#   dataSub               sub509 510 512 513 517 564 565 566 567 569 577 579 580
+#   retargetedMotionDir   the merged 13-source tree, f0's 43 bodies, body-major
+#   objectMass 3.7        a torso-and-head training manikin (Little Anne class);
+#                         the recon meshes are 0.64 m (UTokyo) / 0.5 m (NUS)
+#                         torsos, not full bodies (bball: 0.624 kg ball)
+#   objectShapeProps      REMOVED -> the task's defaults, restitution 0.05 and
+#                         friction 0.6, i.e. what every OMOMO object gets
+#   plane.restitution 0.7 the OMOMO value (bball raised both to 0.85 for bounce)
+#
+# THE DATA (2026-09-14). CARI4D reconstructions of EgoExo4D CPR takes: 23
+# clips from 13 CARI4D Sub ids, verified 13 distinct EgoExo4D participants via
+# takes.json (5 NUS, 8 UTokyo). Subject id = 400 + Sub. One body per person =
+# MEDIAN over that person's solves (mean differs by <= 0.11 -- same as soccer).
+# Clips 78-691 frames (~6.1k total), none under rolloutLength 50.
+#
+# THE OBJECT NEVER MOVES. That changes what the reward terms mean, not the
+# recipe: op grades the human's placement relative to the manikin (root-
+# relative, so not constant); opv grades "do not shove it"; the ig term is the
+# main signal (hands where the reference puts them on the chest); rcg_hand
+# grades the compression contact. resetThresholds.object 0.5 is kept as the
+# "don't shove it" guard. The reference puts the hands ~5 cm INSIDE the chest
+# on every compression (real manikins compress; a rigid mesh does not) --
+# accepted: PhysX resolves the penetration and hand pose error carries a
+# floor of a few cm on those frames. objectConvexHull true is a good shape
+# for a torso (near-convex; hull is 1.2-1.4x the raw volume).
+#
+# CONTACT LABELS: the converter's own vertex-distance labels, which are
+# correct for a static object; the hand/foot relabel scripts (sphere model)
+# were NOT run. The one fix is scripts/relabel_contact_cpr.py: the kneeler's
+# knees/ankles/toes rest on the FLOOR > 10 cm from the manikin and were
+# labelled "must not touch"; they are set to neutral (_kn). Floor seating
+# uses the lowest of all bodies (knees), rotate_pt.py --floor-bodies all.
+#
+# BODIES: f0's 43 OMOMO bodies (sub10 sub13 sub16 held out). Padded storage:
+# 989 motions x 691 frames x 8.8 kB ~ 6 GB; no ragged flag; 64G.
+#
+# Recipe verbatim: obsHorizons [1,4,7,10,13,16], numObs 9594, no betas,
+# geometric_all, rollout 50, initVel, PSI 3, pose 0.02, bodyNormalizedReward,
+# cpuMotionData, gate resets, all four resetThresholds, buffer 12.0, 2048 envs.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub509', 'sub510', 'sub512', 'sub513', 'sub517', 'sub564', 'sub565', 'sub566', 'sub567', 'sub569', 'sub577', 'sub579', 'sub580']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_cpr_kn
+  numEnvs: 4096
+  numObs: 9594
+  objectConvexHull: true
+  objectMass: 3.7
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_cpr_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
