@@ -78,6 +78,34 @@ def test_launcher_and_retarget_array_name_the_same_sources():
     assert "behave_cari4d_cpr_f0_bodymajor" in rt
 
 
+TOP7 = ["sub509", "sub512", "sub517", "sub564", "sub567", "sub569", "sub579"]
+
+
+def test_cpr7_differs_from_cpr13_only_in_sources():
+    """The top-7-by-clip-count arm: exactly the seven people with >= 2 clips (17 of 23)."""
+    a, b = _env(ARM), _env("g3_cpr7_geoall__f0")
+    diff = {k for k in set(a["env"]) | set(b["env"]) if a["env"].get(k) != b["env"].get(k)}
+    assert diff == {"dataSub"} and a["sim"] == b["sim"]
+    assert b["env"]["dataSub"] == TOP7 and set(TOP7) < set(SUBS)
+    import csv
+    rows = list(csv.DictReader(open(os.path.expanduser("~/cari4d_cpr/manifest.csv")))) \
+        if os.path.exists(os.path.expanduser("~/cari4d_cpr/manifest.csv")) else None
+    if rows:                                            # local manifest: the cut is clips >= 2, no tie
+        n = {}
+        for r in rows:
+            n["sub" + r["subject_id"]] = n.get("sub" + r["subject_id"], 0) + 1
+        assert sorted(s for s, c in n.items() if c >= 2) == TOP7
+        assert sum(n[s] for s in TOP7) == 17
+    ev = yaml.safe_load(open(os.path.join(C, "omomo_eval_g3_cpr7_geoall__f0.yaml")))
+    assert ev["evalFor"] == ["g3_cpr7_geoall__f0"] and ev["env"]["dataSub"] == TOP7
+    rlg = yaml.safe_load(open(os.path.join(C, "train/rlg/omomo_teacher_g3_cpr7_geoall__f0.yaml")))
+    assert rlg["params"]["config"]["full_experiment_name"] == "smplx_teacher_g3_cpr7_geoall__f0"
+    src = open(os.path.join(REPO, "slurm_teacher_g3_cpr7_geoall__f0.sh")).read()
+    m = re.search(r"^for s in ((?:sub\d+\s*)+); do$", src, re.M)
+    assert m and m.group(1).split() == TOP7
+    assert "omomo_teacher_g3_cpr7_geoall__f0.yaml" in src and "#SBATCH --mem=64G" in src
+
+
 def test_betas_npz_and_convert_driver_agree_with_the_sources():
     d = np.load(os.path.join(REPO, "scripts/cpr_subject_betas.npz"))
     assert sorted(d.files) == SUBS
