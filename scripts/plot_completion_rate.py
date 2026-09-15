@@ -50,8 +50,34 @@ import numpy as np
 # Reuse the reward plotter's conventions so both plots name runs and read epochs
 # identically. Importing it also switches matplotlib to the headless Agg backend.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot_epoch_rewards import EPOCH_RE, break_gaps, ewma, run_name  # noqa: E402
-import matplotlib.pyplot as plt                                      # noqa: E402
+# Only names that exist in the COMMITTED plot_epoch_rewards.py: importing
+# anything newer breaks this script on a clone that has not got those edits.
+from plot_epoch_rewards import EPOCH_RE, ewma, run_name  # noqa: E402
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt                          # noqa: E402
+
+
+def break_gaps(x, *ys, factor=6.0):
+    """Insert NaN where x jumps, so the line is drawn with a hole, not across it.
+
+    A resubmitted run can be missing a stretch of logs; joining the segments
+    either side draws a straight line that reads as progress through a region
+    with no data. A gap is a step more than `factor` times the median step.
+    Returns ((x, *ys) padded, [(from, to), ...]).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    ys = [np.asarray(y, dtype=np.float64) for y in ys]
+    if len(x) < 3 or factor <= 0:
+        return (x, *ys), []
+    d = np.diff(x)
+    med = np.median(d[d > 0]) if np.any(d > 0) else 0.0
+    idx = np.flatnonzero(d > factor * med) if med > 0 else np.array([], dtype=int)
+    if len(idx) == 0:
+        return (x, *ys), []
+    gaps = [(float(x[i]), float(x[i + 1])) for i in idx]
+    at = idx + 1            # positions in the ORIGINAL array; np.insert takes all at once
+    return (np.insert(x, at, np.nan), *[np.insert(y, at, np.nan) for y in ys]), gaps
 
 # "TERMINATION REASONS  (sim step 4000)" opens a table.
 BLOCK_RE = re.compile(r"^TERMINATION REASONS\s+\(sim step (\d+)\)")

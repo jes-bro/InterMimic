@@ -164,6 +164,22 @@ def test_resubmitted_run_is_one_line(tmp_path):
     assert "10-40" in rows[0]
 
 
+def test_missing_stretch_of_logs_breaks_the_line(tmp_path):
+    mod = load()
+    (x, y), gaps = mod.break_gaps([10, 20, 30, 40, 500, 510], [1, 2, 3, 4, 5, 6])
+    assert gaps == [(40.0, 500.0)]
+    assert len(x) == 7 and x[4] != x[4]          # NaN inserted after epoch 40
+    assert y[4] != y[4] and list(y[5:]) == [5.0, 6.0]
+
+
+def test_only_imports_names_the_committed_reward_plotter_has():
+    """The first push imported break_gaps, which lived only in an uncommitted
+    local edit of plot_epoch_rewards.py, so the script crashed on the cluster."""
+    src = SCRIPT.read_text()
+    line = next(l for l in src.splitlines() if l.startswith("from plot_epoch_rewards import"))
+    assert "break_gaps" not in line
+
+
 def test_unknown_cause_fails_loudly(tmp_path):
     write(tmp_path / "teacher-armA-1.out", two_tables())
     r = run("--glob", tmp_path / "*.out", "--cause", "fall", "--out", tmp_path / "c.png")
