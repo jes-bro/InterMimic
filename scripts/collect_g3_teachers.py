@@ -83,11 +83,15 @@ def latest_ckpt(nn_dir, read_epoch=None):
     return best[0], (best[1] if best[1] >= 0 else None)
 
 
-def activity_sources(name, cfg_dir):
+OMOMO_ARM_EXP = "smplx_teacher_g3_omomo_geoall_{name}__f0"      # multi-source OMOMO teachers: srchalf6, srchalf7, srcall13
+OMOMO_ARM_CFG = "omomo_teacher_g3_omomo_geoall_{name}__f0.yaml"
+
+
+def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG):
     """The arm's dataSub as ints, from its env cfg -- the same list the teacher trained on."""
-    path = os.path.join(cfg_dir, ACT_CFG.format(name=name))
+    path = os.path.join(cfg_dir, cfg_pattern.format(name=name))
     if not os.path.isfile(path):
-        raise SystemExit(f"ERROR: no env cfg for activity '{name}' at {path}")
+        raise SystemExit(f"ERROR: no env cfg for arm '{name}' at {path}")
     with open(path) as fh:
         env = (yaml.safe_load(fh) or {}).get("env") or {}
     subs = env.get("dataSub")
@@ -102,7 +106,7 @@ def activity_sources(name, cfg_dir):
     return out
 
 
-def plan_teachers(root, omomo_sources, activities, cfg_dir):
+def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=()):
     """[(file, sources, origin, epoch)] or a SystemExit listing what is missing."""
     plan, missing = [], []
     for s in omomo_sources:
@@ -112,9 +116,11 @@ def plan_teachers(root, omomo_sources, activities, cfg_dir):
             missing.append(f"sub{s}: {os.path.join(root, exp, 'nn')} has no mimic*.pth")
         else:
             plan.append((f"sub{s}.pth", [s], ck, ep))
-    for name in activities:
-        exp = ACT_EXP.format(name=name)
-        srcs = activity_sources(name, cfg_dir)
+    # multi-source teachers: one checkpoint serving every source in the arm's dataSub
+    for name, exp_pat, cfg_pat in ([(n, ACT_EXP, ACT_CFG) for n in activities]
+                                   + [(n, OMOMO_ARM_EXP, OMOMO_ARM_CFG) for n in omomo_arms]):
+        exp = exp_pat.format(name=name)
+        srcs = activity_sources(name, cfg_dir, cfg_pat)
         ck, ep = latest_ckpt(os.path.join(root, exp, "nn"))
         if ck is None:
             missing.append(f"{name}: {os.path.join(root, exp, 'nn')} has no mimic*.pth")
@@ -140,6 +146,9 @@ def main(argv=None):
     ap.add_argument("--omomo-sources", type=int, nargs="*", default=[], metavar="S")
     ap.add_argument("--activities", nargs="*", default=[], metavar="NAME",
                     help="activity arm names, e.g. bball7 soccer15 cpr13")
+    ap.add_argument("--omomo-arms", nargs="*", default=[], metavar="NAME",
+                    help="multi-source OMOMO teacher arms, e.g. srchalf6 srchalf7 or srcall13 "
+                         "(exp smplx_teacher_g3_omomo_geoall_<NAME>__f0; sources from its cfg)")
     ap.add_argument("--out", required=True, help="teacherPolicy dir to write")
     ap.add_argument("--root", default=os.path.join(REPO, "checkpoints"),
                     help="checkpoint tree (default: <repo>/checkpoints)")
@@ -147,7 +156,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
-    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir)
+    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms)
     for f, srcs, ck, ep in plan:
         print(f"  {f:<14} sources {srcs}  <- {os.path.relpath(ck, a.root)}  (epoch {ep})")
     if a.dry_run:

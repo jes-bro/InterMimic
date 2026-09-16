@@ -74,11 +74,24 @@ def test_activity_sources_come_from_cfg(tree):
                      os.path.join(root, "smplx_teacher_g3_bball7_geoall__f0", "nn", "mimic_00008000.pth"), 8000)]
 
 
+def test_omomo_arms_multi_source_teachers(tree):
+    root, cfg_dir, _ = tree
+    _ckpt(root, "smplx_teacher_g3_omomo_geoall_srchalf7__f0", ["mimic_00020000.pth"])
+    os.makedirs(cfg_dir, exist_ok=True)
+    with open(os.path.join(cfg_dir, cg.OMOMO_ARM_CFG.format(name="srchalf7")), "w") as fh:
+        yaml.safe_dump({"env": {"dataSub": ["sub2", "sub6", "sub7"]}}, fh)
+    plan = cg.plan_teachers(root, [], [], cfg_dir, omomo_arms=["srchalf7"])
+    assert plan == [("srchalf7.pth", [2, 6, 7],
+                     os.path.join(root, "smplx_teacher_g3_omomo_geoall_srchalf7__f0", "nn", "mimic_00020000.pth"), 20000)]
+    with pytest.raises(SystemExit, match="sub2 owned by both"):
+        cg.plan_teachers(root, [2], [], cfg_dir, omomo_arms=["srchalf7"])
+
+
 def test_partial_set_refused(tree):
     root, cfg_dir, _ = tree
     with pytest.raises(SystemExit, match=r"sub9: .*has no mimic"):
         cg.plan_teachers(root, [2, 9], [], cfg_dir)
-    with pytest.raises(SystemExit, match="no env cfg for activity 'soccer15'"):
+    with pytest.raises(SystemExit, match="no env cfg for arm 'soccer15'"):
         cg.plan_teachers(root, [], ["soccer15"], cfg_dir)
 
 
