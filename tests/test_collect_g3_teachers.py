@@ -33,6 +33,24 @@ def test_epoch_inside_beats_filename_number(tmp_path, monkeypatch):
     assert p.endswith("/mimic.pth") and ep == 67500
 
 
+def test_only_mimic_pth_is_loaded(tmp_path, monkeypatch):
+    """A week-long run has ~70 snapshots; only mimic.pth needs opening (the
+    numbered files carry their epoch in the name). Numbered ones must win when
+    they are higher, and mimic.pth when it is."""
+    nn = os.path.join(tmp_path, "smplx_teacher_g3_omomo_geoall_srchalf6__f0", "nn")
+    _ckpt(tmp_path, "smplx_teacher_g3_omomo_geoall_srchalf6__f0",
+          ["mimic.pth"] + [f"mimic_{e:08d}.pth" for e in range(500, 40001, 500)])
+    loads = []
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: loads.append(p) or 40000)
+    p, ep = cg.latest_ckpt(nn)
+    assert loads == [os.path.join(nn, "mimic.pth")]          # exactly one load
+    assert (p.endswith("mimic_00040000.pth") or p.endswith("mimic.pth")) and ep == 40000
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: 40500)   # mimic.pth newer than any snapshot
+    assert cg.latest_ckpt(nn) == (os.path.join(nn, "mimic.pth"), 40500)
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: 12000)   # mimic.pth stale
+    assert cg.latest_ckpt(nn) == (os.path.join(nn, "mimic_00040000.pth"), 40000)
+
+
 def _ckpt(root, exp, names):
     d = os.path.join(root, exp, "nn")
     os.makedirs(d, exist_ok=True)

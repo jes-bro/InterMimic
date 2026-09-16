@@ -67,20 +67,27 @@ def latest_ckpt(nn_dir, read_epoch=None):
         read_epoch = epoch_inside          # resolved at call time so tests can substitute it
     if not os.path.isdir(nn_dir):
         return None, None
-    best = None
-    for f in sorted(os.listdir(nn_dir)):
-        if not re.fullmatch(r"mimic(?:_\d+)?\.pth", f):
-            continue
-        p = os.path.join(nn_dir, f)
-        ep = read_epoch(p)
-        if ep is None:
-            m = re.fullmatch(r"mimic_(\d+)\.pth", f)
-            ep = int(m.group(1)) if m else -1
-        if best is None or ep > best[1]:
-            best = (p, ep)
-    if best is None:
+    # Only two files can be the latest: the highest-NUMBERED snapshot (its name
+    # IS its epoch -- no load needed) and mimic.pth (unnumbered; read its epoch
+    # from inside). Loading every snapshot of a week-long run over NFS took
+    # tens of minutes per teacher (2026-09-16: 72 + 65 files), for nothing.
+    cands = []
+    numbered = []
+    for f in os.listdir(nn_dir):
+        m = re.fullmatch(r"mimic_(\d+)\.pth", f)
+        if m:
+            numbered.append((int(m.group(1)), f))
+    if numbered:
+        ep, f = max(numbered)
+        cands.append((os.path.join(nn_dir, f), ep))
+    mp = os.path.join(nn_dir, "mimic.pth")
+    if os.path.isfile(mp):
+        ep = read_epoch(mp)
+        cands.append((mp, ep if ep is not None else -1))
+    if not cands:
         return None, None
-    return best[0], (best[1] if best[1] >= 0 else None)
+    p, ep = max(cands, key=lambda c: c[1])
+    return p, (ep if ep >= 0 else None)
 
 
 OMOMO_ARM_EXP = "smplx_teacher_g3_omomo_geoall_{name}__f0"      # multi-source OMOMO teachers: srchalf6, srchalf7, srcall13
