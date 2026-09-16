@@ -22,8 +22,12 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "ERROR: tmux session '$SESSION' already exists (tmux attach -t $SESSION)" >&2; exit 1
 fi
 LOG="$(basename "$LAUNCHER" .sh)-gcp.log"
-tmux new-session -d -s "$SESSION" \
-    "until bash '$LAUNCHER' 2>&1 | tee -a '$LOG'; do echo '[gcp] launcher exited, restarting in 30 s' | tee -a '$LOG'; sleep 30; done"
+# pipefail is load-bearing: without it `until` sees tee's exit status (always 0),
+# treats the first crash as a clean finish, and the session closes -- which is
+# exactly what happened on the first launch (2026-09-16). With it, a crash
+# restarts after 30 s and a genuine clean exit (walltime-free, so: never) ends.
+tmux new-session -d -s "$SESSION" bash -c \
+    "set -o pipefail; until bash '$LAUNCHER' 2>&1 | tee -a '$LOG'; do echo '[gcp] launcher exited with an error, restarting in 30 s' | tee -a '$LOG'; sleep 30; done"
 echo "started tmux session '$SESSION' running $LAUNCHER; log -> $LOG"
 echo "  watch:   tmux attach -t $SESSION      (detach: Ctrl-b d)"
 echo "  or:      tail -f $LOG"
