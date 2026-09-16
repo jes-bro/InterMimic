@@ -112,7 +112,68 @@ def test_train_cfgs_differ_only_where_intended():
     }
 
 
-@pytest.mark.parametrize("arm", OMOMO_ARMS)
+# ----------------------------------------------------------------- activity arms
+ACT_ARMS = ["act_mlp_ret_stock", "act_xf_ret_nvadlr"]
+ACT_DISTILL_KEYS = dict(DISTILL_KEYS, teacherPolicy="checkpoints/teachers/g3_act")
+
+
+def _arm_cfg(name):
+    return yaml.safe_load(open(os.path.join(CFG, f"omomo_teacher_g3_{name}_geoall__f0.yaml")))["env"]
+
+
+@pytest.mark.parametrize("arm", ACT_ARMS)
+def test_act_env_is_bball7_recipe_plus_merge_keys(arm):
+    base = _flat({"env": _arm_cfg("bball7")})
+    stu = _flat({"env": _env(arm)["env"]})      # env section only (sim is compared below)
+    assert _env(arm)["sim"] == yaml.safe_load(open(os.path.join(CFG, "omomo_teacher_g3_bball7_geoall__f0.yaml")))["sim"]
+    added = {k: v for k, v in stu.items() if k not in base}
+    assert added == {**{f"env.{k}": v for k, v in ACT_DISTILL_KEYS.items()},
+                     "env.raggedMotionData": True,
+                     "env.objectPropsFile": "isaacgym/src/intermimic/data/cfg/object_props_g3_act.yaml"}
+    removed = {k for k in base if k not in stu}
+    assert removed == {"env.objectMass", "env.objectShapeProps.restitution"}
+    changed = {k for k in base if k in stu and stu[k] != base[k]}
+    assert changed == {"env.motion_file", "env.retargetedMotionDir", "env.dataSub", "env.plane.restitution"}
+    assert stu["env.plane.restitution"] == 0.7
+    assert stu["env.motion_file"] == "InterAct/behave_cari4d_act"
+    assert stu["env.retargetedMotionDir"] == "InterAct/behave_cari4d_act_f0_bodymajor"
+
+
+def test_act_datasub_is_union_of_the_three_arms():
+    union = sorted({s for a in ("bball7", "soccer15", "cpr13") for s in _arm_cfg(a)["dataSub"]},
+                   key=lambda s: int(s[3:]))
+    assert len(union) == 7 + 15 + 13, "the three arms' sources must be disjoint"
+    assert _env("act_mlp_ret_stock")["env"]["dataSub"] == union
+
+
+def test_act_twins_share_env_body():
+    assert _body(os.path.join(CFG, "omomo_student_g3_act_mlp_ret_stock__f0.yaml")) == \
+           _body(os.path.join(CFG, "omomo_student_g3_act_xf_ret_nvadlr__f0.yaml"))
+
+
+@pytest.mark.parametrize("pair", [("omomo_mlp_ret_stock", "act_mlp_ret_stock"),
+                                  ("omomo_xf_ret_nvadlr", "act_xf_ret_nvadlr")])
+def test_act_train_cfg_is_omomo_twin_with_own_name(pair):
+    a, b = _flat(_train(pair[0])), _flat(_train(pair[1]))
+    diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
+    assert diff == {"params.config.full_experiment_name"}
+    assert b["params.config.full_experiment_name"] == f"smplx_student_g3_{pair[1]}__f0"
+
+
+def test_all_experiment_names_distinct():
+    names = [_train(a)["params"]["config"]["full_experiment_name"] for a in OMOMO_ARMS + ACT_ARMS]
+    assert len(set(names)) == 4
+
+
+@pytest.mark.parametrize("arm", ACT_ARMS)
+def test_act_launcher_guards(arm):
+    s = open(os.path.join(ROOT, f"slurm_student_g3_{arm}__f0.sh")).read()
+    assert "objectPropsFile" in s and "merge_activity_data.py" in s
+    assert "--activities bball7 soccer15 cpr13" in s
+    assert "#SBATCH --mem=64G" in s
+
+
+@pytest.mark.parametrize("arm", OMOMO_ARMS + ACT_ARMS)
 def test_launcher_points_at_own_cfgs_and_task(arm):
     path = os.path.join(ROOT, f"slurm_student_g3_{arm}__f0.sh")
     assert os.path.isfile(path), f"missing launcher {path}"
