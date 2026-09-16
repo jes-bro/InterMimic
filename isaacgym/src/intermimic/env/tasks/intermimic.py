@@ -116,6 +116,8 @@ class InterMimic(Humanoid_SMPLX):
         'teacherPolicyCFG', 'terminationHeight', 'useTransformerObs',
         # g3 distillation student (env/tasks/intermimic_distill_g3.py)
         'studentObsHorizons',
+        # per-object mass/restitution for a mixed-dataset env (utils/object_props.py)
+        'objectPropsFile',
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
         # path (NOT training), so it's a legitimate runtime key, not a typo.
         'seed',
@@ -291,9 +293,24 @@ class InterMimic(Humanoid_SMPLX):
         # (CARI4D bball) needs the mass form, or masses scatter with recon size.
         self.object_density = cfg['env'].get('objectDensity', None)
         self.object_mass = cfg['env'].get('objectMass', None)
-        if (self.object_density is None) == (self.object_mass is None):
-            raise ValueError("[intermimic] set exactly one of objectDensity (kg/m^3) or "
-                             "objectMass (kg) in the env cfg")
+        # objectPropsFile: a THIRD form, per-object {mass, restitution}, for an env
+        # that mixes datasets (basketball + soccer ball + CPR manikin): one mass or
+        # one restitution cannot be right for all of them. Every loaded object
+        # must have an entry (utils/object_props.py refuses otherwise).
+        self._object_props = None
+        _opf = cfg['env'].get('objectPropsFile', None)
+        n_forms = sum(x is not None for x in (self.object_density, self.object_mass, _opf))
+        if n_forms != 1:
+            raise ValueError("[intermimic] set exactly one of objectDensity (kg/m^3), "
+                             "objectMass (kg) or objectPropsFile (per-object yaml) in the env cfg")
+        if _opf is not None:
+            if 'restitution' in (cfg['env'].get('objectShapeProps') or {}):
+                raise ValueError("[intermimic] objectPropsFile carries per-object restitution; "
+                                 "remove objectShapeProps.restitution (ambiguous otherwise)")
+            from ...utils.object_props import load_object_props
+            from ...utils.path_utils import resolve_repo_path as _rrp
+            self._object_props = load_object_props(_rrp(_opf), self.object_name)
+            print(f"[object] per-object props from {_opf}: {len(self.object_name)} objects covered", flush=True)
         self.ref_hoi_obs_size = 7 + 51 * 6 + 52 * 13 + 13 + 52 * 3 + 52 + 1
         self.num_motions = len(self.motion_file)
 
@@ -1118,16 +1135,17 @@ class InterMimic(Humanoid_SMPLX):
             asset_file = object_name + ".urdf"
             obj_file = resolve_data_path("assets", "objects", "objects", object_name, object_name + ".obj")
             max_convex_hulls = 64
-            if self.object_mass is not None:
+            _target_mass = self._object_target_mass(object_name)
+            if _target_mass is not None:
                 # Density from the CONVEX-HULL volume: that is what PhysX's VHACD
                 # hulls amount to for a ball; the raw recon meshes are triangle
                 # soups whose own volume is off by up to a third. The mass PhysX
                 # actually assigns is read back and checked in _build_target.
                 from ...utils.object_mass import density_for_mass
-                density, _vol, _raw = density_for_mass(obj_file, self.object_mass)
+                density, _vol, _raw = density_for_mass(obj_file, _target_mass)
                 print(f"[object] {object_name}: hull volume {_vol * 1e3:.3f} L (raw mesh "
                       f"{_raw * 1e3:.3f} L) -> density {density:.1f} kg/m^3 for "
-                      f"{self.object_mass} kg", flush=True)
+                      f"{_target_mass} kg", flush=True)
             else:
                 density = self.object_density
 
@@ -1195,12 +1213,17 @@ class InterMimic(Humanoid_SMPLX):
         if _unknown:
             raise ValueError(f"[intermimic] unknown objectShapeProps key(s): {sorted(_unknown)} "
                              f"(valid: restitution, friction, rolling_friction, torsion_friction)")
+        _obj_name = self.object_name[env_id % len(self.object_name)]
+        # Restitution: per object when objectPropsFile is set (a basketball and a
+        # manikin in one env), else the one objectShapeProps value / default.
+        _restitution = (self._object_props[_obj_name]['restitution'] if self._object_props is not None
+                        else _osp.get('restitution', 0.05))
         for p_idx in range(len(props)):
-            props[p_idx].restitution = float(_osp.get('restitution', 0.05))
+            props[p_idx].restitution = float(_restitution)
             props[p_idx].friction = float(_osp.get('friction', 0.6))
             props[p_idx].rolling_friction = float(_osp.get('rolling_friction', 0.01))
             props[p_idx].torsion_friction = float(_osp.get('torsion_friction', 0.01))
-            if self.object_name[env_id % len(self.object_name)] == 'plasticbox' or self.object_name[env_id % len(self.object_name)] == 'trashcan':
+            if _obj_name == 'plasticbox' or _obj_name == 'trashcan':
                 props[p_idx].rest_offset = 0.015
             else:
                 props[p_idx].rest_offset = 0.002
@@ -1209,23 +1232,30 @@ class InterMimic(Humanoid_SMPLX):
         self._target_handles.append(target_handle)
         self.gym.set_actor_scale(env_ptr, target_handle, self.ball_size)
 
-        # objectMass: read back what PhysX assigned (VHACD hull volume x the
-        # density derived in _load_target_asset) for the first env of each object,
-        # and refuse to start if it is off. A wrong mass would otherwise never be
-        # seen -- nothing else reads it back.
-        if self.object_mass is not None and env_id < len(self.object_name):
+        # objectMass / objectPropsFile: read back what PhysX assigned (VHACD hull
+        # volume x the density derived in _load_target_asset) for the first env of
+        # each object, and refuse to start if it is off. A wrong mass would
+        # otherwise never be seen -- nothing else reads it back.
+        _target_mass = self._object_target_mass(_obj_name)
+        if _target_mass is not None and env_id < len(self.object_name):
             rb = self.gym.get_actor_rigid_body_properties(env_ptr, target_handle)
             mass = float(sum(p.mass for p in rb))
-            name = self.object_name[env_id % len(self.object_name)]
-            err = abs(mass - self.object_mass) / self.object_mass
-            print(f"[object] {name}: PhysX mass {mass:.4f} kg (target {self.object_mass} kg, "
-                  f"{100 * err:.1f}% off)", flush=True)
+            err = abs(mass - _target_mass) / _target_mass
+            print(f"[object] {_obj_name}: PhysX mass {mass:.4f} kg (target {_target_mass} kg, "
+                  f"{100 * err:.1f}% off; restitution {_restitution})", flush=True)
             if err > 0.10:
-                raise ValueError(f"[intermimic] {name}: PhysX assigned {mass:.4f} kg for "
-                                 f"objectMass {self.object_mass} kg ({100 * err:.1f}% off); the "
+                raise ValueError(f"[intermimic] {_obj_name}: PhysX assigned {mass:.4f} kg for "
+                                 f"target mass {_target_mass} kg ({100 * err:.1f}% off); the "
                                  f"hull-volume density did not land -- inspect the mesh")
 
         return
+
+    def _object_target_mass(self, object_name):
+        """Target mass (kg) for one object: its objectPropsFile entry, else the
+        single objectMass, else None (objectDensity form -- no mass target)."""
+        if self._object_props is not None:
+            return float(self._object_props[object_name]['mass'])
+        return self.object_mass
 
     def _build_target_tensors(self):
         num_actors = self.get_num_actors_per_env()
