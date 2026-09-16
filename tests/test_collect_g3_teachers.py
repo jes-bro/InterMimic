@@ -16,6 +16,23 @@ cg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cg)
 
 
+@pytest.fixture(autouse=True)
+def _no_torch_epoch(monkeypatch):
+    """Fixture files are bytes, not checkpoints: default to 'no epoch inside' so
+    the filename rule applies; individual tests override with a real map."""
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: None)
+
+
+def test_epoch_inside_beats_filename_number(tmp_path, monkeypatch):
+    """A collaborator's mimic.pth at 67,500 epochs next to mimic_00030000.pth:
+    the inside epoch must win (2026-09-16 sub2 export)."""
+    _ckpt(tmp_path, "smplx_teacher_g3_omomo_geoall__f0", ["mimic.pth", "mimic_00030000.pth"])
+    inside = {"mimic.pth": 67500, "mimic_00030000.pth": 30000}
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: inside[os.path.basename(p)])
+    p, ep = cg.latest_ckpt(os.path.join(tmp_path, "smplx_teacher_g3_omomo_geoall__f0", "nn"))
+    assert p.endswith("/mimic.pth") and ep == 67500
+
+
 def _ckpt(root, exp, names):
     d = os.path.join(root, exp, "nn")
     os.makedirs(d, exist_ok=True)

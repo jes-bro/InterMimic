@@ -47,20 +47,40 @@ ACT_EXP = "smplx_teacher_g3_{name}_geoall__f0"
 ACT_CFG = "omomo_teacher_g3_{name}_geoall__f0.yaml"
 
 
-def latest_ckpt(nn_dir):
-    """(path, epoch) of the newest numbered snapshot, else (mimic.pth, None), else (None, None)."""
+def epoch_inside(path):
+    """The epoch rl_games stored in the checkpoint dict (None if absent)."""
+    import torch
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    return ck.get("epoch") if isinstance(ck, dict) else None
+
+
+def latest_ckpt(nn_dir, read_epoch=None):
+    """(path, epoch) of the checkpoint with the HIGHEST epoch in nn_dir, else (None, None).
+
+    The epoch is read from INSIDE each mimic*.pth, not from the filename: a
+    collaborator's `mimic.pth` export was at 67,500 epochs while the numbered
+    `mimic_00030000.pth` beside it was an older snapshot (2026-09-16), so
+    'prefer the numbered file' picked the wrong one. A file whose dict has no
+    epoch falls back to the number in its name, and to -1 (never preferred) if
+    it has neither."""
+    if read_epoch is None:
+        read_epoch = epoch_inside          # resolved at call time so tests can substitute it
     if not os.path.isdir(nn_dir):
         return None, None
-    snaps = []
-    for f in os.listdir(nn_dir):
-        m = re.fullmatch(r"mimic_(\d+)\.pth", f)
-        if m:
-            snaps.append((int(m.group(1)), f))
-    if snaps:
-        ep, f = max(snaps)
-        return os.path.join(nn_dir, f), ep
-    mp = os.path.join(nn_dir, "mimic.pth")
-    return (mp, None) if os.path.isfile(mp) else (None, None)
+    best = None
+    for f in sorted(os.listdir(nn_dir)):
+        if not re.fullmatch(r"mimic(?:_\d+)?\.pth", f):
+            continue
+        p = os.path.join(nn_dir, f)
+        ep = read_epoch(p)
+        if ep is None:
+            m = re.fullmatch(r"mimic_(\d+)\.pth", f)
+            ep = int(m.group(1)) if m else -1
+        if best is None or ep > best[1]:
+            best = (p, ep)
+    if best is None:
+        return None, None
+    return best[0], (best[1] if best[1] >= 0 else None)
 
 
 def activity_sources(name, cfg_dir):
