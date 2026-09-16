@@ -15,6 +15,8 @@
 #                                     experiment under $ROOT (default checkpoints/)
 #   push-omomo-data <sub>...          those sources' OMOMO_new clips + contact-retarget trees
 #   push-act-data                     the three activity motion dirs + trees + assets/objects
+#   pull-assets                       all per-subject body MJCFs (assets/smplx/smplx_omomo_sub*.xml);
+#                                     a VM cloned from a teacher image has only that teacher's subset
 #   pull-teachers <exp> [<exp>...]    bucket -> checkpoints/<exp>/nn/
 #   pull-omomo-data                   all 13 sources' clips + trees (OMOMO student VM)
 #   pull-act-data                     activity dirs + trees + assets/objects (activity VM)
@@ -64,6 +66,11 @@ case "$cmd" in
     for d in $ACT_MOTION_DIRS $ACT_TREES; do cp_ -r "InterAct/$d" "$BUCKET/InterAct/"; done
     # every activity object's URDF + mesh (the repo ships only OMOMO's 19)
     cp_ -r "$OBJECTS_DIR" "$BUCKET/assets/" ;;
+  pull-assets)
+    mkdir -p isaacgym/src/intermimic/data/assets/smplx
+    cp_ "$BUCKET/assets/smplx/smplx_omomo_sub*.xml" isaacgym/src/intermimic/data/assets/smplx/
+    n=$(ls isaacgym/src/intermimic/data/assets/smplx/smplx_omomo_sub*.xml | wc -l)
+    echo "$n body MJCFs present (a 43-body f0 arm needs every one of its subjectBodies)" ;;
   pull-teachers)
     [ $# -ge 1 ] || { echo "usage: pull-teachers <exp> [<exp>...]" >&2; exit 1; }
     for exp in "$@"; do
