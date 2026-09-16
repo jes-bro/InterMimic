@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from rl_games.algos_torch import network_builder
+from ..utils.distill_g3 import token_layout
 
 import torch
 import torch.nn as nn
@@ -68,8 +69,13 @@ class InterMimicBuilder(network_builder.A2CBuilder):
                     self.sigma = nn.Parameter(torch.zeros(actions_num, requires_grad=False, dtype=torch.float32), requires_grad=False)
                     sigma_init(self.sigma)
             input_shape = kwargs.pop('input_shape')[0]
-            # Transformer expects 4 timesteps, so divide total observation size by 4
-            obs_per_timestep = input_shape // 4
+            # Token layout. Historically fixed at 4 tokens ([0,1,4,16]) with the
+            # encoder output read at index 1 (the delta_t=1 token). Both are now
+            # params['transformer'] knobs so a 6-horizon student can exist;
+            # absent = the old network exactly.
+            _tf = (params.get('transformer') or {})
+            obs_per_timestep, self._num_tokens, self._readout_token = token_layout(
+                input_shape, int(_tf.get('num_tokens', 4)), int(_tf.get('readout_token', 1)))
             ff_size = 512
             num_channels = 256
             num_heads = 4
@@ -101,7 +107,7 @@ class InterMimicBuilder(network_builder.A2CBuilder):
 
         def forward(self, obs_dict):
             obs = obs_dict['obs']
-            obs_view = obs.view(obs.shape[0], 4, -1)
+            obs_view = obs.view(obs.shape[0], self._num_tokens, -1)
             states = obs_dict.get('rnn_states', None)
 
             actor_outputs = self.eval_actor(obs_view)
@@ -114,7 +120,7 @@ class InterMimicBuilder(network_builder.A2CBuilder):
         def eval_actor(self, obs):
             a_out = self.PositionalEmbedding(self.MLPEmbedding(obs))
             a_out = a_out.permute(1, 0, 2).contiguous()
-            a_out = self.encoder(a_out)[1]
+            a_out = self.encoder(a_out)[self._readout_token]
                      
             if self.is_discrete:
                 logits = self.logits(a_out)

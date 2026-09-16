@@ -114,6 +114,8 @@ class InterMimic(Humanoid_SMPLX):
         'staticScene',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
         'teacherPolicyCFG', 'terminationHeight', 'useTransformerObs',
+        # g3 distillation student (env/tasks/intermimic_distill_g3.py)
+        'studentObsHorizons',
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
         # path (NOT training), so it's a legitimate runtime key, not a typo.
         'seed',
