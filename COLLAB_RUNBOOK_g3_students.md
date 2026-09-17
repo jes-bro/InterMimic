@@ -16,6 +16,19 @@ needs it for the transformer), and ~120 GB of disk.
 All commands from the repo root. Each step refuses loudly if something is
 missing -- read the error, don't work around it.
 
+**On an Ubuntu VM (GCP or otherwise), do this ONCE before the first launch.**
+Ubuntu's nightly `unattended-upgrade` killed both GCP students on 2026-09-17
+(a libc6 update restarts every service linked against it, including the
+user's `user@UID.service` -- which takes the tmux pane and the training with
+it; no traceback, no exit line, 17 h of idle billing before anyone noticed):
+
+    sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades   # no nightly upgrades during a run
+    sudo loginctl enable-linger $USER                                                          # user manager outlives ssh sessions
+    systemctl list-timers --no-pager | grep apt; loginctl show-user $USER | grep Linger        # expect: nothing, then Linger=yes
+
+Slurm jobs (simurgh/sakura) are not affected -- this is only for VMs where the
+run lives under your login session.
+
 ## OMOMO student (13 per-source teachers -> one student)
 
     sh scripts/gcp_stage.sh pull-assets            # 43+ body MJCFs
