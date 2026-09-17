@@ -13,7 +13,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 CFG = os.path.join(ROOT, "isaacgym", "src", "intermimic", "data", "cfg")
 RLG = os.path.join(CFG, "train", "rlg")
 PKG = os.path.join(ROOT, "isaacgym", "src", "intermimic")
-BASE = "omomo_xf_ret_nvadlr"
+BASES = ["omomo_xf_ret_nvadlr", "act_xf_ret_nvadlr"]      # OMOMO Arm A and EgoExo (activity) Arm A
 
 
 def _flat(node, prefix=""):
@@ -32,17 +32,19 @@ def _train(n):
     return _flat(yaml.safe_load(open(os.path.join(RLG, f"omomo_student_g3_{n}__f0.yaml"))))
 
 
+@pytest.mark.parametrize("BASE", BASES)
 @pytest.mark.parametrize("arm,twins", [("bodyctr", True), ("bodyonly", False)])
-def test_env_is_base_plus_arm_a_keys(arm, twins):
+def test_env_is_base_plus_arm_a_keys(BASE, arm, twins):
     b, a = _env(BASE), _env(f"{BASE}_{arm}")
     diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     assert diff == {"env.numObsRetarget", "env.studentBodyFeatures", "env.twinEnvs"}
     assert a["env.numObsRetarget"] == 9594 + 156 and a["env.studentBodyFeatures"] is True
     assert a["env.twinEnvs"] is twins
-    assert a["env.teacherPolicy"] == b["env.teacherPolicy"]          # same 13 teachers
+    assert a["env.teacherPolicy"] == b["env.teacherPolicy"]          # same teachers as the base student
 
 
-def test_bodyctr_train_cfg():
+@pytest.mark.parametrize("BASE", BASES)
+def test_bodyctr_train_cfg(BASE):
     b, a = _train(BASE), _train(f"{BASE}_bodyctr")
     diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     assert diff == {"params.config.full_experiment_name", "params.network.transformer.body_dim",
@@ -53,7 +55,8 @@ def test_bodyctr_train_cfg():
     assert a["params.config.full_experiment_name"] == f"smplx_student_g3_{BASE}_bodyctr__f0"
 
 
-def test_bodyonly_train_cfg():
+@pytest.mark.parametrize("BASE", BASES)
+def test_bodyonly_train_cfg(BASE):
     b, a = _train(BASE), _train(f"{BASE}_bodyonly")
     diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     assert diff == {"params.config.full_experiment_name", "params.network.transformer.body_dim"}
@@ -61,7 +64,8 @@ def test_bodyonly_train_cfg():
     assert "params.config.contrastive.coef" not in a                   # no twin term
 
 
-def test_body_dim_matches_env_and_token_math():
+@pytest.mark.parametrize("BASE", BASES)
+def test_body_dim_matches_env_and_token_math(BASE):
     for arm in ("bodyctr", "bodyonly"):
         e, t = _env(f"{BASE}_{arm}"), _train(f"{BASE}_{arm}")
         bd = t["params.network.transformer.body_dim"]
@@ -69,12 +73,15 @@ def test_body_dim_matches_env_and_token_math():
         assert (e["env.numObsRetarget"] - bd) % t["params.network.transformer.num_tokens"] == 0
 
 
+@pytest.mark.parametrize("BASE", BASES)
 @pytest.mark.parametrize("arm", ["bodyctr", "bodyonly"])
-def test_launcher(arm):
+def test_launcher(BASE, arm):
     s = open(os.path.join(ROOT, f"slurm_student_g3_{BASE}_{arm}__f0.sh")).read()
     assert f"CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_student_g3_{BASE}_{arm}__f0.yaml" in s
     assert f"CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_student_g3_{BASE}_{arm}__f0.yaml" in s
     assert f'--job-name="stu-g3_{BASE}_{arm}__f0"' in s and "--task InterMimicDistillG3" in s
+    if BASE.startswith("act"):
+        assert "objectPropsFile" in s and "--activities bball7 soccer15 cpr13" in s   # act guards kept
 
 
 def test_wiring_exists_behind_flags():
