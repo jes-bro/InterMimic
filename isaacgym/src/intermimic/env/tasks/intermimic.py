@@ -116,6 +116,8 @@ class InterMimic(Humanoid_SMPLX):
         'teacherPolicyCFG', 'terminationHeight', 'useTransformerObs',
         # g3 distillation student (env/tasks/intermimic_distill_g3.py)
         'studentObsHorizons',
+        # Arm A of the student: explicit body wire + contrastive twin envs
+        'studentBodyFeatures', 'twinEnvs',
         # per-object mass/restitution for a mixed-dataset env (utils/object_props.py)
         'objectPropsFile',
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test
@@ -1315,6 +1317,13 @@ class InterMimic(Humanoid_SMPLX):
         self._reset_default_env_ids = env_ids
         return
 
+    def _twin_sync(self, env_ids, motion_ids, motion_times, ref_idx):
+        """Hook for twin-env pairing (Arm A of the g3 student): a subclass may
+        rewrite the sampled (motion, start frame, PSI slot) of the second env of
+        each twin pair to match the first. The base task pairs nothing, so this
+        is the identity and every existing run is byte-identical."""
+        return motion_ids, motion_times, ref_idx
+
     def _to_body_block(self, clip_ids, env_ids):
         """Map per-env CLIP ids (in [0, n_clips)) into each env's BODY block for the
         retargeted (body, clip) motion set: data_id = _env_subject_idx*n_clips + clip.
@@ -1425,6 +1434,7 @@ class InterMimic(Humanoid_SMPLX):
 
         cdf = torch.cumsum(prob, dim=1)
         idx = torch.searchsorted(cdf, torch.rand((cdf.shape[0], 1)).to(cdf.device)).squeeze(1)
+        i, motion_times, idx = self._twin_sync(env_ids, i, motion_times, idx)
         self.ref_index[env_ids] = idx
         self.progress_buf[env_ids] = motion_times.clone()
         self.start_times[env_ids] = motion_times.clone()
@@ -1464,6 +1474,7 @@ class InterMimic(Humanoid_SMPLX):
 
         cdf = torch.cumsum(prob, dim=1)
         idx = torch.searchsorted(cdf, torch.rand((cdf.shape[0], 1)).to(cdf.device)).squeeze(1)
+        i, motion_times, idx = self._twin_sync(env_ids, i, motion_times, idx)
         self.ref_index[env_ids] = idx
         self.progress_buf[env_ids] = motion_times.clone()
         self.start_times[env_ids] = motion_times.clone()

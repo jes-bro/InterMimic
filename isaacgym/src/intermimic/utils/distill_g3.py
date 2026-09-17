@@ -124,13 +124,16 @@ def validate_horizons(h, name):
     return list(h)
 
 
-def student_obs_width(teacher_num_obs, teacher_horizons, student_horizons, uses_betas):
+def student_obs_width(teacher_num_obs, teacher_horizons, student_horizons, uses_betas, extra_dims=0):
     """numObsRetarget the student MUST declare, from the teacher's obs layout.
 
     The parent stacks one `width`-wide block per horizon (obs_buf = width x
-    len(obsHorizons)); the student stacks the same block over ITS horizons. With
-    betas the width arithmetic differs per policy type and no g3 arm uses them,
-    so that case is refused rather than guessed."""
+    len(obsHorizons)); the student stacks the same block over ITS horizons, plus
+    `extra_dims` appended once (Arm A's 156-d body-feature wire). With betas the
+    width arithmetic differs per policy type and no g3 arm uses them, so that
+    case is refused rather than guessed."""
+    if not isinstance(extra_dims, int) or isinstance(extra_dims, bool) or extra_dims < 0:
+        raise ValueError(f"[distill-g3] extra_dims must be a non-negative int, got {extra_dims!r}")
     if uses_betas:
         raise ValueError("[distill-g3] betas conditioning is not supported on the g3 "
                          "distill path (no g3 teacher uses it); remove betas_file")
@@ -140,23 +143,28 @@ def student_obs_width(teacher_num_obs, teacher_horizons, student_horizons, uses_
         raise ValueError(f"[distill-g3] numObs {teacher_num_obs} is not a multiple of "
                          f"len(obsHorizons)={len(th)}; the per-horizon width is undefined")
     width = teacher_num_obs // len(th)
-    return width * len(sh)
+    return width * len(sh) + extra_dims
 
 
-def token_layout(input_shape, num_tokens, readout_token):
+def token_layout(input_shape, num_tokens, readout_token, body_dim=0):
     """Transformer obs layout: (obs_per_token, num_tokens, readout_token).
 
     The builder historically hardcoded 4 tokens and read the encoder output at
     index 1 (the delta_t=1 token of [0,1,4,16]). Both are now parameters so a
     6-horizon student ([1,4,7,10,13,16], readout 0 = its delta_t=1 token) can
-    exist; defaults reproduce the old network exactly."""
+    exist; defaults reproduce the old network exactly. `body_dim` (Arm A) is a
+    trailing block of the obs that is NOT tokenized -- the body-feature wire --
+    so the tokens are cut from the first input_shape - body_dim dims."""
     if not isinstance(num_tokens, int) or isinstance(num_tokens, bool) or num_tokens < 1:
         raise ValueError(f"[transformer] num_tokens must be a positive int, got {num_tokens!r}")
     if not isinstance(readout_token, int) or isinstance(readout_token, bool) \
             or not (0 <= readout_token < num_tokens):
         raise ValueError(f"[transformer] readout_token {readout_token!r} out of range "
                          f"for num_tokens {num_tokens}")
-    if input_shape % num_tokens != 0:
-        raise ValueError(f"[transformer] obs size {input_shape} is not divisible by "
-                         f"num_tokens {num_tokens}")
-    return input_shape // num_tokens, num_tokens, readout_token
+    if not isinstance(body_dim, int) or isinstance(body_dim, bool) or body_dim < 0 or body_dim >= input_shape:
+        raise ValueError(f"[transformer] body_dim {body_dim!r} must be in [0, obs size {input_shape})")
+    tok = input_shape - body_dim
+    if tok % num_tokens != 0:
+        raise ValueError(f"[transformer] token block {tok} (obs {input_shape} - body {body_dim}) "
+                         f"is not divisible by num_tokens {num_tokens}")
+    return tok // num_tokens, num_tokens, readout_token

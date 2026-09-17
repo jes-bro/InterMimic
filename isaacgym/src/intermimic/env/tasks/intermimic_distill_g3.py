@@ -41,6 +41,7 @@ from rl_games.algos_torch import torch_ext
 from .intermimic import InterMimic
 from ...learning import (intermimic_models_teacher, intermimic_network_builder,
                          intermimic_transformer_network_builder)
+from ...utils.body_features import body_feature_matrix, twin_pairs, twin_partners
 from ...utils.distill_g3 import (build_source_lookup, load_teacher_manifest,
                                  student_obs_width, validate_horizons)
 from ...utils.path_utils import resolve_data_path, resolve_repo_path
@@ -60,16 +61,54 @@ class InterMimicDistillG3(InterMimic):
             if k not in env:
                 raise KeyError(f"[distill-g3] env cfg lacks required key '{k}'")
 
+        # ---- Arm A, part 1: the body wire (utils/body_features.py) ----
+        # Each env's body as its rig's 52 bone offsets (156 numbers), appended
+        # once to the student obs. Off by default = the plain student.
+        self._body_feat_dim = 0
+        self._env_body_feats = None
+        if bool(env.get('studentBodyFeatures', False)):
+            subj = list(env['subjectBodies'])
+            paths = [str(resolve_repo_path(f"intermimic/data/assets/smplx/smplx_omomo_{s}.xml")) for s in subj]
+            rows = body_feature_matrix(paths, expected_bodies=52)
+            feats = torch.tensor(rows, dtype=torch.float, device=self.device)          # (n_bodies, 156)
+            self._env_body_feats = feats[self._env_subject_idx.to(self.device)]        # (num_envs, 156)
+            self._body_feat_dim = feats.shape[1]
+            print(f"[distill-g3] body wire ON: {len(subj)} rigs -> {self._body_feat_dim}-d bone-offset "
+                  f"features per env (studentBodyFeatures)", flush=True)
+
         # ---- student observation layout, derived from the teacher's ----
         self._student_horizons = validate_horizons(env['studentObsHorizons'], 'studentObsHorizons')
         expected = student_obs_width(self.obs_buf.shape[1], self._obs_horizons,
-                                     self._student_horizons, bool(getattr(self, '_use_betas_obs', False)))
+                                     self._student_horizons, bool(getattr(self, '_use_betas_obs', False)),
+                                     extra_dims=self._body_feat_dim)
         if int(env['numObsRetarget']) != expected:
             raise ValueError(
                 f"[distill-g3] numObsRetarget {env['numObsRetarget']} != {expected} = "
                 f"{len(self._student_horizons)} student horizons x "
-                f"{self.obs_buf.shape[1] // len(self._obs_horizons)} per horizon "
+                f"{self.obs_buf.shape[1] // len(self._obs_horizons)} per horizon + "
+                f"{self._body_feat_dim} body-feature dims "
                 f"(teacher numObs {self.obs_buf.shape[1]} over obsHorizons {self._obs_horizons})")
+
+        # ---- Arm A, part 2: twin envs for the contrastive term ----
+        # Pairs (e, e + n_objects): same object bucket, different body. The second
+        # env of a pair copies the first's clip + start frame at every reset
+        # (_twin_sync), so a pair is the SAME motion on TWO bodies until one of
+        # them terminates; twin_valid tracks that per step. Off by default.
+        self._twin_envs = bool(env.get('twinEnvs', False))
+        self.twin_a = self.twin_b = None
+        self.twin_valid = None
+        if self._twin_envs:
+            partner = twin_partners(self.num_envs, len(self.object_name), len(env['subjectBodies']))
+            pairs = twin_pairs(partner)
+            if not pairs:
+                raise ValueError("[distill-g3] twinEnvs: no pairs possible (num_envs too small?)")
+            self.twin_a = torch.tensor([a for a, _ in pairs], device=self.device, dtype=torch.long)
+            self.twin_b = torch.tensor([b for _, b in pairs], device=self.device, dtype=torch.long)
+            self._twin_partner = torch.tensor(partner, device=self.device, dtype=torch.long)
+            self.twin_valid = torch.zeros(len(pairs), dtype=torch.bool, device=self.device)
+            print(f"[distill-g3] twin envs ON: {len(pairs)} pairs over {self.num_envs} envs "
+                  f"({2 * len(pairs)} paired, {self.num_envs - 2 * len(pairs)} unpaired; "
+                  f"partner = e + {len(self.object_name)} objects)", flush=True)
         self.obs_buf_retarget = torch.zeros((self.num_envs, expected), device=self.device, dtype=torch.float)
         self.action_buf = torch.zeros((self.num_envs, 153), device=self.device, dtype=torch.float)
         self.mu_buf = torch.zeros((self.num_envs, 153), device=self.device, dtype=torch.float)
@@ -145,17 +184,59 @@ class InterMimicDistillG3(InterMimic):
         self.model_indices = idx
         self.sample_indices = torch.arange(self.num_envs, device=self.device)
 
+    # ------------------------------------------------------------------ twins
+    def _twin_sync(self, env_ids, motion_ids, motion_times, ref_idx):
+        """Called by the parent's reset paths with the freshly sampled (motion,
+        start frame, PSI slot) for env_ids. For every twin pair with BOTH envs in
+        this reset batch, the second env takes the first's CLIP (mapped into its
+        own body block) and start frame, and re-samples its PSI slot for that
+        motion (the slot it drew was for a different motion; copying the first's
+        slot could point at a slot never written for this body's motion)."""
+        if not self._twin_envs:
+            return motion_ids, motion_times, ref_idx
+        pos = torch.full((self.num_envs,), -1, device=self.device, dtype=torch.long)
+        pos[env_ids] = torch.arange(env_ids.shape[0], device=self.device)
+        pa, pb = pos[self.twin_a], pos[self.twin_b]
+        both = (pa >= 0) & (pb >= 0)
+        if not bool(both.any()):
+            return motion_ids, motion_times, ref_idx
+        pa, pb = pa[both], pb[both]
+        clip = motion_ids[pa] % self._n_clips
+        motion_ids[pb] = clip + self._env_subject_idx[self.twin_b[both]] * self._n_clips
+        motion_times[pb] = motion_times[pa]
+        rr = self.ref_reward[motion_ids[pb], :, motion_times[pb]]
+        cdf = torch.cumsum(rr / rr.sum(1, keepdim=True), dim=1)
+        ref_idx[pb] = torch.searchsorted(cdf, torch.rand((cdf.shape[0], 1), device=cdf.device)).squeeze(1)
+        return motion_ids, motion_times, ref_idx
+
+    def _update_twin_valid(self):
+        """A pair is a positive only while both envs are on the same clip at the
+        same frame (a termination on either side desyncs them until both reset)."""
+        if not self._twin_envs:
+            return
+        same_clip = (self.data_id[self.twin_a] % self._n_clips) == (self.data_id[self.twin_b] % self._n_clips)
+        same_t = self.progress_buf[self.twin_a] == self.progress_buf[self.twin_b]
+        self.twin_valid = same_clip & same_t
+
     # ------------------------------------------------------------------ student obs
     def _compute_observations(self, env_ids=None):
         # Parent fills obs_buf (teacher obs) and _curr_ref_obs from the per-body
-        # reference; the student stacks the SAME reference over its own horizons.
+        # reference; the student stacks the SAME reference over its own horizons,
+        # plus (Arm A) its body-feature wire.
         super()._compute_observations(env_ids)
         if not self._g3_ready:
             return
         if env_ids is None:
-            self.obs_buf_retarget[:] = self._stack_obs_horizons(None, self._student_horizons, None)
+            stacked = self._stack_obs_horizons(None, self._student_horizons, None)
+            if self._env_body_feats is not None:
+                stacked = torch.cat([stacked, self._env_body_feats], dim=-1)
+            self.obs_buf_retarget[:] = stacked
         else:
-            self.obs_buf_retarget[env_ids] = self._stack_obs_horizons(env_ids, self._student_horizons, None)
+            stacked = self._stack_obs_horizons(env_ids, self._student_horizons, None)
+            if self._env_body_feats is not None:
+                stacked = torch.cat([stacked, self._env_body_feats[env_ids]], dim=-1)
+            self.obs_buf_retarget[env_ids] = stacked
+        self._update_twin_valid()
 
     # ------------------------------------------------------------------ teacher query
     def single_model_forward(self, params, obs, mean, var):

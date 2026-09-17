@@ -53,6 +53,35 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, : x.shape[1], : x.shape[2]]
         return x
 
+class AdaLNEncoderLayer(nn.Module):
+    """Post-norm transformer encoder layer (self-attention + GELU feed-forward,
+    no dropout -- the same computation as the stock TransformerEncoderLayer used
+    here) whose two LayerNorms are ADAPTIVE: their scale/shift come from a
+    conditioning vector (the body embedding) instead of fixed parameters, as in
+    DiT's adaLN. The conditioning projection is zero-initialized, so at init the
+    layer is x -> LN(x + attn(x)) -> LN(. + ff(.)) with unit scale / zero shift,
+    and the body's influence grows in during training."""
+
+    def __init__(self, d_model, nhead, dim_feedforward, cond_dim):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0, batch_first=False)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.norm1 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.norm2 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.ada = nn.Linear(cond_dim, 4 * d_model)
+        nn.init.zeros_(self.ada.weight)
+        nn.init.zeros_(self.ada.bias)
+
+    def forward(self, x, cond):
+        # x: (T, B, C) tokens-first like the stock encoder; cond: (B, cond_dim)
+        g1, b1, g2, b2 = self.ada(cond).unsqueeze(0).chunk(4, dim=-1)    # each (1, B, C)
+        h = x + self.self_attn(x, x, x, need_weights=False)[0]
+        h = self.norm1(h) * (1 + g1) + b1
+        h2 = h + self.linear2(torch.nn.functional.gelu(self.linear1(h)))
+        return self.norm2(h2) * (1 + g2) + b2
+
+
 class InterMimicBuilder(network_builder.A2CBuilder):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -74,43 +103,90 @@ class InterMimicBuilder(network_builder.A2CBuilder):
             # params['transformer'] knobs so a 6-horizon student can exist;
             # absent = the old network exactly.
             _tf = (params.get('transformer') or {})
+            # Arm A knobs (utils/body_features.py): body_dim > 0 = the trailing
+            # body-feature wire (bone offsets) in the obs, consumed by adaLN in
+            # every encoder layer and by the action head directly; contrastive =
+            # a projection head on the trunk for the twin-env InfoNCE term.
+            self._body_dim = int(_tf.get('body_dim', 0))
+            self._contrastive = bool(_tf.get('contrastive', False))
             obs_per_timestep, self._num_tokens, self._readout_token = token_layout(
-                input_shape, int(_tf.get('num_tokens', 4)), int(_tf.get('readout_token', 1)))
+                input_shape, int(_tf.get('num_tokens', 4)), int(_tf.get('readout_token', 1)), self._body_dim)
             ff_size = 512
             num_channels = 256
             num_heads = 4
             self.MLPEmbedding = nn.Linear(obs_per_timestep, num_channels)
             self.PositionalEmbedding = PositionalEncoding(d_model=num_channels)
-            from torch.nn import TransformerEncoderLayer
-            seqTransEncoderLayer = TransformerEncoderLayer(d_model=num_channels,
-                                                                nhead=num_heads,
-                                                                dim_feedforward=ff_size,
-                                                                dropout=0,
-                                                                activation='gelu',
-                                                                batch_first=False)
-            self.encoder = nn.TransformerEncoder(seqTransEncoderLayer, num_layers=3)
+            body_emb_dim = 0
+            if self._body_dim > 0:
+                # Body wire: bone offsets -> 64-d embedding -> (a) adaLN scale/shift
+                # in every layer, (b) concatenated into the action head. The
+                # adaLN layers start as the identity (zero-init), so the network
+                # begins as the plain encoder and the body modulation grows in.
+                body_emb_dim = 64
+                self.BodyEmbedding = nn.Sequential(nn.Linear(self._body_dim, body_emb_dim), nn.SiLU(),
+                                                   nn.Linear(body_emb_dim, body_emb_dim), nn.SiLU())
+                self.encoder_layers = nn.ModuleList([
+                    AdaLNEncoderLayer(num_channels, num_heads, ff_size, body_emb_dim) for _ in range(3)])
+                self.encoder = None
+            else:
+                from torch.nn import TransformerEncoderLayer
+                seqTransEncoderLayer = TransformerEncoderLayer(d_model=num_channels,
+                                                                    nhead=num_heads,
+                                                                    dim_feedforward=ff_size,
+                                                                    dropout=0,
+                                                                    activation='gelu',
+                                                                    batch_first=False)
+                self.encoder = nn.TransformerEncoder(seqTransEncoderLayer, num_layers=3)
+                self.encoder = torch.compile(self.encoder)
+            self._body_emb_dim = body_emb_dim
+            if self._contrastive:
+                self.Projection = nn.Sequential(nn.Linear(num_channels, num_channels), nn.SiLU(),
+                                                nn.Linear(num_channels, int(_tf.get('proj_dim', 128))))
             self.MLPEmbedding = torch.compile(self.MLPEmbedding)
             self.PositionalEmbedding = torch.compile(self.PositionalEmbedding)
-            self.encoder = torch.compile(self.encoder)
 
             # The transformer actor outputs num_channels (256) from the encoder, NOT
             # the actor-MLP's last unit -- so the parent A2CBuilder's mu (built at the
             # MLP width, 512) shape-mismatches it: (B,256) x (512,153). Rebuild the
             # action head(s) to take 256. fixed_sigma keeps self.sigma as a Parameter.
             actions_num = kwargs.get('actions_num')
-            self.mu = nn.Linear(num_channels, actions_num)
+            self.mu = nn.Linear(num_channels + body_emb_dim, actions_num)   # + the body bypass (Arm A)
             self.init_factory.create(**self.space_config['mu_init'])(self.mu.weight)
             if self.space_config.get('learn_sigma'):
                 self.sigma = nn.Linear(num_channels, actions_num)
                 self.init_factory.create(**self.space_config['sigma_init'])(self.sigma.weight)
             return
 
+        def _split(self, obs):
+            """(tokens [B, T, D], body [B, body_dim] or None) from the flat obs."""
+            if self._body_dim > 0:
+                tok, body = obs[:, :-self._body_dim], obs[:, -self._body_dim:]
+                return tok.reshape(tok.shape[0], self._num_tokens, -1), body
+            return obs.view(obs.shape[0], self._num_tokens, -1), None
+
+        def trunk(self, obs):
+            """The 256-d readout embedding for a flat (already normalized) obs --
+            the representation the contrastive term shapes. Returns (z, body_emb)."""
+            tokens, body = self._split(obs)
+            body_emb = self.BodyEmbedding(body) if body is not None else None
+            a_out = self.PositionalEmbedding(self.MLPEmbedding(tokens))
+            a_out = a_out.permute(1, 0, 2).contiguous()          # (T, B, C)
+            if self.encoder is not None:
+                a_out = self.encoder(a_out)
+            else:
+                for layer in self.encoder_layers:
+                    a_out = layer(a_out, body_emb)
+            return a_out[self._readout_token], body_emb
+
+        def project(self, z):
+            """Contrastive projection of trunk outputs (only built with transformer.contrastive)."""
+            return self.Projection(z)
+
         def forward(self, obs_dict):
             obs = obs_dict['obs']
-            obs_view = obs.view(obs.shape[0], self._num_tokens, -1)
             states = obs_dict.get('rnn_states', None)
 
-            actor_outputs = self.eval_actor(obs_view)
+            actor_outputs = self.eval_actor(obs)
             value = self.eval_critic(obs)
 
             output = actor_outputs + (value, states)
@@ -118,10 +194,10 @@ class InterMimicBuilder(network_builder.A2CBuilder):
             return output
 
         def eval_actor(self, obs):
-            a_out = self.PositionalEmbedding(self.MLPEmbedding(obs))
-            a_out = a_out.permute(1, 0, 2).contiguous()
-            a_out = self.encoder(a_out)[self._readout_token]
-                     
+            a_out, body_emb = self.trunk(obs)
+            if body_emb is not None:
+                a_out = torch.cat([a_out, body_emb], dim=-1)     # body bypass into the head
+
             if self.is_discrete:
                 logits = self.logits(a_out)
                 return logits

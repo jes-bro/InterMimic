@@ -1,0 +1,90 @@
+# STUDENT train cfg, OMOMO, XF / RET / NVADLR + BODYCTR (DAgger via intermimic.run_distill).
+# Network = intermimic_transformer with SIX tokens (transformer.num_tokens 6:
+# the student obs is 6 horizons x 1599 = 9594, see the env cfg) and the encoder
+# read out at token 0 = the delta_t=1 token, the same one the 4-token net read at
+# index 1 of [0,1,4,16]. Critic MLP 1024/1024/512 as the g2 XF arms
+# (omomo_teacher_g2_xf_ret_nvadlr__f0.yaml). Optimizer = NVADLR: normalize_value
+# true + adaptive LR at exact-KL threshold 0.06 (that cfg's two knobs, same
+# rationale). Batch geometry = the codebase's student recipe (16 / 8192 / 6,
+# expert_loss_coef 1), as the MLP twin. save_intermediate on.
+params:
+  algo:
+    name: intermimic
+  config:
+    bounds_loss_coef: 10
+    clip_value: false
+    critic_coef: 5
+    e_clip: 0.2
+    enable_eps_greedy: false
+    entropy_coef: 0.0
+    env_name: rlgpu
+    expert_loss_coef: 1
+    contrastive:            # Arm A twin term (agent_distill._contrastive_loss)
+      coef: 0.1
+      temperature: 0.1
+    full_experiment_name: smplx_student_g3_omomo_xf_ret_nvadlr_bodyctr__f0
+    gamma: 0.99
+    grad_norm: 1.0
+    horizon_length: 16
+    # kl_threshold on the EXACT-KL scale (learning/common_agent.py exact_policy_kl,
+    # used by the distill agent too): ~0.06 is the healthy-epoch KL at LR 2e-5 over
+    # 153 action dims, so it holds LR steady and slams the blowup epochs.
+    kl_threshold: 0.06
+    learning_rate: 2e-5
+    lr_schedule: adaptive
+    max_epochs: 100000
+    mini_epochs: 6
+    minibatch_size: 8192
+    mixed_precision: false
+    multi_gpu: false
+    name: mimic
+    normalize_advantage: true
+    normalize_input: true
+    normalize_value: true
+    ppo: true
+    print_stats: true
+    resume_from: None
+    reward_shaper:
+      scale_value: 1
+    save_best_after: 500
+    save_frequency: 500
+    save_intermediate: true
+    score_to_win: 20000
+    seq_len: 4
+    tau: 0.95
+    truncate_grads: false
+  load_checkpoint: false
+  model:
+    name: intermimic
+  network:
+    mlp:
+      activation: relu
+      d2rl: false
+      initializer:
+        name: default
+      regularizer:
+        name: None
+      units:
+      - 1024
+      - 1024
+      - 512
+    name: intermimic_transformer
+    separate: true
+    space:
+      continuous:
+        fixed_sigma: true
+        learn_sigma: false
+        mu_activation: None
+        mu_init:
+          name: default
+        sigma_activation: None
+        sigma_init:
+          name: const_initializer
+          val: -2.9
+    transformer:
+      num_tokens: 6
+      readout_token: 0
+      body_dim: 156          # Arm A body wire (studentBodyFeatures)
+      contrastive: true      # projection head for the twin InfoNCE term
+      proj_dim: 128
+  seed: -1

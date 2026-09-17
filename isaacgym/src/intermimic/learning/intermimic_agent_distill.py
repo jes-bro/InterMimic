@@ -48,7 +48,40 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         self.ev_ma            = 0.0   # running avg explained‑variance
         self.critic_win_streak = 0    # consecutive windows EV ≥ threshold
         self.actor_update_num = 0
+        # Arm A: contrastive twin-env term (see _contrastive_loss). config.contrastive:
+        #   {coef: weight in the total loss, temperature: InfoNCE temperature}
+        # Absent / coef 0 = off, and nothing below runs.
+        _cc = config.get('contrastive') or {}
+        self.contrastive_coef = float(_cc.get('coef', 0.0))
+        self.contrastive_tau = float(_cc.get('temperature', 0.1))
+        self._twin_obs = None
+        self._twin_valid = None
+        if self.contrastive_coef > 0:
+            print(f"[distill] contrastive twin term ON: coef {self.contrastive_coef}, "
+                  f"temperature {self.contrastive_tau}", flush=True)
         return
+
+    def _contrastive_loss(self):
+        """InfoNCE between twin envs on one random rollout step: the two envs of a
+        pair (same clip, same frame, different bodies) are the positive; every
+        other pair's envs are negatives. Pulls the trunk toward body-invariant,
+        motion-preserving. Returns a scalar (0 with no valid pairs this step)."""
+        T = self._twin_obs.shape[0]
+        t = int(torch.randint(T, (1,)).item())
+        valid = self._twin_valid[t] > 0.5
+        n = int(valid.sum().item())
+        if n < 2:
+            return torch.zeros((), device=self.ppo_device)
+        a, b = self._twin_a[valid], self._twin_b[valid]
+        obs = self._preproc_obs(torch.cat([self._twin_obs[t, a], self._twin_obs[t, b]], dim=0))
+        net = self.model.a2c_network
+        z, _ = net.trunk(obs)
+        z = torch.nn.functional.normalize(net.project(z), dim=-1)
+        za, zb = z[:n], z[n:]
+        logits = za @ zb.t() / self.contrastive_tau
+        labels = torch.arange(n, device=self.ppo_device)
+        ce = torch.nn.functional.cross_entropy
+        return 0.5 * (ce(logits, labels) + ce(logits.t(), labels))
 
 
     def init_tensors(self):
@@ -61,6 +94,16 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         # Defaults to ones so non-cross-pair runs are unaffected.
         self.experience_buffer.tensor_dict['valid_mask'] = torch.ones(batch_shape, dtype=torch.float32, device=self.ppo_device)
         self.tensor_list += ['amp_obs', 'rand_action_mask', 'expert', 'expert_mask', 'valid_mask']
+        if self.contrastive_coef > 0:
+            task = self.vec_env.env.task
+            if getattr(task, 'twin_a', None) is None:
+                raise ValueError("[distill] config.contrastive.coef > 0 but the env has no twin pairs "
+                                 "(set twinEnvs: true in the env cfg)")
+            self._twin_a = task.twin_a.to(self.ppo_device)
+            self._twin_b = task.twin_b.to(self.ppo_device)
+            # per-step validity of each pair, kept beside the rollout (not part of the dataset)
+            self.experience_buffer.tensor_dict['twin_valid'] = torch.zeros(
+                (self.horizon_length, self._twin_a.shape[0]), dtype=torch.float32, device=self.ppo_device)
         return
 
 
@@ -101,6 +144,8 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             else:
                 valid_now = torch.ones(self.num_actors, device=self.ppo_device)
             self.experience_buffer.update_data('valid_mask', n, valid_now)
+            if self.contrastive_coef > 0:
+                self.experience_buffer.tensor_dict['twin_valid'][n] = task.twin_valid.float().to(self.ppo_device)
 
             # One-time diagnostic so we can SEE whether the mask was found
             if n == 0 and self.epoch_num < 2:
@@ -181,6 +226,15 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
 
         mb_advs = self.discount_values(mb_fdones, mb_values, mb_rewards, mb_next_values)
         mb_returns = mb_advs + mb_values
+
+        if self.contrastive_coef > 0:
+            # Keep the un-flattened rollout for the twin pass (obs are [T, N, D];
+            # the dataset below shuffles samples and would split every pair).
+            self._twin_obs = self.experience_buffer.tensor_dict['obses'].clone()
+            self._twin_valid = self.experience_buffer.tensor_dict['twin_valid'].clone()
+            if self.epoch_num % 200 == 1:
+                print(f"[distill] twin pairs valid this rollout: "
+                      f"{100 * self._twin_valid.mean().item():.1f}%", flush=True)
 
         batch_dict = self.experience_buffer.get_transformed_list(a2c_common.swap_and_flatten01, self.tensor_list)
         batch_dict['returns'] = a2c_common.swap_and_flatten01(mb_returns)
@@ -361,7 +415,13 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
                 e_loss_raw = e_info['expert_loss']
                 e_loss = (_per_env(e_loss_raw) * valid_mask).sum() / valid_count
                 loss = self.expert_loss_coef * e_loss
-            
+
+            # Arm A: contrastive twin term, added on top in every phase.
+            ctr_loss = torch.zeros((), device=self.ppo_device)
+            if self.contrastive_coef > 0:
+                ctr_loss = self._contrastive_loss()
+                loss = loss + self.contrastive_coef * ctr_loss
+
             a_info['actor_loss'] = a_loss
             a_info['actor_clip_frac'] = a_clip_frac
             c_info['critic_loss'] = c_loss
@@ -387,9 +447,10 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         self.train_result = {
             'entropy': entropy,
             'kl': kl_dist,
-            'last_lr': self.last_lr, 
-            'lr_mul': lr_mul, 
-            'b_loss': b_loss
+            'last_lr': self.last_lr,
+            'lr_mul': lr_mul,
+            'b_loss': b_loss,
+            'ctr_loss': ctr_loss.detach(),
         }
         self.train_result.update(a_info)
         self.train_result.update(c_info)
@@ -399,5 +460,7 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
     def _log_train_info(self, train_info, frame):
         super()._log_train_info(train_info, frame)
         self.writer.add_scalar('losses/e_loss', torch_ext.mean_list(train_info['expert_loss']).item(), frame)
+        if self.contrastive_coef > 0:
+            self.writer.add_scalar('losses/ctr_loss', torch_ext.mean_list(train_info['ctr_loss']).item(), frame)
 
         return

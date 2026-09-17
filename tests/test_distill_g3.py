@@ -124,6 +124,24 @@ def test_token_layout_six_tokens():
     assert dg.token_layout(9594, 6, 0) == (1599, 6, 0)
 
 
+def test_token_layout_with_body_wire():
+    """Arm A: a trailing body block is not tokenized. 9594 tokens + 156 body = 9750."""
+    assert dg.token_layout(9750, 6, 0, body_dim=156) == (1599, 6, 0)
+    # Forgetting body_dim is NOT caught here (9750 happens to divide by 6 -> 1625-wide
+    # tokens); the task's numObsRetarget check is the guard for that. Pin the fact.
+    assert dg.token_layout(9750, 6, 0) == (1625, 6, 0)
+    with pytest.raises(ValueError, match="body_dim"):
+        dg.token_layout(9750, 6, 0, body_dim=9750)
+    with pytest.raises(ValueError, match="not divisible"):
+        dg.token_layout(9751, 6, 0, body_dim=156)
+
+
+def test_student_width_with_extra_dims():
+    assert dg.student_obs_width(9594, G3_H, G3_H, False, extra_dims=156) == 9750
+    with pytest.raises(ValueError, match="extra_dims"):
+        dg.student_obs_width(9594, G3_H, G3_H, False, extra_dims=-1)
+
+
 def test_token_layout_refusals():
     with pytest.raises(ValueError, match="not divisible"):
         dg.token_layout(9594, 4, 1)
@@ -143,8 +161,13 @@ def test_builder_no_longer_hardcodes_four_tokens():
     assert "view(obs.shape[0], 4, -1)" not in s
     assert "self.encoder(a_out)[1]" not in s
     assert "view(obs.shape[0], self._num_tokens, -1)" in s
-    assert "self.encoder(a_out)[self._readout_token]" in s
+    assert "a_out[self._readout_token]" in s
     assert "token_layout(" in s
+    # Arm A wiring: body wire consumed by adaLN layers + the head bypass, and a
+    # projection head for the contrastive term; all gated on transformer.* knobs.
+    assert "class AdaLNEncoderLayer" in s and "self._body_dim" in s
+    assert "torch.cat([a_out, body_emb], dim=-1)" in s
+    assert "def trunk(self, obs)" in s and "def project(self, z)" in s
 
 
 def test_task_is_registered_and_whitelisted():
