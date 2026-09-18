@@ -134,9 +134,51 @@ def load(path):
 # ever being resolved for a gen-2/gen-3 arm by accident.
 V1_PREFIX = "omomo_eval_v1_"
 
+# SCORING VARIANTS. An eval id is normally just an arm name and its config must
+# mirror that arm. `<arm>+<variant>` names a second scoring of the SAME
+# checkpoint under a deliberately different rule -- the one case so far is
+# `g3_bball7_geoall_nogate__f0+gatedscore`: the nogate policy scored under the
+# base's termination rule, because mirroring `freeFlightGate.resets: false`
+# into the eval makes the referee, not the policy, end every free-flight
+# episode. A variant config carries a top-level `scoringVariant:` block naming
+# the arm, the variant, and EXACTLY which keys differ (and to what); the check
+# allows those keys and nothing else, and refuses an override that does not
+# actually differ from the arm (a no-op variant is a mislabelled duplicate).
+VARIANT_SEP = "+"
+
+
+def split_variant(spec):
+    """'g3_x__f0+gatedscore' -> ('g3_x__f0', 'gatedscore'); 'g3_x__f0' -> ('g3_x__f0', None)."""
+    if VARIANT_SEP in spec:
+        arm, variant = spec.split(VARIANT_SEP, 1)
+        if not arm or not variant:
+            raise SystemExit(f"ERROR: malformed eval id {spec!r} (want <arm>{VARIANT_SEP}<variant>)")
+        return arm, variant
+    return spec, None
+
+
+def variant_block(cfg, path):
+    """The validated `scoringVariant:` block of a variant cfg, or None for a plain one."""
+    sv = cfg.get("scoringVariant")
+    if sv is None:
+        return None
+    name = os.path.basename(path)
+    for key in ("name", "arm", "overrides"):
+        if key not in sv:
+            raise SystemExit(f"ERROR: {name}: scoringVariant lacks `{key}:`")
+    if not isinstance(sv["overrides"], dict) or not sv["overrides"]:
+        raise SystemExit(f"ERROR: {name}: scoringVariant.overrides must be a non-empty "
+                         f"mapping of dotted env keys to the value this eval uses")
+    return sv
+
 
 def eval_cfgs():
-    """-> {path: [arms it serves]} for every per-arm eval config (v1 excluded)."""
+    """-> {path: [eval ids it serves]} for every per-arm eval config (v1 excluded).
+
+    An id is an arm name, or `<arm>+<variant>` for a scoring variant. A variant
+    cfg may serve only variant ids of its own arm, and a plain cfg no variant
+    ids -- so a variant can never be resolved for the arm by accident.
+    """
     out = {}
     for p in sorted(glob.glob(os.path.join(CFG, "omomo_eval_*.yaml"))):
         if os.path.basename(p).startswith(V1_PREFIX):
@@ -148,6 +190,15 @@ def eval_cfgs():
                 f"ERROR: {os.path.basename(p)} has no top-level `evalFor:` list.\n"
                 f"       An eval config must name the arms it serves, or nothing "
                 f"can resolve to it and nothing can check it.")
+        sv = variant_block(cfg, p)
+        for spec in arms:
+            arm, variant = split_variant(spec)
+            if sv is None and variant is not None:
+                raise SystemExit(f"ERROR: {os.path.basename(p)} serves variant id {spec!r} "
+                                 f"but has no scoringVariant block")
+            if sv is not None and (variant != sv["name"] or arm != sv["arm"]):
+                raise SystemExit(f"ERROR: {os.path.basename(p)} is scoringVariant "
+                                 f"{sv['arm']}{VARIANT_SEP}{sv['name']} but serves {spec!r}")
         out[p] = list(arms)
     return out
 
@@ -171,7 +222,9 @@ def resolve(arm):
     return hits[0]
 
 
-def train_cfg_for(arm):
+def train_cfg_for(spec):
+    """Train env cfg of the arm behind an eval id (variant suffix ignored)."""
+    arm, _ = split_variant(spec)
     p = os.path.join(CFG, f"omomo_teacher_{arm}.yaml")
     if not os.path.exists(p):
         raise SystemExit(f"ERROR: no train env cfg for arm '{arm}': {p}")
@@ -265,6 +318,7 @@ def check_budget(log_dir=None):
     # 2. vs each served arm's launcher
     for path, arms in eval_cfgs().items():
         for arm in arms:
+            arm, _ = split_variant(arm)
             got, note = launcher_num_envs(arm)
             if got is None:
                 problems.append(f"  {arm}: cannot establish the training budget "
@@ -283,6 +337,7 @@ def check_budget(log_dir=None):
     else:
         for path, arms in eval_cfgs().items():
             for arm in arms:
+                arm, _ = split_variant(arm)
                 hits = log_num_envs(arm, log_dir)
                 if not hits:
                     problems.append(f"  {arm}: no teacher-{arm}-*.out under "
@@ -296,22 +351,48 @@ def check_budget(log_dir=None):
     return problems
 
 
-def check(eval_path, train_path):
-    """-> list of complaint strings; empty means the eval config mirrors the arm."""
+def check(eval_path, train_path, spec=None):
+    """-> list of complaint strings; empty means the eval config mirrors the arm.
+
+    `spec` is the eval id being checked. For a plain arm id the config may differ
+    from the arm only in EVAL_OWNED keys. For `<arm>+<variant>` the config's
+    scoringVariant.overrides are ALSO allowed -- and each must be present in the
+    eval at the declared value and differ from the arm, or the variant is a lie.
+    """
     ev, tr = load(eval_path), load(train_path)
     a, b = flatten(ev.get("env")), flatten(tr.get("env"))
     a.update(flatten({"sim": ev.get("sim")}))
     b.update(flatten({"sim": tr.get("sim")}))
     ABSENT = object()
+    fmt = lambda v: "<absent>" if v is ABSENT else repr(v)
 
     problems = []
+    _, variant = split_variant(spec) if spec else (None, None)
+    sv = variant_block(ev, eval_path)
+    overrides = {}
+    if variant is None and sv is not None:
+        problems.append(f"  config carries a scoringVariant block ({sv['name']}) but is "
+                        f"being checked as the plain eval of its arm")
+    elif variant is not None and sv is None:
+        problems.append(f"  eval id names variant '{variant}' but the config has no "
+                        f"scoringVariant block declaring what differs")
+    elif variant is not None:
+        overrides = dict(sv["overrides"])
+        for key, want in overrides.items():
+            va, vb = a.get(key, ABSENT), b.get(key, ABSENT)
+            if va != want:
+                problems.append(f"  override {key}: declared {want!r} but the eval "
+                                f"has {fmt(va)}")
+            if vb == want:
+                problems.append(f"  override {key}: arm already has {want!r} -- this "
+                                f"variant changes nothing and must not exist")
+
     for key in sorted(set(a) | set(b)):
         leaf = key.split(".")[-1]
-        if leaf in EVAL_OWNED:
+        if leaf in EVAL_OWNED or key in overrides:
             continue
         va, vb = a.get(key, ABSENT), b.get(key, ABSENT)
         if va != vb:
-            fmt = lambda v: "<absent>" if v is ABSENT else repr(v)
             problems.append(f"  {key}: eval={fmt(va)}  arm={fmt(vb)}")
 
     # numObs is load-bearing and fails in two different ways -- disagreeing with
@@ -331,7 +412,8 @@ def check(eval_path, train_path):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--arm", help="print the eval cfg path serving this arm")
+    g.add_argument("--arm", help="print the eval cfg path serving this eval id "
+                                 "(an arm, or <arm>+<variant> for a scoring variant)")
     g.add_argument("--check-all", action="store_true",
                    help="verify every eval cfg against every arm it serves")
     g.add_argument("--default-source", metavar="ARM",
@@ -361,7 +443,7 @@ def main(argv=None):
     if args.arm:
         path = resolve(args.arm)
         if not args.no_check:
-            problems = check(path, train_cfg_for(args.arm))
+            problems = check(path, train_cfg_for(args.arm), args.arm)
             if problems:
                 print(f"ERROR: {os.path.basename(path)} no longer mirrors "
                       f"omomo_teacher_{args.arm}.yaml:", file=sys.stderr)
@@ -375,7 +457,7 @@ def main(argv=None):
     rc = 0
     for path, arms in eval_cfgs().items():
         for arm in arms:
-            problems = check(path, train_cfg_for(arm))
+            problems = check(path, train_cfg_for(arm), arm)
             tag = f"{os.path.basename(path)} vs {arm}"
             if problems:
                 rc = 2

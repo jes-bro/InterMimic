@@ -29,8 +29,18 @@ set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 CFG=isaacgym/src/intermimic/data/cfg
 
-RUN="${1:?usage: sh scripts/eval_one.sh <run> [checkpoint]   e.g. src2_xf_aug}"
+RUN="${1:?usage: sh scripts/eval_one.sh <run>[+variant] [checkpoint]   e.g. src2_xf_aug}"
 CKPT_ARG="${2:-}"
+
+# A SCORING VARIANT is `<run>+<variant>`: the same checkpoint scored under a
+# deliberately different rule, declared in its own eval cfg's scoringVariant
+# block (see check_eval_cfg.py). The variant suffix selects the eval cfg and
+# names the CSV; everything about the RUN -- train cfg, checkpoint dir, bodies,
+# sources -- comes from the arm in front of the '+'.
+VARIANT=""
+case "$RUN" in
+  *+*) VARIANT="${RUN#*+}"; RUN="${RUN%%+*}" ;;
+esac
 
 # Resolve run -> config paths. The config *name* (src9) and the checkpoint *dir*
 # (smplx_teacher_src9_neutral) don't always match, so DON'T guess the dir from the
@@ -130,7 +140,7 @@ PY
 # re-proves that the config still mirrors the arm on every key outside the small
 # eval-owned set. An arm with no eval config is a hard error here: there is no
 # generic template left to fall back to, which is the point.
-ENV_YAML=$(python3 scripts/check_eval_cfg.py --arm "$texp") || exit 2
+ENV_YAML=$(python3 scripts/check_eval_cfg.py --arm "${texp}${VARIANT:++$VARIANT}") || exit 2
 
 SOURCES="${SOURCES:-$SRC_DEFAULT}"
 # Held-out default is FOLD-AWARE (same __fN filename rule as summarize_evals.py):
@@ -160,7 +170,10 @@ if [ "$ckexp" != "$exp" ] && [ -n "$ckexp" ]; then
 else
   exp_out="$exp"
 fi
-OUT="${OUT:-eval_results/${exp_out}__${id}__indist+heldout+syn.csv}"
+# A variant's CSV carries its name, so it can never overwrite or be mistaken for
+# the arm's mirrored eval (the readers label rows by checkpoint path, which is
+# the SAME for both -- the filename is the only thing telling them apart).
+OUT="${OUT:-eval_results/${exp_out}__${id}__indist+heldout+syn${VARIANT:+__$VARIANT}.csv}"
 
 # EMIT=1: print the resolved plan as shell KEY='VALUE' lines and exit, so a
 # multi-run driver can `eval` it instead of re-implementing the resolution.
@@ -187,7 +200,7 @@ if [ -f "$OUT" ] && [ "${OVERWRITE:-0}" != 1 ] && [ "${RESUME:-0}" != 1 ]; then
   exit 2
 fi
 
-echo "== eval_one: $exp =="
+echo "== eval_one: $exp${VARIANT:+  [scoring variant: $VARIANT]} =="
 echo "   eval cfg   : $(basename "$ENV_YAML")"
 echo "   checkpoint : $CKPT"
 echo "   sources    : $SOURCES"
