@@ -147,6 +147,7 @@ while IFS='|' read -r run plan; do
         --output-csv "$OUT" \
         --base-yaml "$BASE_YAML" \
         --train-yaml "$TRAIN_YAML" \
+        --entry "${EVAL_ENTRY:-intermimic.run}" --task "${EVAL_TASK:-InterMimic}" \
         --num-envs "$NUM_ENVS" \
         --timeout-per-pair "$TIMEOUT" --all-objects $BETAS_ARG \
         && echo "[eval-multi] $run OK -> $OUT" \

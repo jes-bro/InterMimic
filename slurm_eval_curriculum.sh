@@ -38,6 +38,21 @@ conda activate intermimic-gym2
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
+# Keep Isaac Gym's JIT build OFF the home filesystem.
+#
+# gymtorch is compiled on every job start into $TORCH_EXTENSIONS_DIR, which
+# defaults to $HOME/.cache/torch_extensions. On a quota'd home that fails at the
+# LOCK FILE, before any compile:
+#   OSError: [Errno 122] Disk quota exceeded:
+#     '/sailhome/<user>/.cache/torch_extensions/py38_cu117/gymtorch/lock'
+# and the job dies in ~20 s having written a full CSV of exit_code=1 rows -- 17
+# lines that look like a finished result and contain nothing. Home is shared with
+# everything else you do, so its free space is not under this job's control;
+# the project filesystem is. Repo-local by default, overridable.
+export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$PWD/.torch_extensions}"
+mkdir -p "$TORCH_EXTENSIONS_DIR"
+echo "[eval] TORCH_EXTENSIONS_DIR=$TORCH_EXTENSIONS_DIR"
+
 # REQUIRED (no silent defaults): a stale hardcoded checkpoint/OUT would eval the
 # WRONG run and mis-attribute the CSV. ENV_YAML is required for the same reason
 # it used to have a default and must not: the default was the old shared template (omomo_test_multibody.yaml),
@@ -86,6 +101,13 @@ SOURCES="${SOURCES:-sub1 sub2 sub3 sub5 sub9 sub17}"
 # different scoring budgets. To change it, change the eval config, where it is
 # reviewable and shared by every arm compared against it.
 TIMEOUT="${TIMEOUT:-900}"
+# Which entrypoint/task scores the checkpoint. Teachers: intermimic.run +
+# InterMimic. g3 STUDENTS: intermimic.run_distill + InterMimicDistillG3 -- the
+# task that builds the student observation and the wrapper that feeds it to the
+# network. eval_one.sh reads these from the eval cfg (evalEntry / evalTask).
+EVAL_ENTRY="${EVAL_ENTRY:-intermimic.run}"
+EVAL_TASK="${EVAL_TASK:-InterMimic}"
+echo "[eval] entry=$EVAL_ENTRY task=$EVAL_TASK"
 
 # Rename the job so `squeue` shows which eval this is (the output CSV stem).
 scontrol update JobId="$SLURM_JOB_ID" JobName="ev-$(basename "${OUT%.csv}")" 2>/dev/null || true
@@ -124,6 +146,7 @@ python -u scripts/eval_per_pair.py \
     --output-csv "$OUT" \
     --env-yaml "$ENV_YAML" \
     --train-yaml "$TRAIN_YAML" \
+    --entry "$EVAL_ENTRY" --task "$EVAL_TASK" \
     --timeout-per-pair "$TIMEOUT" $RESUME_ARG
 
 echo
