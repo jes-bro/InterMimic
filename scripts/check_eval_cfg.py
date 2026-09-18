@@ -71,14 +71,11 @@ EVAL_OWNED = {
 
     # --- placeholders and judgement calls, NOT requirements ---
 
-    # numEnvs is eval-owned because the arm's TRAIN yaml does not state the truth
-    # about it: all 30 g2/g3 launchers pass --num_envs "${NUM_ENVS:-2048}", which
-    # config.py:91 uses to overwrite the 4096 sitting in those yamls. So comparing
-    # eval-vs-train on this key would compare against a number that was never in
-    # effect. The invariant that DOES matter is enforced separately, in
-    # check_num_envs_agree(): every eval cfg must agree with every other, because
-    # this is a scoring-budget knob (success = best attempt per clip) and two arms
-    # scored at different budgets cannot be compared.
+    # numEnvs is eval-owned because it is not part of the arm's identity at all:
+    # it sets how many rollouts run CONCURRENTLY while scoring, nothing else. The
+    # attempt budget is the player's episode count (see check_budget). The
+    # invariant that matters is enforced there: every eval cfg uses the same
+    # value, and that value is EVAL_NUM_ENVS (InterMimic's own eval scripts).
     "numEnvs",
     # set per pair on the command line (--data_sub); the file's value is inert
     "dataSub",
@@ -263,62 +260,41 @@ def obs_width(env):
     return arch, horizons, betas, len(horizons) * 1599 + betas
 
 
-def launcher_num_envs(arm):
-    """The env count the arm's launcher PASSES -> the intended training budget.
-
-    The train yaml is not evidence: it says numEnvs 4096 while the launcher passes
-    --num_envs "${NUM_ENVS:-2048}", and config.py:91 lets the flag win. So the
-    launcher is the closest thing in the repo to what the arm trained at.
-    Returns (value, note); value None means it could not be established.
-    """
-    launcher = launcher_for(arm)
-    path = os.path.join(REPO, launcher)
-    if not os.path.exists(path):
-        return None, f"no launcher at {launcher}"
-    src = open(path).read()
-    m = re.search(r'^NUM_ENVS="\$\{NUM_ENVS:-(\d+)\}"', src, re.M)
-    if not m:
-        return None, f"{launcher} does not set a NUM_ENVS default"
-    if not re.search(r"--num_envs\s+\"\$NUM_ENVS\"", src):
-        return None, (f"{launcher} sets NUM_ENVS but never passes "
-                      f"--num_envs; the yaml's numEnvs would be in effect instead")
-    return int(m.group(1)), "launcher default"
+# The env count every eval scores at. InterMimic's own evaluation scripts
+# (isaacgym/scripts/eval_teacher.sh, eval_student.sh) pass --num_envs 1024; we
+# match them. Until 2026-09-18 this was 2048 on the belief that it was the
+# attempt budget -- it is not (see check_budget), so those CSVs stay comparable.
+EVAL_NUM_ENVS = 1024
 
 
-def log_num_envs(arm, log_dir):
-    """What ACTUALLY ran, per the arm's training logs -> {value: [files]}.
-
-    The launcher default is only a default: `NUM_ENVS=4096 sbatch ...` overrides
-    it at submission and leaves no trace in the repo. The only record is the
-    launcher's own echo, `... num_envs=$NUM_ENVS`, in teacher-<arm>-<jobid>.out.
-    An empty result means NOT CHECKED, and is reported as such rather than passing.
-    """
-    hits = {}
-    for f in sorted(glob.glob(os.path.join(log_dir, log_glob_for(arm)))):
-        try:
-            text = open(f, errors="replace").read()
-        except OSError:
-            continue
-        for m in re.finditer(r"num_envs=(\d+)", text):
-            hits.setdefault(int(m.group(1)), []).append(os.path.basename(f))
-    return hits
+def train_rlg_for(spec):
+    """The arm's rl_games train cfg (carries the player block, if any)."""
+    arm, _ = split_variant(spec)
+    return os.path.join(CFG, "train", "rlg",
+                        f"omomo_{arm}.yaml" if is_student(arm) else f"omomo_teacher_{arm}.yaml")
 
 
-def check_budget(log_dir=None):
+def check_budget():
     """-> complaints about the SCORING BUDGET, the knob no CSV would reveal.
 
-    Success is the best attempt per CLIP -- _max_execution_steps is a running max
-    indexed by seq_id over a clip-count denominator (intermimic.py:1685-1703) --
-    so a bigger numEnvs can only raise the success rate and lower the pose errors.
-    Three separate things therefore have to line up, and only the third is
-    evidence of what happened:
-      1. the eval cfgs agree with EACH OTHER   (else arms aren't comparable)
-      2. that value matches the LAUNCHER default (the intended training budget)
-      3. it matches what the TRAINING LOGS recorded (what actually ran)
+    Success is the best attempt per CLIP (_max_execution_steps is a running max
+    indexed by seq_id, intermimic.py), so the number of attempts a clip gets
+    decides the score. That number is NOT numEnvs. The player runs
+    games_num * n_game_life * 10 episodes per (body, source) pair and stops on
+    that count (learning/intermimic_players.py:52-60, 173, 363, 392); with
+    rl_games' defaults (common/player.py:41-43: games_num 2000, n_game_life 1)
+    that is 20,000 episodes whether 1024 or 2048 envs run them. numEnvs is
+    concurrency. So three things must hold:
+      1. every eval cfg uses the same numEnvs        (one exam for every arm)
+      2. that value is EVAL_NUM_ENVS                  (InterMimic's own scripts)
+      3. no served arm's train cfg overrides the player's games_num /
+         n_game_life                                  (else its budget differs)
+    A `--logs` comparison against the TRAINING env count existed until
+    2026-09-18; the training count is not the scoring budget, so it was dropped.
     """
     problems = []
 
-    # 1. eval cfgs vs each other
+    # 1 + 2. eval cfgs vs each other, and vs the fleet value
     seen = {}
     for path in eval_cfgs():
         n = (load(path).get("env") or {}).get("numEnvs")
@@ -327,44 +303,27 @@ def check_budget(log_dir=None):
         problems.append("eval configs disagree on numEnvs -- NOT comparable:")
         for n, files in sorted(seen.items(), key=lambda kv: (kv[0] is None, kv[0])):
             problems.append(f"    numEnvs={n}: {', '.join(files)}")
-        return problems                      # no single value to check 2 and 3 against
+        return problems
     eval_n = next(iter(seen)) if seen else None
     if eval_n is None:
         return ["eval configs do not set numEnvs at all"]
+    if eval_n != EVAL_NUM_ENVS:
+        problems.append(f"  every eval cfg says numEnvs={eval_n}, but the fleet value is "
+                        f"{EVAL_NUM_ENVS} (InterMimic's isaacgym/scripts/eval_*.sh)")
 
-    # 2. vs each served arm's launcher
+    # 3. the player's episode budget must be the default for every served arm
     for path, arms in eval_cfgs().items():
-        for arm in arms:
-            arm, _ = split_variant(arm)
-            got, note = launcher_num_envs(arm)
-            if got is None:
-                problems.append(f"  {arm}: cannot establish the training budget "
-                                f"({note}) -- NOT CHECKED, do not assume it matches")
-            elif got != eval_n:
-                problems.append(
-                    f"  {arm}: eval scores at numEnvs={eval_n} but the arm trained "
-                    f"at {got} ({note}).")
-
-    # 3. vs what the logs say actually ran
-    if log_dir is None:
-        problems.append(
-            "  training logs NOT CHECKED (pass --logs DIR). The launcher default "
-            "can be overridden at submission with NUM_ENVS=N sbatch, which leaves "
-            "no trace in the repo -- only 'num_envs=N' in teacher-<arm>-<jobid>.out.")
-    else:
-        for path, arms in eval_cfgs().items():
-            for arm in arms:
-                arm, _ = split_variant(arm)
-                hits = log_num_envs(arm, log_dir)
-                if not hits:
-                    problems.append(f"  {arm}: no {log_glob_for(arm)} under "
-                                    f"{log_dir} -- what actually ran is UNKNOWN")
-                elif set(hits) != {eval_n}:
-                    for n, files in sorted(hits.items()):
-                        if n != eval_n:
-                            problems.append(
-                                f"  {arm}: a training log records num_envs={n}, not "
-                                f"{eval_n} ({', '.join(files[:3])})")
+        for spec in arms:
+            rlg = train_rlg_for(spec)
+            if not os.path.exists(rlg):
+                problems.append(f"  {spec}: no train rlg cfg at {os.path.basename(rlg)} -- "
+                                f"cannot confirm the player budget is the default")
+                continue
+            player = ((load(rlg).get("params") or {}).get("config") or {}).get("player") or {}
+            bad = {k: player[k] for k in ("games_num", "n_game_life") if k in player}
+            if bad:
+                problems.append(f"  {spec}: train cfg overrides the player episode budget "
+                                f"{bad} -- its attempts per clip differ from every other arm")
     return problems
 
 
@@ -440,11 +399,6 @@ def main(argv=None):
                         "sub100 -- any other value selects zero clips.")
     p.add_argument("--no-check", action="store_true",
                    help="with --arm, resolve only; skip the mirror check")
-    p.add_argument("--logs", metavar="DIR",
-                   help="directory of teacher-<arm>-<jobid>.out training logs, so "
-                        "the scoring budget is checked against what ACTUALLY ran "
-                        "rather than against the launcher's default. Without it "
-                        "that check is reported as NOT CHECKED, never as passing.")
     args = p.parse_args(argv)
 
     if args.default_source:
@@ -483,19 +437,15 @@ def main(argv=None):
             else:
                 print(f"ok   {tag}")
 
-    # The scoring budget is checked separately because it is the one setting the
-    # train yaml cannot testify about (the launcher's --num_envs overrides it) and
-    # the one no CSV would ever reveal.
-    print("\n-- scoring budget (numEnvs) --")
-    budget = check_budget(args.logs)
+    # The scoring budget is checked separately because no CSV would ever reveal it.
+    print("\n-- scoring budget (numEnvs uniform + fleet value; player episode count default) --")
+    budget = check_budget()
     if budget:
         print("\n".join(budget))
-        # An unverifiable budget is not a failure of the configs, but it must not
-        # read as a pass either -- say so and let the caller decide.
-        if any("NOT CHECKED" not in p and "UNKNOWN" not in p for p in budget):
-            rc = 2
+        rc = 2
     else:
-        print("ok   every eval cfg, launcher and training log agrees")
+        print(f"ok   every eval cfg scores at numEnvs={EVAL_NUM_ENVS} with the default "
+              f"20,000-episode player budget")
     return rc
 
 
