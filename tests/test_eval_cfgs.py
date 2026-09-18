@@ -53,7 +53,7 @@ EVAL_PAIRS = [(p, arm) for p, arms in cec.eval_cfgs().items() for arm in arms]
 @pytest.mark.parametrize("path,arm", EVAL_PAIRS,
                          ids=[f"{os.path.basename(p)}::{a}" for p, a in EVAL_PAIRS])
 def test_eval_cfg_mirrors_its_arm(path, arm):
-    problems = cec.check(path, cec.train_cfg_for(arm))
+    problems = cec.check(path, cec.train_cfg_for(arm), arm)
     assert not problems, "\n".join(problems)
 
 
@@ -105,6 +105,99 @@ def test_v1_configs_are_not_resolvable_as_arm_configs():
 
 
 # --------------------------------------------------------------------------
+# 3b. Scoring variants: the same checkpoint under a declared different rule.
+#
+# The one real case: the nogate arm scored under the base's termination rule
+# (freeFlightGate.resets true). Mirroring `resets: false` into its eval lets
+# the referee end every free-flight episode, which scores the rule, not the
+# policy. The variant may differ from the arm ONLY in what its scoringVariant
+# block declares, and that key must really differ -- anything else is drift.
+# --------------------------------------------------------------------------
+NOGATE = "g3_bball7_geoall_nogate__f0"
+GATED = NOGATE + "+gatedscore"
+
+
+def test_variant_id_splits_and_plain_id_does_not():
+    assert cec.split_variant(GATED) == (NOGATE, "gatedscore")
+    assert cec.split_variant(NOGATE) == (NOGATE, None)
+    with pytest.raises(SystemExit):
+        cec.split_variant("g3_x__f0+")
+
+
+def test_gatedscore_resolves_separately_and_the_arm_still_resolves_to_its_mirror():
+    mirror, variant = cec.resolve(NOGATE), cec.resolve(GATED)
+    assert mirror != variant
+    assert os.path.basename(variant) == "omomo_eval_g3_bball7_geoall_nogate_gatedscore__f0.yaml"
+    assert os.path.basename(mirror) == "omomo_eval_g3_bball7_geoall_nogate__f0.yaml"
+
+
+def test_gatedscore_is_the_mirror_plus_exactly_the_gate():
+    mirror = cec.flatten(cec.load(cec.resolve(NOGATE))["env"])
+    variant = cec.flatten(cec.load(cec.resolve(GATED))["env"])
+    diff = {k for k in set(mirror) | set(variant) if mirror.get(k) != variant.get(k)}
+    assert diff == {"rewardTerms.freeFlightGate.resets"}
+    assert variant["rewardTerms.freeFlightGate.resets"] is True
+    # ...and it is the BASE's rule, i.e. the same exam the base takes
+    base = cec.flatten(cec.load(cec.resolve("g3_bball7_geoall__f0"))["env"])
+    assert base["rewardTerms.freeFlightGate.resets"] is True
+    assert not cec.check(cec.resolve(GATED), cec.train_cfg_for(GATED), GATED)
+
+
+def test_variant_cfg_checked_as_plain_arm_is_rejected():
+    """A variant must never pass as the arm's mirror (that is how it would get
+    resolved for the arm by accident and score every arm under a tweaked rule)."""
+    problems = cec.check(cec.resolve(GATED), cec.train_cfg_for(NOGATE), NOGATE)
+    assert any("scoringVariant" in p for p in problems)
+    assert any("freeFlightGate.resets" in p for p in problems)
+
+
+def _write_variant(tmp_path, overrides_block, extra_env=""):
+    """A throwaway variant cfg derived from the real gatedscore one."""
+    src = open(cec.resolve(GATED)).read()
+    cfg = yaml.safe_load(src)
+    if overrides_block is not None:
+        cfg["scoringVariant"]["overrides"] = overrides_block
+    if extra_env:
+        cfg["env"].update(extra_env)
+    p = tmp_path / "omomo_eval_tmp_variant.yaml"
+    p.write_text(yaml.safe_dump(cfg))
+    return str(p)
+
+
+def test_variant_drift_on_an_undeclared_key_is_rejected(tmp_path):
+    p = _write_variant(tmp_path, None, extra_env={"objectMass": 9.9})
+    problems = cec.check(p, cec.train_cfg_for(GATED), GATED)
+    assert any("objectMass" in q for q in problems)
+
+
+def test_variant_override_that_does_not_differ_from_the_arm_is_rejected(tmp_path):
+    # declare the override at the arm's own value: a no-op variant is a mislabelled duplicate
+    p = _write_variant(tmp_path, {"rewardTerms.freeFlightGate.resets": False},
+                       extra_env={"rewardTerms": cec.load(cec.train_cfg_for(NOGATE))["env"]["rewardTerms"]})
+    problems = cec.check(p, cec.train_cfg_for(GATED), GATED)
+    assert any("changes nothing" in q for q in problems)
+
+
+def test_eval_one_routes_a_variant_id_to_its_cfg_and_suffixes_the_csv(tmp_path):
+    """EMIT mode resolves the plan without submitting; the checkpoint only has to exist."""
+    ck = tmp_path / "smplx_teacher_g3_bball7_geoall_nogate__f0" / "nn" / "mimic_00020000.pth"
+    ck.parent.mkdir(parents=True); ck.write_bytes(b"")
+    r = subprocess.run(["sh", "scripts/eval_one.sh", GATED, str(ck)], cwd=REPO,
+                       env={**os.environ, "EMIT": "1"}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    plan = dict(line.split("=", 1) for line in r.stdout.strip().splitlines())
+    assert plan["ENV_YAML"].strip("'").endswith("omomo_eval_g3_bball7_geoall_nogate_gatedscore__f0.yaml")
+    assert plan["OUT"].strip("'").endswith("__mimic_00020000__indist+heldout+syn__gatedscore.csv")
+    assert plan["TRAIN_YAML"].strip("'").endswith("omomo_teacher_g3_bball7_geoall_nogate__f0.yaml")
+    # the plain id still goes to the mirror and the un-suffixed CSV
+    r = subprocess.run(["sh", "scripts/eval_one.sh", NOGATE, str(ck)], cwd=REPO,
+                       env={**os.environ, "EMIT": "1"}, capture_output=True, text=True)
+    plan = dict(line.split("=", 1) for line in r.stdout.strip().splitlines())
+    assert plan["ENV_YAML"].strip("'").endswith("omomo_eval_g3_bball7_geoall_nogate__f0.yaml")
+    assert plan["OUT"].strip("'").endswith("__mimic_00020000__indist+heldout+syn.csv")
+
+
+# --------------------------------------------------------------------------
 # 4. The settings that decide what a number MEANS.
 # --------------------------------------------------------------------------
 EVAL_CFGS = sorted(cec.eval_cfgs())
@@ -149,8 +242,7 @@ def test_rollout_window_can_reach_the_success_condition(path):
     an arm's training window (g3 trains at 50) reports 0% for every arm.
     """
     env = cec.load(path)["env"]
-    arm_cfg = os.path.join(CFG, f"omomo_teacher_{cec.eval_cfgs()[path][0]}.yaml")
-    train_rollout = cec.load(arm_cfg)["env"]["rolloutLength"]
+    train_rollout = cec.load(cec.train_cfg_for(cec.eval_cfgs()[path][0]))["env"]["rolloutLength"]
     assert env["rolloutLength"] > train_rollout, (
         "eval rollout window must be widened past the training window")
     assert env["rolloutLength"] >= 300

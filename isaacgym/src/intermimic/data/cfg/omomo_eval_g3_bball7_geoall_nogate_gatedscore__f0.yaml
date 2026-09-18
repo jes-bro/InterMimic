@@ -1,0 +1,150 @@
+# EVAL config -- SCORING VARIANT `gatedscore` of g3_bball7_geoall_nogate__f0:
+# the nogate checkpoint scored under the BASE's termination rule
+# (rewardTerms.freeFlightGate.resets: true), i.e. the same exam the base takes.
+#
+# WHY A SECOND EVAL FOR ONE ARM. The mirrored eval (omomo_eval_..._nogate__f0.yaml,
+# resets: false) is a valid measurement of the wrong thing: with the gate off the
+# object/igRatio resets fire during the reference's free-flight frames, so any
+# ballistic ball the sim cannot reproduce ends the episode BY RULE (~23 steps,
+# 0% success, and a flattering pose error averaged over the few frames before the
+# cut). That number describes the referee, not the policy. Result @20k under the
+# ungated rule: 34.1% in-dist vs base 69.3%, with sub411/sub458 at 0.0 and the
+# lowest pose error of all four arms -- exactly that signature. The ablation
+# question is "did training WITHOUT the gate hurt the policy?", which is answered
+# by scoring both checkpoints under one rule. This cfg is that rule. Everything
+# else (obs, reference, objects, reward gate) stays exactly as the nogate arm
+# trained; the reward half of the gate does not enter any metric.
+#
+# The guard (scripts/check_eval_cfg.py) allows ONLY the key declared under
+# scoringVariant.overrides to differ from the arm, and requires it to differ.
+# CSVs from this cfg carry the suffix __gatedscore so they never collide with,
+# or get mistaken for, the mirrored eval's.
+#
+# Everything below the evalFor/scoringVariant block is byte-identical to
+# omomo_eval_g3_bball7_geoall_nogate__f0.yaml except the one overridden line.
+evalFor:
+  - g3_bball7_geoall_nogate__f0+gatedscore
+
+scoringVariant:
+  name: gatedscore
+  arm: g3_bball7_geoall_nogate__f0
+  overrides:
+    rewardTerms.freeFlightGate.resets: true    # the base's termination rule
+
+env:
+  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
+                                           # Success is the BEST attempt per CLIP:
+                                           # _max_execution_steps is indexed by
+                                           # seq_id and is a running MAXIMUM, and the
+                                           # denominator is the clip count, not the
+                                           # env count (intermimic.py:1685-1703). So
+                                           # more envs = more attempts per clip = a
+                                           # success rate that can only rise and pose
+                                           # errors that can only fall. It must be
+                                           # IDENTICAL across every arm compared.
+                                           # 2048 = the count all 30 g2/g3 arms
+                                           # actually trained at (the launchers pass
+                                           # --num_envs "${NUM_ENVS:-2048}", which
+                                           # overrides the 4096 in their train yamls).
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  enableEvaluation: True
+  rolloutLength: 300                       # as the single-clip bball eval: start pinned to 0
+  physicalBufferSize: 1
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub401', 'sub402', 'sub404', 'sub409', 'sub411', 'sub412', 'sub458']   # all sources; overwritten per pair by --data_sub
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  retargetedMotionDir: InterAct/behave_cari4d_bball7_f0_bodymajor
+  cpuMotionData: true
+  subjectHeightsFile: scripts/synthetic_heights.json
+  bodyNormalizedReward: true
+  ballSize: 1.
+  numObs: 9594                             # 6 horizons x 1599, no betas block
+  obsHorizons: [1, 4, 7, 10, 13, 16]
+  motion_file: InterAct/behave_cari4d_bball7_cf2
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectMass: 0.624                        # 0.62 kg basketball, per-mesh density
+  objectConvexHull: true                   # single hull per ball, no VHACD slivers
+  objectShapeProps:
+    restitution: 0.85
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  resetThresholds:
+    human: 0.5
+    object: 0.5
+    igRatio: 2.0
+    contactSteps: 10
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.85                      # averaged with the object's 0.85
+
+  rewardShape: geometric_all
+
+  rewardTerms:
+    pose:
+      enable: true
+      lambda: 0.02
+    freeFlightGate:
+      reward: false
+      resets: true                           # scoringVariant override (see header)
+
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
