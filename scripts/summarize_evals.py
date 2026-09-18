@@ -51,8 +51,22 @@ def main():
         dropped = [r for r in rows if r[m] == ""]
         d = {r["body"]: float(r[m]) for r in rows if r[m] != ""}
         ck = rows[0]["checkpoint"]
-        run = ck.split("/")[1].replace("smplx_teacher_", "")
-        step = int(os.path.basename(ck).split("_")[-1].split(".")[0])
+        # Find the experiment directory ANYWHERE in the path. This used to take
+        # component [1], which assumes checkpoints/<exp>/nn/... -- true for our
+        # runs, but the fold-1 arms live at collab/jm/checkpointsjm/<exp>/nn/...
+        # so every one of them was labelled "jm" and they were indistinguishable
+        # from each other in the table.
+        parts = ck.split("/")
+        exp = next((s for s in parts if s.startswith("smplx_teacher_")), None)
+        run = exp.replace("smplx_teacher_", "") if exp else os.path.basename(p).split("__")[0]
+        # A numbered snapshot is mimic_<epoch>.pth; a ROLLING checkpoint is just
+        # mimic.pth, which carries no epoch. The fold-1 arms came from a
+        # collaborator that way, so this must not crash on them -- and it must not
+        # invent an epoch either, because "unknown training amount" is exactly the
+        # caveat those rows need to carry into any comparison.
+        stem = os.path.basename(ck).split(".")[0]
+        tail = stem.split("_")[-1]
+        step = int(tail) if tail.isdigit() else None
         held = heldout_for(p, args.heldout)
         missing = held - set(d)
         if missing:
@@ -66,7 +80,8 @@ def main():
         g = {k: (float(np.mean(v)) if v else float("nan")) for k, v in groups.items()}
         per_held = "  ".join(f"{b}={d[b]:.1f}" for b in sorted(held) if b in d)
         note = f"  [{len(dropped)} crashed row(s) dropped]" if dropped else ""
-        print(f"{run:34s} {step:7,} {g['ind']:8.1f} {g['held']:9.1f} {g['syn']:6.1f}"
+        step_s = f"{step:,}" if step is not None else "rolling"
+        print(f"{run:34s} {step_s:>7s} {g['ind']:8.1f} {g['held']:9.1f} {g['syn']:6.1f}"
               f"  {per_held}{note}")
 
 

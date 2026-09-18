@@ -57,7 +57,13 @@ def load(path):
         return None
     ck = rows[0]["checkpoint"]
     run = ck.split("/")[1].replace("smplx_teacher_", "")
-    step = int(os.path.basename(ck).split("_")[-1].split(".")[0])
+    # Numbered snapshot (mimic_00072100.pth) -> the epoch. A ROLLING checkpoint
+    # (mimic.pth, which is what runs that saved no numbered snapshots leave
+    # behind) carries no epoch in its name, and int() on 'mimic' raised
+    # ValueError -- so a whole family of runs could not be plotted at all.
+    # Return None and let the label say 'final' rather than invent a number.
+    tail = os.path.basename(ck).split("_")[-1].split(".")[0]
+    step = int(tail) if tail.isdigit() else None
     return run, step, {r["body"]: float(r["success_rate"]) for r in rows}
 
 
@@ -86,7 +92,8 @@ def main():
             if r == run and b in vals:
                 del vals[b]
                 print(f"  [plot] dropped {b} for {run} (--drop)", file=sys.stderr)
-        runs.append((f"{run}  @{step/1000:.1f}k", vals))
+        runs.append((f"{run}  @{step/1000:.1f}k" if step is not None
+                     else f"{run}  @final", vals))
 
     if len(runs) > len(SERIES):
         raise SystemExit(
