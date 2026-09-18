@@ -198,6 +198,80 @@ def test_eval_one_routes_a_variant_id_to_its_cfg_and_suffixes_the_csv(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# 3c. g3 STUDENT evals: scored through the student path, mirrored to the
+# student's own env cfg. A student's observation is built by
+# InterMimicDistillG3 (its own horizons + Arm A's body dims) and handed to the
+# network by the DAgger wrapper; the teacher path would feed it obs_buf.
+# --------------------------------------------------------------------------
+STUDENTS = ["student_g3_act_xf_ret_nvadlr__f0", "student_g3_act_xf_ret_nvadlr_bodyctr__f0"]
+
+
+@pytest.mark.parametrize("arm", STUDENTS)
+def test_student_eval_cfg_mirrors_the_student_and_uses_the_student_path(arm):
+    path = cec.resolve(arm)
+    assert os.path.basename(path) == f"omomo_eval_{arm}.yaml"
+    assert cec.train_cfg_for(arm).endswith(f"omomo_{arm}.yaml")          # not omomo_teacher_
+    assert not cec.check(path, cec.train_cfg_for(arm), arm)
+    cfg = cec.load(path)
+    assert cfg["evalEntry"] == "intermimic.run_distill"
+    assert cfg["evalTask"] == "InterMimicDistillG3"
+    env, train = cfg["env"], cec.load(cec.train_cfg_for(arm))["env"]
+    assert env["rolloutLength"] == 700                                   # > cpr 691 / soccer 677
+    assert env["numObsRetarget"] == train["numObsRetarget"]              # 9594 plain / 9750 Arm A
+    assert env["teacherPolicy"] == train["teacherPolicy"]                # teachers load at eval too
+    if "bodyctr" in arm:
+        assert env["studentBodyFeatures"] is True and env["twinEnvs"] is True
+        assert env["numObsRetarget"] == 9594 + 156
+
+
+def test_student_launcher_and_log_naming():
+    assert cec.launcher_for(STUDENTS[0]) == "slurm_student_g3_act_xf_ret_nvadlr__f0.sh"
+    assert os.path.exists(os.path.join(REPO, cec.launcher_for(STUDENTS[0])))
+    assert cec.log_glob_for(STUDENTS[0]) == "student-g3_act_xf_ret_nvadlr__f0-*.out"
+    assert cec.launcher_for("g3_bball7_geoall__f0") == "slurm_teacher_g3_bball7_geoall__f0.sh"
+    assert cec.log_glob_for("g3_bball7_geoall__f0") == "teacher-g3_bball7_geoall__f0-*.out"
+
+
+def _emit(run, ck):
+    r = subprocess.run(["sh", "scripts/eval_one.sh", run, str(ck)], cwd=REPO,
+                       env={**os.environ, "EMIT": "1"}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return {k: v.strip("'") for k, v in (l.split("=", 1) for l in r.stdout.strip().splitlines())}
+
+
+def test_eval_one_routes_a_student_through_run_distill(tmp_path):
+    ck = tmp_path / "smplx_student_g3_act_xf_ret_nvadlr_bodyctr__f0" / "nn" / "mimic_00006000.pth"
+    ck.parent.mkdir(parents=True); ck.write_bytes(b"")
+    plan = _emit(STUDENTS[1], ck)
+    assert plan["ENV_YAML"].endswith("omomo_eval_student_g3_act_xf_ret_nvadlr_bodyctr__f0.yaml")
+    assert plan["TRAIN_YAML"].endswith("train/rlg/omomo_student_g3_act_xf_ret_nvadlr_bodyctr__f0.yaml")
+    assert (plan["EVAL_ENTRY"], plan["EVAL_TASK"]) == ("intermimic.run_distill", "InterMimicDistillG3")
+    assert plan["EXP"] == "smplx_student_g3_act_xf_ret_nvadlr_bodyctr__f0"
+    assert plan["OUT"].endswith("smplx_student_g3_act_xf_ret_nvadlr_bodyctr__f0__mimic_00006000__indist+heldout+syn.csv")
+    assert plan["BODIES"].split()[-8:-5] == ["sub10", "sub16", "sub13"] or "sub10" in plan["BODIES"]
+
+
+def test_eval_one_keeps_teachers_on_the_teacher_path(tmp_path):
+    ck = tmp_path / "smplx_teacher_g3_bball7_geoall__f0" / "nn" / "mimic_00020000.pth"
+    ck.parent.mkdir(parents=True); ck.write_bytes(b"")
+    plan = _emit("g3_bball7_geoall__f0", ck)
+    assert (plan["EVAL_ENTRY"], plan["EVAL_TASK"]) == ("intermimic.run", "InterMimic")
+
+
+def test_eval_per_pair_build_cmd_threads_entry_and_task():
+    from eval_per_pair import build_cmd, DEFAULT_ENTRY, DEFAULT_TASK
+    cmd = build_cmd("intermimic.run_distill", "InterMimicDistillG3", "e.yaml", "t.yaml",
+                    "ck.pth", "sub10", "sub401")
+    assert cmd[:5] == ["python", "-u", "-m", "intermimic.run_distill", "--task"]
+    assert cmd[5] == "InterMimicDistillG3" and "--test" in cmd and "--num_envs" not in cmd
+    assert cmd[cmd.index("--subject_bodies") + 1] == "sub10"
+    assert cmd[cmd.index("--data_sub") + 1] == "sub401"
+    dflt = build_cmd(DEFAULT_ENTRY, DEFAULT_TASK, "e.yaml", "t.yaml", "ck.pth", "sub2", "sub2", num_envs=512)
+    assert dflt[3] == "intermimic.run" and dflt[5] == "InterMimic"
+    assert dflt.count("--num_envs") == 1 and dflt[dflt.index("--num_envs") + 1] == "512"
+
+
+# --------------------------------------------------------------------------
 # 4. The settings that decide what a number MEANS.
 # --------------------------------------------------------------------------
 EVAL_CFGS = sorted(cec.eval_cfgs())

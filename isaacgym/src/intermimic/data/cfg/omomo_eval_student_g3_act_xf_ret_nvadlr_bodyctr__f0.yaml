@@ -1,0 +1,187 @@
+# EVAL config -- student_g3_act_xf_ret_nvadlr_bodyctr__f0: ARM A: the activity XF student + body wire (156 bone-offset dims) + contrastive twins.
+# HAND-WRITTEN mirror of omomo_student_g3_act_xf_ret_nvadlr_bodyctr__f0.yaml: byte-identical below this block except
+# the eval-owned keys (numEnvs, stateInit, enableEvaluation, rolloutLength,
+# physicalBufferSize, subjectBodies) -- scripts/check_eval_cfg.py proves it.
+#
+# SCORED THROUGH THE STUDENT PATH (evalEntry / evalTask below): intermimic.run_distill
+# + InterMimicDistillG3, the task that builds the STUDENT observation over
+# studentObsHorizons (+ the 156 body dims of the Arm A wire) and the DAgger wrapper that hands that observation
+# to the network. The teacher path (intermimic.run + InterMimic) would feed the
+# student the teacher's obs_buf. The three activity teachers must be present
+# at eval (teacherPolicy dir) -- the task loads them at startup and queries
+# them every step; the student's actions are what get scored.
+#
+# rolloutLength 700: the merged activity set's longest clips are soccer 677 /
+# cpr 691 frames (bball max 189); the window must exceed every clip or success
+# is impossible by construction. Start init from frame 0, one placeholder body
+# (patched per pair by eval_per_pair.py), 2048 envs = the fleet's scoring
+# budget. NOTE the students TRAINED at NUM_ENVS=1024 (launcher default 2048
+# overridden at submission; 40 GB cards) -- numEnvs here is the scoring
+# budget, uniform across every eval cfg, not the training env count.
+#
+# twinEnvs stays true (mirrored, not eval-owned): in Start init every env starts
+# at frame 0 and env e already runs clip e % n_clips, so the twin sync (partner
+# copies clip + start frame) changes nothing about which clips get attempted.
+# Read on the held-out bodies sub10/sub13/sub16 at a MATCHED epoch against the
+# other student (Arm A vs plain); per source, as with the teachers.
+evalFor:
+  - student_g3_act_xf_ret_nvadlr_bodyctr__f0
+evalEntry: intermimic.run_distill
+evalTask: InterMimicDistillG3
+
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  raggedMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub401', 'sub402', 'sub404', 'sub405', 'sub409', 'sub411', 'sub412', 'sub458', 'sub480', 'sub482', 'sub484', 'sub485', 'sub487', 'sub488', 'sub489', 'sub490', 'sub491', 'sub493', 'sub494', 'sub495', 'sub496', 'sub497', 'sub509', 'sub510', 'sub512', 'sub513', 'sub517', 'sub564', 'sub565', 'sub566', 'sub567', 'sub569', 'sub577', 'sub579', 'sub580']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  enableEvaluation: True
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_act
+  numEnvs: 2048                            # scoring budget (see header), NOT the training env count
+  numObs: 9594
+  objectConvexHull: true
+  objectPropsFile: isaacgym/src/intermimic/data/cfg/object_props_g3_act.yaml
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 1                    # PSI off at eval (identical mocap copies otherwise)
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_act_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 700                       # > longest clip (cpr 691) so success is reachable
+  saveImages: false
+  stateInit: "Start"                       # metrics only exist in Start init (intermimic.py)
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+  # --- distillation (InterMimicDistillG3) ---
+  teacherPolicy: checkpoints/teachers/g3_act
+  teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoall__f0.yaml
+  studentObsHorizons: [1, 4, 7, 10, 13, 16]
+  numObsRetarget: 9750
+  studentBodyFeatures: true
+  twinEnvs: true
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2

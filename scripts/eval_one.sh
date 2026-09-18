@@ -47,8 +47,13 @@ esac
 # run name -- read the authoritative full_experiment_name out of the train config,
 # same as the teacher slurm scripts do.
 texp="${RUN#smplx_teacher_}"
-envc="$CFG/omomo_teacher_${texp}.yaml"
-trainc="$CFG/train/rlg/omomo_teacher_${texp}.yaml"
+# g3 STUDENTS are named by their cfg stem, `student_g3_<set>_<student>__f0`
+# (cfg omomo_student_..., launcher slurm_student_..., checkpoints
+# smplx_student_...). Teachers keep the historical `omomo_teacher_<arm>` form.
+case "$texp" in
+  student_*) envc="$CFG/omomo_${texp}.yaml";         trainc="$CFG/train/rlg/omomo_${texp}.yaml" ;;
+  *)         envc="$CFG/omomo_teacher_${texp}.yaml"; trainc="$CFG/train/rlg/omomo_teacher_${texp}.yaml" ;;
+esac
 [ -f "$trainc" ] || { echo "ERROR: train config not found: $trainc (needed for the network arch)" >&2; exit 2; }
 
 # Some arms vary ONLY the train config -- normval / adlr / normval_adlr / lr4 all
@@ -58,7 +63,7 @@ trainc="$CFG/train/rlg/omomo_teacher_${texp}.yaml"
 # guess and not a fallback to some default: if neither the same-named env yaml
 # nor a slurm script naming one exists, that is an error.
 if [ ! -f "$envc" ]; then
-  slurm="slurm_teacher_${texp}.sh"
+  case "$texp" in student_*) slurm="slurm_${texp}.sh" ;; *) slurm="slurm_teacher_${texp}.sh" ;; esac
   if [ -f "$slurm" ]; then
     from_slurm=$(grep -m1 '^CFG_ENV=' "$slurm" | cut -d= -f2-)
     if [ -n "$from_slurm" ] && [ -f "$from_slurm" ]; then
@@ -142,6 +147,20 @@ PY
 # generic template left to fall back to, which is the point.
 ENV_YAML=$(python3 scripts/check_eval_cfg.py --arm "${texp}${VARIANT:++$VARIANT}") || exit 2
 
+# Which entrypoint/task scores this checkpoint -- stated by the eval cfg, never
+# guessed from the name. Teachers: intermimic.run + InterMimic (the defaults).
+# g3 students: intermimic.run_distill + InterMimicDistillG3, the task that builds
+# the student observation (its own horizons, plus Arm A's body dims) and the
+# DAgger wrapper that hands THAT observation to the network. Scoring a student
+# through the teacher path would feed it the teacher's obs.
+eval "$(python3 - "$ENV_YAML" <<'PY'
+import sys, yaml
+c = yaml.safe_load(open(sys.argv[1])) or {}
+print(f"EVAL_ENTRY='{c.get('evalEntry', 'intermimic.run')}'")
+print(f"EVAL_TASK='{c.get('evalTask', 'InterMimic')}'")
+PY
+)"
+
 SOURCES="${SOURCES:-$SRC_DEFAULT}"
 # Held-out default is FOLD-AWARE (same __fN filename rule as summarize_evals.py):
 # an __f1 run's test trio is sub5/sub7/sub12 -- the old fold0-only default would
@@ -181,8 +200,8 @@ OUT="${OUT:-eval_results/${exp_out}__${id}__indist+heldout+syn${VARIANT:+__$VARI
 # betas file corrupts the 32 beta obs dims and still runs), so it must have
 # exactly one implementation -- this one.
 if [ "${EMIT:-0}" = 1 ]; then
-  printf "CHECKPOINT='%s'\nOUT='%s'\nENV_YAML='%s'\nTRAIN_YAML='%s'\nSOURCES='%s'\nBODIES='%s'\nEXP='%s'\n" \
-    "$CKPT" "$OUT" "$ENV_YAML" "$trainc" "$SOURCES" "$BODIES" "$exp"
+  printf "CHECKPOINT='%s'\nOUT='%s'\nENV_YAML='%s'\nTRAIN_YAML='%s'\nSOURCES='%s'\nBODIES='%s'\nEXP='%s'\nEVAL_ENTRY='%s'\nEVAL_TASK='%s'\n" \
+    "$CKPT" "$OUT" "$ENV_YAML" "$trainc" "$SOURCES" "$BODIES" "$exp" "$EVAL_ENTRY" "$EVAL_TASK"
   exit 0
 fi
 
@@ -212,6 +231,7 @@ else
   echo "   BODIES     : $BODIES   <-- caller override (default set NOT used)"
 fi
 echo "   train cfg  : $(basename "$trainc")"
+echo "   entry/task : $EVAL_ENTRY / $EVAL_TASK"
 # Print the settings that decide what the numbers MEAN, out of the config that
 # will actually run -- so the submission log records them and a stale eval config
 # is visible at submit time rather than after a GPU-hour.
@@ -256,4 +276,5 @@ EXCLUDE_NODES="${EXCLUDE_NODES-simurgh6}"
 CHECKPOINT="$CKPT" OUT="$OUT" \
 ENV_YAML="$ENV_YAML" TRAIN_YAML="$trainc" \
 SOURCES="$SOURCES" BODIES="$BODIES" RESUME="${RESUME:-0}" \
+EVAL_ENTRY="$EVAL_ENTRY" EVAL_TASK="$EVAL_TASK" \
 sbatch ${EXCLUDE_NODES:+--exclude="$EXCLUDE_NODES"} slurm_eval_curriculum.sh

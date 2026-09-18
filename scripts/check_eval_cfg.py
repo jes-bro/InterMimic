@@ -222,13 +222,29 @@ def resolve(arm):
     return hits[0]
 
 
+def is_student(arm):
+    """g3 students are named by their cfg stem `student_g3_<set>_<student>__f0`
+    (cfg omomo_student_..., launcher slurm_student_..., log student-...,
+    checkpoints smplx_student_...); teachers by the bare arm behind omomo_teacher_."""
+    return arm.startswith("student_")
+
+
 def train_cfg_for(spec):
     """Train env cfg of the arm behind an eval id (variant suffix ignored)."""
     arm, _ = split_variant(spec)
-    p = os.path.join(CFG, f"omomo_teacher_{arm}.yaml")
+    p = os.path.join(CFG, f"omomo_{arm}.yaml" if is_student(arm) else f"omomo_teacher_{arm}.yaml")
     if not os.path.exists(p):
         raise SystemExit(f"ERROR: no train env cfg for arm '{arm}': {p}")
     return p
+
+
+def launcher_for(arm):
+    return f"slurm_{arm}.sh" if is_student(arm) else f"slurm_teacher_{arm}.sh"
+
+
+def log_glob_for(arm):
+    # launchers write teacher-<arm>-<jobid>.out / student-g3_...-<jobid>.out
+    return f"{arm.replace('student_', 'student-', 1)}-*.out" if is_student(arm) else f"teacher-{arm}-*.out"
 
 
 def obs_width(env):
@@ -255,15 +271,16 @@ def launcher_num_envs(arm):
     launcher is the closest thing in the repo to what the arm trained at.
     Returns (value, note); value None means it could not be established.
     """
-    path = os.path.join(REPO, f"slurm_teacher_{arm}.sh")
+    launcher = launcher_for(arm)
+    path = os.path.join(REPO, launcher)
     if not os.path.exists(path):
-        return None, f"no launcher at slurm_teacher_{arm}.sh"
+        return None, f"no launcher at {launcher}"
     src = open(path).read()
     m = re.search(r'^NUM_ENVS="\$\{NUM_ENVS:-(\d+)\}"', src, re.M)
     if not m:
-        return None, f"slurm_teacher_{arm}.sh does not set a NUM_ENVS default"
+        return None, f"{launcher} does not set a NUM_ENVS default"
     if not re.search(r"--num_envs\s+\"\$NUM_ENVS\"", src):
-        return None, (f"slurm_teacher_{arm}.sh sets NUM_ENVS but never passes "
+        return None, (f"{launcher} sets NUM_ENVS but never passes "
                       f"--num_envs; the yaml's numEnvs would be in effect instead")
     return int(m.group(1)), "launcher default"
 
@@ -277,7 +294,7 @@ def log_num_envs(arm, log_dir):
     An empty result means NOT CHECKED, and is reported as such rather than passing.
     """
     hits = {}
-    for f in sorted(glob.glob(os.path.join(log_dir, f"teacher-{arm}-*.out"))):
+    for f in sorted(glob.glob(os.path.join(log_dir, log_glob_for(arm)))):
         try:
             text = open(f, errors="replace").read()
         except OSError:
@@ -340,7 +357,7 @@ def check_budget(log_dir=None):
                 arm, _ = split_variant(arm)
                 hits = log_num_envs(arm, log_dir)
                 if not hits:
-                    problems.append(f"  {arm}: no teacher-{arm}-*.out under "
+                    problems.append(f"  {arm}: no {log_glob_for(arm)} under "
                                     f"{log_dir} -- what actually ran is UNKNOWN")
                 elif set(hits) != {eval_n}:
                     for n, files in sorted(hits.items()):

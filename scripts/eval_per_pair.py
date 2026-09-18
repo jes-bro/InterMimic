@@ -119,30 +119,47 @@ def parse_metrics(stdout):
     return out
 
 
-def run_eval(body, source, env_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec):
-    # The arm's OWN committed eval config is passed through untouched; only the
-    # two keys that vary across the sweep are overridden, on the command line.
-    # Nothing is copied, rewritten or written to a temp file, so the environment
-    # the policy is scored in is byte-for-byte the reviewed one.
+DEFAULT_ENTRY = "intermimic.run"
+DEFAULT_TASK = "InterMimic"
+
+
+def build_cmd(entry, task, env_yaml, train_yaml, checkpoint, body, source, num_envs=0):
+    """The per-pair command line. `entry`/`task` come from the eval cfg's
+    evalEntry/evalTask (via eval_one.sh): teachers score through intermimic.run
+    + InterMimic; a g3 STUDENT must score through intermimic.run_distill +
+    InterMimicDistillG3, the task that builds its observation (the 6 student
+    horizons, plus the 156 body dims for Arm A) and the DAgger wrapper that
+    hands that observation -- not the teacher's -- to the network."""
     cmd = [
-        "python", "-u", "-m", "intermimic.run",
-        "--task", "InterMimic",
+        "python", "-u", "-m", entry,
+        "--task", task,
         "--cfg_env", str(env_yaml),
-        "--cfg_train", train_yaml,
+        "--cfg_train", str(train_yaml),
         "--test",
         "--headless",
         "--checkpoint", str(checkpoint),
         "--subject_bodies", body,
         "--data_sub", source,
     ]
+    if num_envs:
+        cmd += ["--num_envs", str(num_envs)]
+    return cmd
+
+
+def run_eval(body, source, env_yaml, train_yaml, checkpoint, num_envs, repo_root, timeout_sec,
+             entry=DEFAULT_ENTRY, task=DEFAULT_TASK):
+    # The arm's OWN committed eval config is passed through untouched; only the
+    # two keys that vary across the sweep are overridden, on the command line.
+    # Nothing is copied, rewritten or written to a temp file, so the environment
+    # the policy is scored in is byte-for-byte the reviewed one.
+    cmd = build_cmd(entry, task, env_yaml, train_yaml, checkpoint, body, source, num_envs)
     # num_envs is NOT passed unless explicitly asked for. It is an optimistic-bias
     # knob -- success is the best attempt per CLIP (a running max indexed by seq_id,
     # over a clip-count denominator, intermimic.py:1685-1703), so more envs can only
     # raise the success rate and lower the pose errors. It therefore belongs in the
     # committed eval config, where it is reviewable and identical across arms, not
-    # in a caller's default that silently overrides it.
-    if num_envs:
-        cmd += ["--num_envs", str(num_envs)]
+    # in a caller's default that silently overrides it. (build_cmd appends the
+    # flag only when num_envs is non-zero, i.e. only when explicitly asked for.)
     tag = f"[body={body},source={source}]"
     print(f"\n{tag} running (timeout={timeout_sec}s)")
     env = {"PYTHONPATH": f"{repo_root}/isaacgym/src:{repo_root}"}
@@ -208,6 +225,13 @@ def main():
                         "(success = best attempt per clip), so overriding it for one "
                         "arm and not another invalidates the comparison.")
     p.add_argument("--timeout-per-pair", type=int, default=900)
+    p.add_argument("--entry", default=DEFAULT_ENTRY,
+                   help="python module to run: intermimic.run (teachers) or "
+                        "intermimic.run_distill (g3 students; the DAgger wrapper feeds "
+                        "the student obs). Set from the eval cfg's evalEntry by eval_one.sh.")
+    p.add_argument("--task", default=DEFAULT_TASK,
+                   help="task class: InterMimic (teachers) or InterMimicDistillG3 "
+                        "(g3 students). Set from the eval cfg's evalTask by eval_one.sh.")
     p.add_argument("--resume", action="store_true",
                    help="reuse the pairs that already succeeded in --output-csv "
                         "and only run the missing ones. A pair counts as done "
@@ -248,7 +272,7 @@ def main():
                 metrics, rc, timed_out = run_eval(
                     body, source, args.env_yaml, args.train_yaml,
                     args.checkpoint, args.num_envs, args.repo_root,
-                    args.timeout_per_pair,
+                    args.timeout_per_pair, entry=args.entry, task=args.task,
                 )
                 row = {
                     "body": body,
