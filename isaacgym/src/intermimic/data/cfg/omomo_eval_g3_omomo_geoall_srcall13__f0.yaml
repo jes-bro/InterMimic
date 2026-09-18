@@ -11,20 +11,19 @@ evalFor:
   - g3_omomo_geoall_srcall13__f0
 
 env:
-  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
-                                           # Success is the BEST attempt per CLIP:
-                                           # _max_execution_steps is indexed by
-                                           # seq_id and is a running MAXIMUM, and the
-                                           # denominator is the clip count, not the
-                                           # env count (intermimic.py:1685-1703). So
-                                           # more envs = more attempts per clip = a
-                                           # success rate that can only rise and pose
-                                           # errors that can only fall. It must be
-                                           # IDENTICAL across every arm compared.
-                                           # 2048 = the count all 30 g2/g3 arms
-                                           # actually trained at (the launchers pass
-                                           # --num_envs "${NUM_ENVS:-2048}", which
-                                           # overrides the 4096 in their train yamls).
+  numEnvs: 1024                            # = InterMimic's own eval scripts
+                                           # (isaacgym/scripts/eval_teacher.sh and
+                                           # eval_student.sh pass --num_envs 1024).
+                                           # This is CONCURRENCY, not the attempt
+                                           # budget: the player runs games_num*10 =
+                                           # 20,000 episodes per (body, source) pair
+                                           # and stops on that count (learning/
+                                           # intermimic_players.py:52-60,173,363,392;
+                                           # rl_games player.py:41 games_num=2000),
+                                           # so attempts per clip do not depend on
+                                           # this value. Kept IDENTICAL across every
+                                           # eval cfg (check_eval_cfg.py enforces it
+                                           # and the value). Was 2048 until 2026-09-18.
                                            # NOTE: eval CSVs written before 2026-09-04
                                            # used 1024 and are NOT comparable to these.
   envSpacing: 2

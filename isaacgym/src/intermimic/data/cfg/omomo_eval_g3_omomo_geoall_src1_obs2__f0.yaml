@@ -23,12 +23,13 @@
 # harder per clip. The bias runs against src1 and is independent of how good the
 # policy is:
 #
-#   g3_omomo_geoall__f0     52 clips   ~39 attempts/clip at 2048 envs
-#   THIS ARM               532 clips   ~3.8 attempts/clip at 2048 envs
+#   g3_omomo_geoall__f0     52 clips   ~385 attempts/clip (20,000 episodes)
+#   THIS ARM               532 clips   ~38 attempts/clip (20,000 episodes)
 #
 # So a src1 WIN over the sub2 rung is a strong result -- it won carrying the
 # handicap. A src1 LOSS is AMBIGUOUS and must not be read as "more source motion
-# hurts". numEnvs stays 2048 regardless: raising it for this arm alone would
+# hurts". numEnvs (1024, concurrency only) stays: the 20,000-episode player budget is what
+# sets attempts per clip, and raising anything for this arm alone would
 # break comparability with every other arm, which is the worse failure. The fix
 # for the ambiguous case is to score both arms on a COMMON clip set -- which the
 # src1src2 eval config can do and this one cannot, its tree holding one source.
@@ -39,20 +40,19 @@ evalFor:
   - g3_omomo_geoall_src1_obs2__f0
 
 env:
-  numEnvs: 2048                            # NOT a free knob, and NOT a placeholder.
-                                           # Success is the BEST attempt per CLIP:
-                                           # _max_execution_steps is indexed by
-                                           # seq_id and is a running MAXIMUM, and the
-                                           # denominator is the clip count, not the
-                                           # env count (intermimic.py:1685-1703). So
-                                           # more envs = more attempts per clip = a
-                                           # success rate that can only rise and pose
-                                           # errors that can only fall. It must be
-                                           # IDENTICAL across every arm compared.
-                                           # 2048 = the count all 30 g2/g3 arms
-                                           # actually trained at (the launchers pass
-                                           # --num_envs "${NUM_ENVS:-2048}", which
-                                           # overrides the 4096 in their train yamls).
+  numEnvs: 1024                            # = InterMimic's own eval scripts
+                                           # (isaacgym/scripts/eval_teacher.sh and
+                                           # eval_student.sh pass --num_envs 1024).
+                                           # This is CONCURRENCY, not the attempt
+                                           # budget: the player runs games_num*10 =
+                                           # 20,000 episodes per (body, source) pair
+                                           # and stops on that count (learning/
+                                           # intermimic_players.py:52-60,173,363,392;
+                                           # rl_games player.py:41 games_num=2000),
+                                           # so attempts per clip do not depend on
+                                           # this value. Kept IDENTICAL across every
+                                           # eval cfg (check_eval_cfg.py enforces it
+                                           # and the value). Was 2048 until 2026-09-18.
                                            # NOTE: eval CSVs written before 2026-09-04
                                            # used 1024 and are NOT comparable to these.
   envSpacing: 2

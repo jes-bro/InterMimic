@@ -298,13 +298,31 @@ def test_numobs_matches_its_own_horizons_and_betas(path):
 
 
 def test_scoring_budget_is_uniform_across_eval_cfgs():
-    """success is the best attempt per CLIP, so numEnvs biases the score upward.
+    """One exam for every arm: every eval cfg scores at the same numEnvs, and it
+    is InterMimic's own eval-script value (isaacgym/scripts/eval_*.sh).
 
-    Two arms scored at different budgets are not comparable and nothing in the
-    CSV would show it.
+    numEnvs is concurrency, not the attempt budget -- the player runs 20,000
+    episodes per pair regardless (intermimic_players.py:52-60,173,363,392) --
+    but a value that differs between cfgs, or from upstream, is still drift.
     """
     seen = {cec.load(p)["env"].get("numEnvs") for p in EVAL_CFGS}
-    assert len(seen) == 1, f"eval cfgs disagree on numEnvs: {seen}"
+    assert seen == {cec.EVAL_NUM_ENVS}, f"eval cfgs numEnvs: {seen}, fleet value {cec.EVAL_NUM_ENVS}"
+    for script in ("eval_teacher.sh", "eval_student.sh"):
+        src = open(os.path.join(REPO, "isaacgym", "scripts", script)).read()
+        assert f"--num_envs {cec.EVAL_NUM_ENVS}" in src, f"upstream {script} disagrees with EVAL_NUM_ENVS"
+
+
+def test_no_arm_overrides_the_player_episode_budget():
+    """The attempt budget is rl_games' games_num * n_game_life * 10 = 20,000
+    episodes per pair (defaults 2000 / 1, rl_games 1.1.4 common/player.py:41-43).
+    A train cfg with a player block would silently give its arm a different
+    budget; check_budget refuses that, and --check-all must stay clean."""
+    assert not cec.check_budget(), "\n".join(cec.check_budget())
+    for p, arms in cec.eval_cfgs().items():
+        for spec in arms:
+            rlg = cec.train_rlg_for(spec)
+            player = ((cec.load(rlg).get("params") or {}).get("config") or {}).get("player") or {}
+            assert "games_num" not in player and "n_game_life" not in player, spec
 
 
 @pytest.mark.parametrize("path", EVAL_CFGS, ids=lambda p: os.path.basename(p))

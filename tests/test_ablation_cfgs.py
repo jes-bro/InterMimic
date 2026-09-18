@@ -134,7 +134,11 @@ def test_eval_cfg_is_the_base_eval_plus_the_mirrored_key(base, abl):
     fe, ft = _flat(ev["env"]), _flat(tr)
     for k in EXPECTED[abl] - {"subjectBodies"}:
         assert fe.get(k, "<absent>") == ft.get(k, "<absent>"), (arm, k)
-    assert ev["env"]["numEnvs"] == 2048 and ev["env"]["stateInit"] == "Start"
+    # 1024 = InterMimic's own eval scripts (isaacgym/scripts/eval_*.sh); numEnvs is
+    # concurrency, not the attempt budget (the player runs 20,000 episodes per pair
+    # regardless). Was 2048 until 2026-09-18. check_eval_cfg.EVAL_NUM_ENVS is the
+    # single source of truth; this pin just makes drift in an ablation cfg loud here.
+    assert ev["env"]["numEnvs"] == 1024 and ev["env"]["stateInit"] == "Start"
 
 
 # Launcher code lines an ablation may add/remove/change relative to its base.

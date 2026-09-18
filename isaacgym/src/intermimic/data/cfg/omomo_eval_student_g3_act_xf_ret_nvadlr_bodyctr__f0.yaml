@@ -14,10 +14,10 @@
 # rolloutLength 700: the merged activity set's longest clips are soccer 677 /
 # cpr 691 frames (bball max 189); the window must exceed every clip or success
 # is impossible by construction. Start init from frame 0, one placeholder body
-# (patched per pair by eval_per_pair.py), 2048 envs = the fleet's scoring
-# budget. NOTE the students TRAINED at NUM_ENVS=1024 (launcher default 2048
-# overridden at submission; 40 GB cards) -- numEnvs here is the scoring
-# budget, uniform across every eval cfg, not the training env count.
+# (patched per pair by eval_per_pair.py), numEnvs 1024 = InterMimic's own
+# eval-script value, identical across every eval cfg. numEnvs is concurrency,
+# not the attempt budget: the player runs 20,000 episodes per pair regardless
+# (see the numEnvs comment below).
 #
 # twinEnvs stays true (mirrored, not eval-owned): in Start init every env starts
 # at frame 0 and env e already runs clip e % n_clips, so the twin sync (partner
@@ -105,7 +105,19 @@ env:
   localRootObs: false
   moreRigid: false
   motion_file: InterAct/behave_cari4d_act
-  numEnvs: 2048                            # scoring budget (see header), NOT the training env count
+  numEnvs: 1024                            # = InterMimic's own eval scripts
+                                           # (isaacgym/scripts/eval_teacher.sh and
+                                           # eval_student.sh pass --num_envs 1024).
+                                           # This is CONCURRENCY, not the attempt
+                                           # budget: the player runs games_num*10 =
+                                           # 20,000 episodes per (body, source) pair
+                                           # and stops on that count (learning/
+                                           # intermimic_players.py:52-60,173,363,392;
+                                           # rl_games player.py:41 games_num=2000),
+                                           # so attempts per clip do not depend on
+                                           # this value. Kept IDENTICAL across every
+                                           # eval cfg (check_eval_cfg.py enforces it
+                                           # and the value). Was 2048 until 2026-09-18.
   numObs: 9594
   objectConvexHull: true
   objectPropsFile: isaacgym/src/intermimic/data/cfg/object_props_g3_act.yaml
