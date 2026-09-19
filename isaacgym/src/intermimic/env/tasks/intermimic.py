@@ -118,6 +118,8 @@ class InterMimic(Humanoid_SMPLX):
         'studentObsHorizons',
         # Arm A of the student: explicit body wire + contrastive twin envs
         'studentBodyFeatures', 'twinEnvs',
+        # Arm A, bodyctr_sync: a twin pair resets as a unit (utils/distill_g3.twin_coreset)
+        'twinCoReset',
         # per-object mass/restitution for a mixed-dataset env (utils/object_props.py)
         'objectPropsFile',
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test

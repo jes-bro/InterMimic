@@ -168,3 +168,22 @@ def token_layout(input_shape, num_tokens, readout_token, body_dim=0):
         raise ValueError(f"[transformer] token block {tok} (obs {input_shape} - body {body_dim}) "
                          f"is not divisible by num_tokens {num_tokens}")
     return tok // num_tokens, num_tokens, readout_token
+
+
+def twin_coreset(reset, twin_a, twin_b):
+    """Arm A twinCoReset: a twin pair resets as a unit. In place on `reset`
+    (the task's reset_buf, 0/1 per env; any array with fancy indexing works --
+    torch or numpy): for every pair (twin_a[i], twin_b[i]) both entries become
+    reset[a] OR reset[b]. Returns the per-pair joint flag.
+
+    Why: the twin sync only re-aligns a pair when BOTH envs are in the same
+    reset batch. Under Hybrid init resets are staggered, so a pair spends ~95%
+    of its time out of sync (measured 2026-09-19: ~5% valid pairs per rollout
+    on the bodyctr arm) and the contrastive term only ever saw the first frames
+    after a joint reset. Forcing the partner to reset with its twin keeps pairs
+    aligned for whole episodes. Only reset_buf is touched: the partner is a
+    TRUNCATION (bootstrap its value), never a termination."""
+    joint = reset[twin_a] | reset[twin_b]
+    reset[twin_a] = joint
+    reset[twin_b] = joint
+    return joint

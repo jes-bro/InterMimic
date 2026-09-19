@@ -42,6 +42,7 @@ from .intermimic import InterMimic
 from ...learning import (intermimic_models_teacher, intermimic_network_builder,
                          intermimic_transformer_network_builder)
 from ...utils.body_features import body_feature_matrix, twin_pairs, twin_partners
+from ...utils.distill_g3 import twin_coreset
 from ...utils.distill_g3 import (build_source_lookup, load_teacher_manifest,
                                  student_obs_width, validate_horizons)
 from ...utils.path_utils import resolve_data_path, resolve_repo_path
@@ -109,6 +110,14 @@ class InterMimicDistillG3(InterMimic):
             print(f"[distill-g3] twin envs ON: {len(pairs)} pairs over {self.num_envs} envs "
                   f"({2 * len(pairs)} paired, {self.num_envs - 2 * len(pairs)} unpaired; "
                   f"partner = e + {len(self.object_name)} objects)", flush=True)
+        # twinCoReset (utils/distill_g3.twin_coreset): a pair resets as a unit, so
+        # it stays synced for whole episodes instead of only right after a
+        # coincidental joint reset. Meaningless without twins -> refuse, don't ignore.
+        self._twin_coreset = bool(env.get('twinCoReset', False))
+        if self._twin_coreset and not self._twin_envs:
+            raise ValueError("[distill-g3] twinCoReset: true needs twinEnvs: true (nothing to co-reset)")
+        if self._twin_coreset:
+            print("[distill-g3] twin co-reset ON: a twin pair resets together (partner = truncation)", flush=True)
         self.obs_buf_retarget = torch.zeros((self.num_envs, expected), device=self.device, dtype=torch.float)
         self.action_buf = torch.zeros((self.num_envs, 153), device=self.device, dtype=torch.float)
         self.mu_buf = torch.zeros((self.num_envs, 153), device=self.device, dtype=torch.float)
@@ -257,7 +266,14 @@ class InterMimicDistillG3(InterMimic):
             self.mu_buf = mus_all[self.model_indices, self.sample_indices]
 
     def post_physics_step(self):
-        super().post_physics_step()
+        super().post_physics_step()          # ... -> _compute_reset() fills reset_buf / _terminate_buf
+        if self._twin_coreset:
+            # After terminations are known and BEFORE the agent reads reset_buf as
+            # its done flags: the partner of any resetting env resets too. Only
+            # reset_buf -- _terminate_buf is left alone, so the partner is a
+            # truncation (value bootstrapped), not a failure. Both then land in
+            # the same reset batch and _twin_sync re-aligns them.
+            twin_coreset(self.reset_buf, self.twin_a, self.twin_b)
         if self._g3_ready:
             self._query_teachers()
 

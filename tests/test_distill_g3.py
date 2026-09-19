@@ -151,6 +151,33 @@ def test_token_layout_refusals():
         dg.token_layout(9594, 0, 0)
 
 
+# ----------------------------------------------------------------- twin co-reset
+def test_twin_coreset_resets_pairs_as_a_unit():
+    """Either member flagged -> both flagged; unflagged pairs and unpaired envs
+    untouched; in place; returns the per-pair joint flag. numpy stands in for
+    the task's torch reset_buf (same fancy-indexing semantics)."""
+    import numpy as np
+    #        env: 0  1  2  3  4  5  6  7
+    reset = np.array([1, 0, 0, 0, 0, 1, 0, 0])
+    twin_a = np.array([0, 2, 4])       # pairs (0,1) (2,3) (4,5); envs 6,7 unpaired
+    twin_b = np.array([1, 3, 5])
+    joint = dg.twin_coreset(reset, twin_a, twin_b)
+    assert reset.tolist() == [1, 1, 0, 0, 1, 1, 0, 0]
+    assert joint.tolist() == [1, 0, 1]
+    # idempotent, and a clean buffer stays clean
+    assert dg.twin_coreset(reset, twin_a, twin_b).tolist() == [1, 0, 1]
+    clean = np.zeros(8, dtype=int)
+    assert dg.twin_coreset(clean, twin_a, twin_b).tolist() == [0, 0, 0] and clean.sum() == 0
+
+
+def test_twin_coreset_works_on_torch_long_buffers():
+    """The task's reset_buf is a torch long tensor (0/1); `|` must be bitwise-or on it."""
+    torch = pytest.importorskip("torch")
+    reset = torch.tensor([0, 0, 1, 0], dtype=torch.long)
+    joint = dg.twin_coreset(reset, torch.tensor([0, 2]), torch.tensor([1, 3]))
+    assert reset.tolist() == [0, 0, 1, 1] and joint.tolist() == [0, 1] and reset.dtype == torch.long
+
+
 # ----------------------------------------------------------------- wiring (source checks)
 def _src(*parts):
     return open(os.path.join(PKG, *parts)).read()

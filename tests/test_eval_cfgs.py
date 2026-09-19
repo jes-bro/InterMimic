@@ -203,7 +203,8 @@ def test_eval_one_routes_a_variant_id_to_its_cfg_and_suffixes_the_csv(tmp_path):
 # InterMimicDistillG3 (its own horizons + Arm A's body dims) and handed to the
 # network by the DAgger wrapper; the teacher path would feed it obs_buf.
 # --------------------------------------------------------------------------
-STUDENTS = ["student_g3_act_xf_ret_nvadlr__f0", "student_g3_act_xf_ret_nvadlr_bodyctr__f0"]
+STUDENTS = ["student_g3_act_xf_ret_nvadlr__f0", "student_g3_act_xf_ret_nvadlr_bodyctr__f0",
+            "student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0"]
 
 
 @pytest.mark.parametrize("arm", STUDENTS)
@@ -225,6 +226,8 @@ def test_student_eval_cfg_mirrors_the_student_and_uses_the_student_path(arm):
         # with one body per eval pair (twin_partners refuses), so they are OFF
         assert env["studentBodyFeatures"] is True and env["twinEnvs"] is False
         assert env["numObsRetarget"] == 9594 + 156
+    if "bodyctr_sync" in arm:
+        assert env["twinCoReset"] is False and train["twinCoReset"] is True   # training-only, like twins
 
 
 def test_student_launcher_and_log_naming():

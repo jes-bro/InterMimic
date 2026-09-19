@@ -90,6 +90,9 @@ EVAL_OWNED = {
     # (every pair would), so the task cannot even be constructed with twins on.
     # Off at eval; the scored rollouts are identical either way (2026-09-19).
     "twinEnvs",
+    # bodyctr_sync's co-reset rides on twins (the task refuses it without them),
+    # so it is off at eval for the same reason.
+    "twinCoReset",
 }
 
 # NOT in the set above, deliberately: default_buffer_size_multiplier and
