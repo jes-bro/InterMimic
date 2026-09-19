@@ -84,6 +84,12 @@ EVAL_OWNED = {
     # so at eval the buffer never diverges from it -- leaving 3 would sample among
     # identical copies. 1 is chosen for determinism and to drop a 3x allocation.
     "physicalBufferSize",
+    # Arm A's twin envs exist only for the contrastive loss, which the player
+    # never computes. At eval subjectBodies is ONE body per pair, and
+    # body_features.twin_partners refuses to pair two envs that share a body
+    # (every pair would), so the task cannot even be constructed with twins on.
+    # Off at eval; the scored rollouts are identical either way (2026-09-19).
+    "twinEnvs",
 }
 
 # NOT in the set above, deliberately: default_buffer_size_multiplier and

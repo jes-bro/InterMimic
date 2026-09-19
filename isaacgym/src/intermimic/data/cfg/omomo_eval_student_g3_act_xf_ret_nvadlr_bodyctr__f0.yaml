@@ -19,9 +19,12 @@
 # not the attempt budget: the player runs 20,000 episodes per pair regardless
 # (see the numEnvs comment below).
 #
-# twinEnvs stays true (mirrored, not eval-owned): in Start init every env starts
-# at frame 0 and env e already runs clip e % n_clips, so the twin sync (partner
-# copies clip + start frame) changes nothing about which clips get attempted.
+# twinEnvs is OFF here (eval-owned, differs from the arm). It was first left
+# true on the argument that the twin sync changes nothing in Start init -- true,
+# but the task constructor pairs envs (e, e + n_objects) and REFUSES a pair that
+# shares a body (body_features.twin_partners); with one body per eval pair every
+# pair shares it, so the eval died at startup on every pair (Lambda, 2026-09-19).
+# Twins feed only the contrastive training loss, which the player never computes.
 # Read on the held-out bodies sub10/sub13/sub16 at a MATCHED epoch against the
 # other student (Arm A vs plain); per source, as with the teachers.
 evalFor:
@@ -180,7 +183,7 @@ env:
   studentObsHorizons: [1, 4, 7, 10, 13, 16]
   numObsRetarget: 9750
   studentBodyFeatures: true
-  twinEnvs: true
+  twinEnvs: false                          # eval-owned: see header
 sim:
   flex:
     num_inner_iterations: 10

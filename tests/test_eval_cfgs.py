@@ -220,7 +220,10 @@ def test_student_eval_cfg_mirrors_the_student_and_uses_the_student_path(arm):
     assert env["numObsRetarget"] == train["numObsRetarget"]              # 9594 plain / 9750 Arm A
     assert env["teacherPolicy"] == train["teacherPolicy"]                # teachers load at eval too
     if "bodyctr" in arm:
-        assert env["studentBodyFeatures"] is True and env["twinEnvs"] is True
+        # body features are part of the student's obs, so they stay on; twins
+        # only feed the contrastive TRAINING loss and cannot be constructed
+        # with one body per eval pair (twin_partners refuses), so they are OFF
+        assert env["studentBodyFeatures"] is True and env["twinEnvs"] is False
         assert env["numObsRetarget"] == 9594 + 156
 
 
