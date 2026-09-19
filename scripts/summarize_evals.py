@@ -32,6 +32,24 @@ def heldout_for(path, override):
     return FOLD_TRIOS["__f0"]          # historical default split
 
 
+def per_body_means(rows, metric):
+    """{body: mean of `metric` over that body's non-crashed rows}.
+
+    A CSV holds one row per (body, source) pair, so a body appears once per
+    source. The previous version built {body: value} straight from the rows,
+    which kept only the LAST source's row per body and silently threw the rest
+    away -- a bball7 CSV (3 bodies x 7 sources) was being reported from one
+    clip per body. Average over sources first; the group means over bodies
+    stay unweighted on top of that.
+    """
+    acc = {}
+    for r in rows:
+        if r[metric] == "":
+            continue                    # crashed pair: excluded, never zero
+        acc.setdefault(r["body"], []).append(float(r[metric]))
+    return {b: float(np.mean(v)) for b, v in acc.items()}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csvs", nargs="+")
@@ -49,7 +67,7 @@ def main():
     for p in args.csvs:
         rows = list(csv.DictReader(open(p)))
         dropped = [r for r in rows if r[m] == ""]
-        d = {r["body"]: float(r[m]) for r in rows if r[m] != ""}
+        d = per_body_means(rows, m)
         ck = rows[0]["checkpoint"]
         # Find the experiment directory ANYWHERE in the path. This used to take
         # component [1], which assumes checkpoints/<exp>/nn/... -- true for our
