@@ -204,7 +204,8 @@ def test_eval_one_routes_a_variant_id_to_its_cfg_and_suffixes_the_csv(tmp_path):
 # network by the DAgger wrapper; the teacher path would feed it obs_buf.
 # --------------------------------------------------------------------------
 STUDENTS = ["student_g3_act_xf_ret_nvadlr__f0", "student_g3_act_xf_ret_nvadlr_bodyctr__f0",
-            "student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0"]
+            "student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0",
+            "student_g3_act_xf_ret_nvadlr_matchctr__f0", "student_g3_act_xf_ret_nvadlr_matchctr_body__f0"]
 
 
 @pytest.mark.parametrize("arm", STUDENTS)
@@ -228,6 +229,11 @@ def test_student_eval_cfg_mirrors_the_student_and_uses_the_student_path(arm):
         assert env["numObsRetarget"] == 9594 + 156
     if "bodyctr_sync" in arm:
         assert env["twinCoReset"] is False and train["twinCoReset"] is True   # training-only, like twins
+    if "matchctr" in arm:
+        assert env["cohortClips"] == 1 and train["cohortClips"] == 4          # cohorts off at eval
+        assert "twinEnvs" not in env
+        if "matchctr_body" in arm:
+            assert env["studentBodyFeatures"] is True and env["numObsRetarget"] == 9594 + 156
 
 
 def test_student_launcher_and_log_naming():

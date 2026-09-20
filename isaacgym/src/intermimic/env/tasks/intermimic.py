@@ -120,6 +120,8 @@ class InterMimic(Humanoid_SMPLX):
         'studentBodyFeatures', 'twinEnvs',
         # Arm A, bodyctr_sync: a twin pair resets as a unit (utils/distill_g3.twin_coreset)
         'twinCoReset',
+        # matchctr: envs on one object follow a cohort leader's clip (utils/matched_ctr.py)
+        'cohortClips',
         # per-object mass/restitution for a mixed-dataset env (utils/object_props.py)
         'objectPropsFile',
         # 'seed' is injected into cfg['env'] by rl_games' player on the --test

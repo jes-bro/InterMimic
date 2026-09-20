@@ -43,6 +43,7 @@ from ...learning import (intermimic_models_teacher, intermimic_network_builder,
                          intermimic_transformer_network_builder)
 from ...utils.body_features import body_feature_matrix, twin_pairs, twin_partners
 from ...utils.distill_g3 import twin_coreset
+from ...utils.matched_ctr import cohort_leader
 from ...utils.distill_g3 import (build_source_lookup, load_teacher_manifest,
                                  student_obs_width, validate_horizons)
 from ...utils.path_utils import resolve_data_path, resolve_repo_path
@@ -118,6 +119,25 @@ class InterMimicDistillG3(InterMimic):
             raise ValueError("[distill-g3] twinCoReset: true needs twinEnvs: true (nothing to co-reset)")
         if self._twin_coreset:
             print("[distill-g3] twin co-reset ON: a twin pair resets together (partner = truncation)", flush=True)
+
+        # ---- matchctr: cohort clip sampling (utils/matched_ctr.py) ----
+        # Envs on one object, in groups of k consecutive blocks, follow their
+        # leader's clip at reset (own start frame) so the matched-frame
+        # contrastive term in the agent finds same-clip/same-frame/other-body
+        # positives in the rollout. k <= 1 = off (every env samples on its own).
+        # On the activity data every object has ONE clip, so this is a no-op there.
+        self._cohort_k = int(env.get('cohortClips', 1))
+        if self._cohort_k < 1:
+            raise ValueError(f"[distill-g3] cohortClips must be >= 1, got {self._cohort_k}")
+        if self._cohort_k > 1:
+            all_e = torch.arange(self.num_envs, device=self.device)
+            self._cohort_lead = cohort_leader(all_e, len(self.object_name), self._cohort_k)
+            n_lead = int((self._cohort_lead == all_e).sum())
+            print(f"[distill-g3] cohort clips ON: k={self._cohort_k} -> {n_lead} leaders over "
+                  f"{self.num_envs} envs ({len(self.object_name)} objects); followers adopt the "
+                  f"leader's clip at reset", flush=True)
+        else:
+            self._cohort_lead = None
         self.obs_buf_retarget = torch.zeros((self.num_envs, expected), device=self.device, dtype=torch.float)
         self.action_buf = torch.zeros((self.num_envs, 153), device=self.device, dtype=torch.float)
         self.mu_buf = torch.zeros((self.num_envs, 153), device=self.device, dtype=torch.float)
@@ -201,6 +221,8 @@ class InterMimicDistillG3(InterMimic):
         own body block) and start frame, and re-samples its PSI slot for that
         motion (the slot it drew was for a different motion; copying the first's
         slot could point at a slot never written for this body's motion)."""
+        if self._cohort_lead is not None:
+            motion_ids, motion_times, ref_idx = self._cohort_sync(env_ids, motion_ids, motion_times, ref_idx)
         if not self._twin_envs:
             return motion_ids, motion_times, ref_idx
         pos = torch.full((self.num_envs,), -1, device=self.device, dtype=torch.long)
@@ -216,6 +238,34 @@ class InterMimicDistillG3(InterMimic):
         rr = self.ref_reward[motion_ids[pb], :, motion_times[pb]]
         cdf = torch.cumsum(rr / rr.sum(1, keepdim=True), dim=1)
         ref_idx[pb] = torch.searchsorted(cdf, torch.rand((cdf.shape[0], 1), device=cdf.device)).squeeze(1)
+        return motion_ids, motion_times, ref_idx
+
+    def _cohort_sync(self, env_ids, motion_ids, motion_times, ref_idx):
+        """matchctr cohorts: every resetting FOLLOWER takes its leader's clip --
+        the leader's freshly sampled clip if the leader is in this reset batch,
+        else the clip the leader is currently running -- mapped into the
+        follower's own body block. Its start frame is re-drawn for the adopted
+        clip with the parent's Hybrid rule (cal_cdf) unless it was 0 (a frame-0
+        start is valid for any clip), and its PSI slot is re-drawn for the new
+        motion, exactly as _twin_sync does. Leaders are untouched."""
+        lead = self._cohort_lead[env_ids]
+        follower = lead != env_ids
+        if not bool(follower.any()):
+            return motion_ids, motion_times, ref_idx
+        pos = torch.full((self.num_envs,), -1, device=self.device, dtype=torch.long)
+        pos[env_ids] = torch.arange(env_ids.shape[0], device=self.device)
+        for p in torch.where(follower)[0].tolist():
+            e, L = int(env_ids[p]), int(lead[p])
+            pl = int(pos[L])
+            lead_clip = int(motion_ids[pl] % self._n_clips) if pl >= 0 else int(self.data_id[L] % self._n_clips)
+            motion_ids[p] = lead_clip + int(self._env_subject_idx[e]) * self._n_clips
+            if int(motion_times[p]) != 0:
+                cdf = self.cal_cdf(motion_ids, p)
+                motion_times[p] = torch.searchsorted(cdf, torch.rand(1, device=self.device))[0]
+        fp = torch.where(follower)[0]
+        rr = self.ref_reward[motion_ids[fp], :, motion_times[fp]]
+        cdf = torch.cumsum(rr / rr.sum(1, keepdim=True), dim=1)
+        ref_idx[fp] = torch.searchsorted(cdf, torch.rand((cdf.shape[0], 1), device=cdf.device)).squeeze(1)
         return motion_ids, motion_times, ref_idx
 
     def _update_twin_valid(self):

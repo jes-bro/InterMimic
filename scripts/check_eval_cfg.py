@@ -93,6 +93,10 @@ EVAL_OWNED = {
     # bodyctr_sync's co-reset rides on twins (the task refuses it without them),
     # so it is off at eval for the same reason.
     "twinCoReset",
+    # matchctr's cohort sampling biases WHICH clips run at once (followers copy
+    # their leader). At eval every clip must be visited on its own terms, so it
+    # is 1 (= off) there; it only feeds the training-time contrastive term.
+    "cohortClips",
 }
 
 # NOT in the set above, deliberately: default_buffer_size_multiplier and

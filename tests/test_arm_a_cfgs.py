@@ -84,21 +84,23 @@ def test_launcher(BASE, arm):
         assert "objectPropsFile" in s and "--activities bball7 soccer15 cpr13" in s   # act guards kept
 
 
-def test_bodyctr_sync_is_bodyctr_plus_coreset():
+@pytest.mark.parametrize("BASE", BASES)
+def test_bodyctr_sync_is_bodyctr_plus_coreset(BASE):
     """bodyctr_sync = bodyctr + twinCoReset: true, nothing else (env), and the
-    train cfg differs from bodyctr's only in the experiment name."""
-    b, a = _env("act_xf_ret_nvadlr_bodyctr"), _env("act_xf_ret_nvadlr_bodyctr_sync")
+    train cfg differs from bodyctr's only in the experiment name. Both bases
+    (OMOMO and activities)."""
+    b, a = _env(f"{BASE}_bodyctr"), _env(f"{BASE}_bodyctr_sync")
     diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     assert diff == {"env.twinCoReset"} and a["env.twinCoReset"] is True
     assert a["env.twinEnvs"] is True                                      # co-reset needs twins
-    bt, at = _train("act_xf_ret_nvadlr_bodyctr"), _train("act_xf_ret_nvadlr_bodyctr_sync")
+    bt, at = _train(f"{BASE}_bodyctr"), _train(f"{BASE}_bodyctr_sync")
     diff = {k for k in set(at) | set(bt) if at.get(k) != bt.get(k)}
     assert diff == {"params.config.full_experiment_name"}
-    assert at["params.config.full_experiment_name"] == "smplx_student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0"
-    s = open(os.path.join(ROOT, "slurm_student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0.sh")).read()
-    assert "CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0.yaml" in s
-    assert "CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_student_g3_act_xf_ret_nvadlr_bodyctr_sync__f0.yaml" in s
-    assert '--job-name="stu-g3_act_xf_ret_nvadlr_bodyctr_sync__f0"' in s
+    assert at["params.config.full_experiment_name"] == f"smplx_student_g3_{BASE}_bodyctr_sync__f0"
+    s = open(os.path.join(ROOT, f"slurm_student_g3_{BASE}_bodyctr_sync__f0.sh")).read()
+    assert f"CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_student_g3_{BASE}_bodyctr_sync__f0.yaml" in s
+    assert f"CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_student_g3_{BASE}_bodyctr_sync__f0.yaml" in s
+    assert f'--job-name="stu-g3_{BASE}_bodyctr_sync__f0"' in s
     assert "bodyctr__f0" not in s.replace("bodyctr_sync__f0", "")         # no stale bodyctr names left
 
 

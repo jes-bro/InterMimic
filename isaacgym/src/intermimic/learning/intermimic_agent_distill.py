@@ -28,6 +28,7 @@
 
 from rl_games.algos_torch import torch_ext
 from . import a2c_common
+from ..utils.matched_ctr import find_matched_pairs, matched_infonce
 from isaacgym.torch_utils import *
 
 import numpy as np
@@ -54,10 +55,20 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         _cc = config.get('contrastive') or {}
         self.contrastive_coef = float(_cc.get('coef', 0.0))
         self.contrastive_tau = float(_cc.get('temperature', 0.1))
+        # positives: 'twins'   = Arm A twin envs (pairs fixed by env index, synced at reset)
+        #            'matched' = matchctr: same clip + same frame + other body, found in
+        #                        the rollout after the fact (utils/matched_ctr.py)
+        self.contrastive_mode = str(_cc.get('positives', 'twins'))
+        if self.contrastive_mode not in ('twins', 'matched'):
+            raise ValueError(f"[distill] config.contrastive.positives must be 'twins' or 'matched', "
+                             f"got {self.contrastive_mode!r}")
+        self.matched_anchors = int(_cc.get('max_anchors', 4096))     # anchors searched per rollout
+        self.matched_batch = int(_cc.get('pairs_per_step', 512))     # pairs per loss evaluation
         self._twin_obs = None
         self._twin_valid = None
+        self._ctr_pairs = None
         if self.contrastive_coef > 0:
-            print(f"[distill] contrastive twin term ON: coef {self.contrastive_coef}, "
+            print(f"[distill] contrastive term ON ({self.contrastive_mode} positives): coef {self.contrastive_coef}, "
                   f"temperature {self.contrastive_tau}", flush=True)
         return
 
@@ -66,6 +77,8 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         pair (same clip, same frame, different bodies) are the positive; every
         other pair's envs are negatives. Pulls the trunk toward body-invariant,
         motion-preserving. Returns a scalar (0 with no valid pairs this step)."""
+        if self.contrastive_mode == 'matched':
+            return self._matched_loss()
         T = self._twin_obs.shape[0]
         t = int(torch.randint(T, (1,)).item())
         valid = self._twin_valid[t] > 0.5
@@ -83,6 +96,24 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         ce = torch.nn.functional.cross_entropy
         return 0.5 * (ce(logits, labels) + ce(logits.t(), labels))
 
+    def _matched_loss(self):
+        """matchctr: InfoNCE over a random batch of the rollout's matched pairs
+        (same clip, same frame, different body; found once per rollout in
+        play_steps). Negatives = pairs on other clips; same-clip other-frame
+        columns are masked (utils/matched_ctr.matched_infonce). 0 with < 2 pairs."""
+        if self._ctr_pairs is None or self._ctr_pairs[0].numel() < 2:
+            return torch.zeros((), device=self.ppo_device)
+        ia, ib = self._ctr_pairs
+        if ia.numel() > self.matched_batch:
+            sel = torch.randperm(ia.numel(), device=ia.device)[:self.matched_batch]
+            ia, ib = ia[sel], ib[sel]
+        obs = self._preproc_obs(torch.cat([self._ctr_obs[ia], self._ctr_obs[ib]], dim=0))
+        net = self.model.a2c_network
+        z, _ = net.trunk(obs)
+        z = torch.nn.functional.normalize(net.project(z), dim=-1)
+        n = ia.numel()
+        return matched_infonce(z[:n], z[n:], self._ctr_clip[ia], self.contrastive_tau)
+
 
     def init_tensors(self):
         super().init_tensors()
@@ -94,7 +125,7 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         # Defaults to ones so non-cross-pair runs are unaffected.
         self.experience_buffer.tensor_dict['valid_mask'] = torch.ones(batch_shape, dtype=torch.float32, device=self.ppo_device)
         self.tensor_list += ['amp_obs', 'rand_action_mask', 'expert', 'expert_mask', 'valid_mask']
-        if self.contrastive_coef > 0:
+        if self.contrastive_coef > 0 and self.contrastive_mode == 'twins':
             task = self.vec_env.env.task
             if getattr(task, 'twin_a', None) is None:
                 raise ValueError("[distill] config.contrastive.coef > 0 but the env has no twin pairs "
@@ -104,6 +135,19 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             # per-step validity of each pair, kept beside the rollout (not part of the dataset)
             self.experience_buffer.tensor_dict['twin_valid'] = torch.zeros(
                 (self.horizon_length, self._twin_a.shape[0]), dtype=torch.float32, device=self.ppo_device)
+        elif self.contrastive_coef > 0:      # 'matched'
+            task = self.vec_env.env.task
+            for attr in ('data_id', 'progress_buf', '_env_subject_idx', '_n_clips'):
+                if not hasattr(task, attr):
+                    raise ValueError(f"[distill] contrastive.positives 'matched' needs task.{attr} "
+                                     f"(a retargeted InterMimicDistillG3 env)")
+            if getattr(task, 'twin_a', None) is not None:
+                raise ValueError("[distill] contrastive.positives 'matched' with twinEnvs on: pick one")
+            # per-step (clip, frame) of every env, kept beside the rollout; body is static per env
+            self._ctr_body = task._env_subject_idx.to(self.ppo_device).long()
+            for k in ('ctr_clip', 'ctr_frame'):
+                self.experience_buffer.tensor_dict[k] = torch.zeros(
+                    (self.horizon_length, self.num_actors), dtype=torch.long, device=self.ppo_device)
         return
 
 
@@ -144,8 +188,14 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             else:
                 valid_now = torch.ones(self.num_actors, device=self.ppo_device)
             self.experience_buffer.update_data('valid_mask', n, valid_now)
-            if self.contrastive_coef > 0:
+            if self.contrastive_coef > 0 and self.contrastive_mode == 'twins':
                 self.experience_buffer.tensor_dict['twin_valid'][n] = task.twin_valid.float().to(self.ppo_device)
+            elif self.contrastive_coef > 0:
+                # (clip, frame) the obs at step n was computed against: data_id is the
+                # body-blocked motion id, progress_buf the motion frame (set to the
+                # start frame at reset, +1 per step)
+                self.experience_buffer.tensor_dict['ctr_clip'][n] = (task.data_id % task._n_clips).to(self.ppo_device)
+                self.experience_buffer.tensor_dict['ctr_frame'][n] = task.progress_buf.to(self.ppo_device).long()
 
             # One-time diagnostic so we can SEE whether the mask was found
             if n == 0 and self.epoch_num < 2:
@@ -227,7 +277,7 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         mb_advs = self.discount_values(mb_fdones, mb_values, mb_rewards, mb_next_values)
         mb_returns = mb_advs + mb_values
 
-        if self.contrastive_coef > 0:
+        if self.contrastive_coef > 0 and self.contrastive_mode == 'twins':
             # Keep the un-flattened rollout for the twin pass (obs are [T, N, D];
             # the dataset below shuffles samples and would split every pair).
             self._twin_obs = self.experience_buffer.tensor_dict['obses'].clone()
@@ -235,6 +285,19 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
             if self.epoch_num % 200 == 1:
                 print(f"[distill] twin pairs valid this rollout: "
                       f"{100 * self._twin_valid.mean().item():.1f}%", flush=True)
+        elif self.contrastive_coef > 0:
+            # matchctr: flatten the rollout and find the positives ONCE; the loss
+            # draws random batches of them at every minibatch step.
+            T, N = self.horizon_length, self.num_actors
+            self._ctr_obs = self.experience_buffer.tensor_dict['obses'].reshape(T * N, -1).clone()
+            self._ctr_clip = self.experience_buffer.tensor_dict['ctr_clip'].reshape(T * N).clone()
+            frame = self.experience_buffer.tensor_dict['ctr_frame'].reshape(T * N)
+            body = self._ctr_body.repeat(T)
+            self._ctr_pairs = find_matched_pairs(self._ctr_clip, frame, body, self.matched_anchors)
+            if self.epoch_num % 200 == 1:
+                n_pairs = self._ctr_pairs[0].numel()
+                print(f"[distill] matched pairs this rollout: {n_pairs} of {min(self.matched_anchors, T * N)} "
+                      f"anchors ({100 * n_pairs / max(1, min(self.matched_anchors, T * N)):.1f}%)", flush=True)
 
         batch_dict = self.experience_buffer.get_transformed_list(a2c_common.swap_and_flatten01, self.tensor_list)
         batch_dict['returns'] = a2c_common.swap_and_flatten01(mb_returns)
