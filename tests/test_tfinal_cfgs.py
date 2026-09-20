@@ -7,12 +7,14 @@ Run:  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_tfinal_cfgs.p
 """
 import os
 
+import pytest
 import yaml
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CFG = os.path.join(ROOT, "isaacgym", "src", "intermimic", "data", "cfg")
 RLG = os.path.join(CFG, "train", "rlg")
-BASE = "omomo_xf_ret_nvadlr"
+BASES = ["omomo_xf_ret_nvadlr", "act_xf_ret_nvadlr"]   # the OMOMO student and the activity student
+TEACHER_DIR = {"omomo_xf_ret_nvadlr": "g3_omomo", "act_xf_ret_nvadlr": "g3_act"}
 
 
 def _flat(node, prefix=""):
@@ -31,28 +33,31 @@ def _train(n):
     return _flat(yaml.safe_load(open(os.path.join(RLG, f"omomo_student_g3_{n}__f0.yaml"))))
 
 
-def test_env_differs_only_in_teacher_dir():
+@pytest.mark.parametrize("BASE", BASES)
+def test_env_differs_only_in_teacher_dir(BASE):
     b, a = _env(BASE), _env(f"{BASE}_tfinal")
     diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     assert diff == {"env.teacherPolicy"}
-    assert a["env.teacherPolicy"] == "checkpoints/teachers/g3_omomo_tfinal"
-    assert b["env.teacherPolicy"] == "checkpoints/teachers/g3_omomo"       # the Sep-16 dir, untouched
+    assert a["env.teacherPolicy"] == f"checkpoints/teachers/{TEACHER_DIR[BASE]}_tfinal"
+    assert b["env.teacherPolicy"] == f"checkpoints/teachers/{TEACHER_DIR[BASE]}"   # the Sep-16 dir, untouched
 
 
-def test_train_cfg_differs_only_in_name():
+@pytest.mark.parametrize("BASE", BASES)
+def test_train_cfg_differs_only_in_name(BASE):
     b, a = _train(BASE), _train(f"{BASE}_tfinal")
     diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     assert diff == {"params.config.full_experiment_name"}
     assert a["params.config.full_experiment_name"] == f"smplx_student_g3_{BASE}_tfinal__f0"
 
 
-def test_launcher_points_at_tfinal_everything():
+@pytest.mark.parametrize("BASE", BASES)
+def test_launcher_points_at_tfinal_everything(BASE):
     s = open(os.path.join(ROOT, f"slurm_student_g3_{BASE}_tfinal__f0.sh")).read()
     assert f"CFG_ENV=isaacgym/src/intermimic/data/cfg/omomo_student_g3_{BASE}_tfinal__f0.yaml" in s
     assert f"CFG_TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_student_g3_{BASE}_tfinal__f0.yaml" in s
     assert f'--job-name="stu-g3_{BASE}_tfinal__f0"' in s
-    assert "--out checkpoints/teachers/g3_omomo_tfinal" in s                 # header's collect step
-    assert "--out checkpoints/teachers/g3_omomo\n" not in s                 # no stale pointer to the Sep-16 dir
+    assert f"--out checkpoints/teachers/{TEACHER_DIR[BASE]}_tfinal" in s      # header's collect step
+    assert f"--out checkpoints/teachers/{TEACHER_DIR[BASE]}\n" not in s      # no stale pointer to the Sep-16 dir
     # every CODE mention of the base experiment name is the tfinal one (the header
     # comment may name the original launcher it was copied from)
     code = "\n".join(l for l in s.splitlines() if not l.lstrip().startswith("#") or l.startswith("#SBATCH"))
@@ -62,4 +67,6 @@ def test_launcher_points_at_tfinal_everything():
 def test_runbook_has_the_tfinal_section():
     s = open(os.path.join(ROOT, "COLLAB_RUNBOOK_g3_students.md")).read()
     assert "g3-distill-tfinal" in s and "checkpoints/teachers/g3_omomo_tfinal" in s
+    assert "checkpoints/teachers/g3_act_tfinal" in s
+    assert "NUM_ENVS=1024 sh scripts/gcp_run_in_tmux.sh slurm_student_g3_act_xf_ret_nvadlr_tfinal__f0.sh" in s
     assert "NUM_ENVS=1024 sh scripts/gcp_run_in_tmux.sh slurm_student_g3_omomo_xf_ret_nvadlr_tfinal__f0.sh" in s
