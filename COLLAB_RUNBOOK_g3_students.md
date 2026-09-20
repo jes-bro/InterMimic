@@ -52,6 +52,24 @@ NUM_ENVS=1024 matches the Sep-16 run. Push `mimic_00004000.pth` and
 `mimic_00009000.pth` to the bucket when they land
 (`gcloud storage cp checkpoints/smplx_student_g3_omomo_xf_ret_nvadlr_tfinal__f0/nn/mimic_0000N000.pth gs://jesb-intermimic/checkpoints/smplx_student_g3_omomo_xf_ret_nvadlr_tfinal__f0/nn/`).
 
+## Activity student on the FINAL teachers (`_tfinal`)
+
+Same idea as the OMOMO `_tfinal` above, for the activity student: the Sep-16 run
+used the three activity teachers mid-training. Branch `g3-distill-tfinal`.
+
+    git fetch origin g3-distill-tfinal && git checkout g3-distill-tfinal
+    sh scripts/gcp_stage.sh pull-teachers smplx_teacher_g3_bball7_geoall__f0 smplx_teacher_g3_soccer15_geoall__f0 smplx_teacher_g3_cpr13_geoall__f0
+    python3 scripts/collect_g3_teachers.py --activities bball7 soccer15 cpr13 --out checkpoints/teachers/g3_act_tfinal
+    NUM_ENVS=1024 sh scripts/gcp_run_in_tmux.sh slurm_student_g3_act_xf_ret_nvadlr_tfinal__f0.sh act_xf_tfinal
+
+The data pull is the same as the activity student above (skip if present); only
+the teachers are re-pulled. The collect step prints the epoch it picked per
+teacher -- RECORD those three numbers, they are what "final" means for this run.
+cpr13 may still be training, in which case its number is the latest snapshot at
+launch, not its wall. NUM_ENVS=1024 matches the Sep-16 run; on a VM that already
+had a tmux server running, `tmux kill-server` first or the new session inherits
+the old environment and NUM_ENVS silently reverts to the launcher default.
+
 ## Activity student (bball7 + soccer15 + cpr13 teachers -> one student)
 
     sh scripts/gcp_stage.sh pull-assets
