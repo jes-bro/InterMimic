@@ -31,6 +31,27 @@ missing -- read the error, don't work around it.
 RAM: this data set is ~226 GB resident (ragged storage, streamed from CPU); the
 machine needs ~300 GB. The reference load takes 10-20 minutes with nothing printed.
 
+## OMOMO student on the FINAL teachers (`_tfinal`)
+
+The OMOMO XF student above was distilled from the teachers as they stood on
+2026-09-16, mid-training. `_tfinal` is the same student on the teachers' final
+checkpoints. Branch `g3-distill-tfinal`. The only differences: its own name,
+and its own teacher dir so the set it learned from is recorded on disk.
+
+    git fetch origin g3-distill-tfinal && git checkout g3-distill-tfinal
+    sh scripts/gcp_stage.sh pull-teachers smplx_teacher_g3_omomo_geoall_src1__f0 smplx_teacher_g3_omomo_geoall_src2__f0 smplx_teacher_g3_omomo_geoall_src3__f0 smplx_teacher_g3_omomo_geoall_src5__f0 smplx_teacher_g3_omomo_geoall_src6__f0 smplx_teacher_g3_omomo_geoall_src7__f0 smplx_teacher_g3_omomo_geoall_src8__f0 smplx_teacher_g3_omomo_geoall_src9__f0 smplx_teacher_g3_omomo_geoall_src11__f0 smplx_teacher_g3_omomo_geoall_src12__f0 smplx_teacher_g3_omomo_geoall_src14__f0 smplx_teacher_g3_omomo_geoall_src15__f0 smplx_teacher_g3_omomo_geoall_src17__f0
+    python3 scripts/collect_g3_teachers.py --omomo-sources 1 2 3 5 6 7 8 9 11 12 14 15 17 --out checkpoints/teachers/g3_omomo_tfinal
+    NUM_ENVS=1024 sh scripts/gcp_run_in_tmux.sh slurm_student_g3_omomo_xf_ret_nvadlr_tfinal__f0.sh omomo_xf_tfinal
+
+Before the pull: the teachers in the bucket must be the FINAL ones. Each
+teacher's last snapshot is pushed from the machine that trained it with
+`sh scripts/gcp_stage.sh push-teacher <exp>`; the collect step prints the
+epoch it picked for every source -- check those are the final epochs, not
+44-67k. Data is the same pull as the OMOMO student above (skip if present).
+NUM_ENVS=1024 matches the Sep-16 run. Push `mimic_00004000.pth` and
+`mimic_00009000.pth` to the bucket when they land
+(`gcloud storage cp checkpoints/smplx_student_g3_omomo_xf_ret_nvadlr_tfinal__f0/nn/mimic_0000N000.pth gs://jesb-intermimic/checkpoints/smplx_student_g3_omomo_xf_ret_nvadlr_tfinal__f0/nn/`).
+
 ## Activity student (bball7 + soccer15 + cpr13 teachers -> one student)
 
     sh scripts/gcp_stage.sh pull-assets
