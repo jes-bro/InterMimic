@@ -221,9 +221,9 @@ class InterMimicDistillG3(InterMimic):
         own body block) and start frame, and re-samples its PSI slot for that
         motion (the slot it drew was for a different motion; copying the first's
         slot could point at a slot never written for this body's motion)."""
-        if self._cohort_lead is not None:
+        if getattr(self, '_cohort_lead', None) is not None:      # getattr: parent __init__ may reset first
             motion_ids, motion_times, ref_idx = self._cohort_sync(env_ids, motion_ids, motion_times, ref_idx)
-        if not self._twin_envs:
+        if not getattr(self, '_twin_envs', False):
             return motion_ids, motion_times, ref_idx
         pos = torch.full((self.num_envs,), -1, device=self.device, dtype=torch.long)
         pos[env_ids] = torch.arange(env_ids.shape[0], device=self.device)
@@ -317,7 +317,7 @@ class InterMimicDistillG3(InterMimic):
 
     def post_physics_step(self):
         super().post_physics_step()          # ... -> _compute_reset() fills reset_buf / _terminate_buf
-        if self._twin_coreset:
+        if getattr(self, '_twin_coreset', False):   # getattr: parent __init__ may step before ours finishes
             # After terminations are known and BEFORE the agent reads reset_buf as
             # its done flags: the partner of any resetting env resets too. Only
             # reset_buf -- _terminate_buf is left alone, so the partner is a
