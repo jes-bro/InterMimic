@@ -1,0 +1,202 @@
+# EVAL config -- SCORING VARIANT `gpumotion` of student_g3_omomo_xf_ret_nvadlr__f0:
+# the same eval with the reference motion held on the GPU (cpuMotionData false)
+# instead of streamed from CPU every step. A SPEED A/B, not a different exam.
+#
+# WHY. The arm trains with cpuMotionData because its 13-source x 43-body motion
+# set (~226 GiB ragged) cannot sit in VRAM. An eval pair loads ONE body x ONE
+# source -- tens of MB -- so the per-step CPU->GPU gather is pure overhead. On
+# bluefin (V100) the mirrored eval of one pair (sub10 x sub2) hit the 900 s limit
+# with ~5 CPU cores busy the whole time (79 min user in 15 min wall).
+#
+# WHY IT SHOULD NOT MOVE A NUMBER. cpuMotionData only decides where the tensors
+# live: intermimic.py _motion_gather indexes the SAME tensor with the SAME index
+# either way ("identical result" -- plain indexing when the tensor is on GPU),
+# and ragged storage supports either device (intermimic.py:784). This variant
+# exists to CHECK that claim on a real pair before anything relies on it: run it
+# and the mirrored cfg on the same pair and compare the rows.
+#
+# The guard (scripts/check_eval_cfg.py) allows ONLY the key declared under
+# scoringVariant.overrides to differ from the arm, and requires it to differ.
+# CSVs from this cfg carry the suffix __gpumotion so they never collide with,
+# or get mistaken for, the mirrored eval's.
+#
+# Everything below the evalFor/scoringVariant block is byte-identical to
+# omomo_eval_student_g3_omomo_xf_ret_nvadlr__f0.yaml except the one overridden line.
+evalFor:
+  - student_g3_omomo_xf_ret_nvadlr__f0+gpumotion
+evalEntry: intermimic.run_distill
+evalTask: InterMimicDistillG3
+
+scoringVariant:
+  name: gpumotion
+  arm: student_g3_omomo_xf_ret_nvadlr__f0
+  overrides:
+    cpuMotionData: false    # motion resident on GPU; same values, no per-step CPU gather
+
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: false                     # scoringVariant gpumotion: the one overridden line
+  raggedMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  enableEvaluation: True
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/OMOMO_new
+  numEnvs: 1024                            # = InterMimic's own eval scripts
+                                           # (isaacgym/scripts/eval_teacher.sh and
+                                           # eval_student.sh pass --num_envs 1024).
+                                           # This is CONCURRENCY, not the attempt
+                                           # budget: the player runs games_num*10 =
+                                           # 20,000 episodes per (body, source) pair
+                                           # and stops on that count (learning/
+                                           # intermimic_players.py:52-60,173,363,392;
+                                           # rl_games player.py:41 games_num=2000),
+                                           # so attempts per clip do not depend on
+                                           # this value. Kept IDENTICAL across every
+                                           # eval cfg (check_eval_cfg.py enforces it
+                                           # and the value). Was 2048 until 2026-09-18.
+  numObs: 9594
+  objectDensity: 200
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 1                    # PSI off at eval (identical mocap copies otherwise)
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_srcall13
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 1000                     # uniform across every eval cfg; > every clip in any arm (longest: cpr 691)
+  saveImages: false
+  stateInit: "Start"                       # metrics only exist in Start init (intermimic.py)
+  subjectBodies: ['sub2']                  # placeholder: every pair overrides it (and dataSub) via
+                                           # --subject_bodies / --data_sub (eval_per_pair.py:141,
+                                           # applied in utils/config.py:111 for run.py AND run_distill.py)
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+  # --- distillation (InterMimicDistillG3) ---
+  teacherPolicy: checkpoints/teachers/g3_omomo
+  teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoall__f0.yaml
+  studentObsHorizons: [1, 4, 7, 10, 13, 16]
+  numObsRetarget: 9594
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
