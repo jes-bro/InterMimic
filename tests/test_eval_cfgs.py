@@ -203,7 +203,8 @@ def test_eval_one_routes_a_variant_id_to_its_cfg_and_suffixes_the_csv(tmp_path):
 # InterMimicDistillG3 (its own horizons + Arm A's body dims) and handed to the
 # network by the DAgger wrapper; the teacher path would feed it obs_buf.
 # --------------------------------------------------------------------------
-STUDENTS = ["student_g3_act_xf_ret_nvadlr__f0", "student_g3_act_xf_ret_nvadlr_bodyctr__f0"]
+STUDENTS = ["student_g3_act_xf_ret_nvadlr__f0", "student_g3_omomo_xf_ret_nvadlr__f0",
+            "student_g3_omomo_halves_xf_ret_nvadlr__f0", "student_g3_act7_xf_ret_nvadlr__f0"]
 
 
 @pytest.mark.parametrize("arm", STUDENTS)
@@ -217,11 +218,8 @@ def test_student_eval_cfg_mirrors_the_student_and_uses_the_student_path(arm):
     assert cfg["evalTask"] == "InterMimicDistillG3"
     env, train = cfg["env"], cec.load(cec.train_cfg_for(arm))["env"]
     assert env["rolloutLength"] == EVAL_ROLLOUT                           # > cpr 691 / soccer 677
-    assert env["numObsRetarget"] == train["numObsRetarget"]              # 9594 plain / 9750 Arm A
+    assert env["numObsRetarget"] == train["numObsRetarget"] == 9594      # 6 horizons x 1599
     assert env["teacherPolicy"] == train["teacherPolicy"]                # teachers load at eval too
-    if "bodyctr" in arm:
-        assert env["studentBodyFeatures"] is True and env["twinEnvs"] is True
-        assert env["numObsRetarget"] == 9594 + 156
 
 
 def test_student_launcher_and_log_naming():
@@ -240,14 +238,14 @@ def _emit(run, ck):
 
 
 def test_eval_one_routes_a_student_through_run_distill(tmp_path):
-    ck = tmp_path / "smplx_student_g3_act_xf_ret_nvadlr_bodyctr__f0" / "nn" / "mimic_00006000.pth"
+    ck = tmp_path / "smplx_student_g3_omomo_xf_ret_nvadlr__f0" / "nn" / "mimic_00006000.pth"
     ck.parent.mkdir(parents=True); ck.write_bytes(b"")
     plan = _emit(STUDENTS[1], ck)
-    assert plan["ENV_YAML"].endswith("omomo_eval_student_g3_act_xf_ret_nvadlr_bodyctr__f0.yaml")
-    assert plan["TRAIN_YAML"].endswith("train/rlg/omomo_student_g3_act_xf_ret_nvadlr_bodyctr__f0.yaml")
+    assert plan["ENV_YAML"].endswith("omomo_eval_student_g3_omomo_xf_ret_nvadlr__f0.yaml")
+    assert plan["TRAIN_YAML"].endswith("train/rlg/omomo_student_g3_omomo_xf_ret_nvadlr__f0.yaml")
     assert (plan["EVAL_ENTRY"], plan["EVAL_TASK"]) == ("intermimic.run_distill", "InterMimicDistillG3")
-    assert plan["EXP"] == "smplx_student_g3_act_xf_ret_nvadlr_bodyctr__f0"
-    assert plan["OUT"].endswith("smplx_student_g3_act_xf_ret_nvadlr_bodyctr__f0__mimic_00006000__indist+heldout+syn.csv")
+    assert plan["EXP"] == "smplx_student_g3_omomo_xf_ret_nvadlr__f0"
+    assert plan["OUT"].endswith("smplx_student_g3_omomo_xf_ret_nvadlr__f0__mimic_00006000__indist+heldout+syn.csv")
     assert plan["BODIES"].split()[-8:-5] == ["sub10", "sub16", "sub13"] or "sub10" in plan["BODIES"]
 
 
