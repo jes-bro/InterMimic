@@ -11,9 +11,11 @@
 # at eval (teacherPolicy dir) -- the task loads them at startup and queries
 # them every step; the student's actions are what get scored.
 #
-# rolloutLength 700: the merged activity set's longest clips are soccer 677 /
-# cpr 691 frames (bball max 189); the window must exceed every clip or success
-# is impossible by construction. Start init from frame 0, one placeholder body
+# rolloutLength 1000, the value EVERY eval cfg uses: the episode is cut at
+# rolloutLength-1 and a clip counts as a success only when its own last frame
+# is reached, so a window shorter than a clip makes success impossible. The
+# longest clip in any arm is cpr's 691 (soccer 677, bball 189, OMOMO < 700),
+# so 1000 clears them all and the value never has to be revisited per arm. Start init from frame 0, one placeholder body
 # (patched per pair by eval_per_pair.py), numEnvs 1024 = InterMimic's own
 # eval-script value, identical across every eval cfg. numEnvs is concurrency,
 # not the attempt budget: the player runs 20,000 episodes per pair regardless
@@ -168,7 +170,7 @@ env:
     r: 2.5
     rv: 0.0
   robotType: smplx/omomo.xml
-  rolloutLength: 700                       # > longest clip (cpr 691) so success is reachable
+  rolloutLength: 1000                     # uniform across every eval cfg; > every clip in any arm (longest: cpr 691)
   saveImages: false
   stateInit: "Start"                       # metrics only exist in Start init (intermimic.py)
   subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py

@@ -216,7 +216,7 @@ def test_student_eval_cfg_mirrors_the_student_and_uses_the_student_path(arm):
     assert cfg["evalEntry"] == "intermimic.run_distill"
     assert cfg["evalTask"] == "InterMimicDistillG3"
     env, train = cfg["env"], cec.load(cec.train_cfg_for(arm))["env"]
-    assert env["rolloutLength"] == 700                                   # > cpr 691 / soccer 677
+    assert env["rolloutLength"] == EVAL_ROLLOUT                           # > cpr 691 / soccer 677
     assert env["numObsRetarget"] == train["numObsRetarget"]              # 9594 plain / 9750 Arm A
     assert env["teacherPolicy"] == train["teacherPolicy"]                # teachers load at eval too
     if "bodyctr" in arm:
@@ -274,6 +274,7 @@ def test_eval_per_pair_build_cmd_threads_entry_and_task():
 # --------------------------------------------------------------------------
 # 4. The settings that decide what a number MEANS.
 # --------------------------------------------------------------------------
+EVAL_ROLLOUT = 1000        # uniform eval rollout window; > the longest clip in any arm (cpr 691)
 EVAL_CFGS = sorted(cec.eval_cfgs())
 
 
@@ -327,17 +328,21 @@ def test_no_arm_overrides_the_player_episode_budget():
 
 @pytest.mark.parametrize("path", EVAL_CFGS, ids=lambda p: os.path.basename(p))
 def test_rollout_window_can_reach_the_success_condition(path):
-    """rolloutLength must exceed the clips, or success is impossible.
+    """rolloutLength is EVAL_ROLLOUT in every eval cfg, or success is impossible.
 
     humanoid.py:553 cuts the episode at rolloutLength-1; success is
-    _max_execution_steps >= max_episode_length-1 (intermimic.py:1703). Inheriting
-    an arm's training window (g3 trains at 50) reports 0% for every arm.
+    _max_execution_steps >= max_episode_length-1 (intermimic.py:1703). A window
+    shorter than a clip makes that unreachable for that clip -- it has bitten
+    twice: inheriting g3's training window of 50 reported 0% for every arm, and
+    soccer inheriting bball's 300 silently capped three clips of 333/359/677
+    frames. One value for every arm, above the longest clip in ANY of them
+    (cpr 691), so no arm can be quietly truncated again by a per-arm number.
     """
     env = cec.load(path)["env"]
     train_rollout = cec.load(cec.train_cfg_for(cec.eval_cfgs()[path][0]))["env"]["rolloutLength"]
     assert env["rolloutLength"] > train_rollout, (
         "eval rollout window must be widened past the training window")
-    assert env["rolloutLength"] >= 300
+    assert env["rolloutLength"] == EVAL_ROLLOUT
 
 
 # --------------------------------------------------------------------------
