@@ -7,6 +7,7 @@ from ...learning import (intermimic_network_builder,
                          intermimic_transformer_network_builder,
                          intermimic_models_teacher)
 from ...utils.path_utils import resolve_data_path, resolve_repo_path
+from ...utils.per_body_refs import per_body_reference_files
 from torch.func import vmap
 from functorch import make_functional
 import os
@@ -103,8 +104,47 @@ class InterMimic_All(InterMimic):
         #                         device_type=device_type,
         #                         device_id=device_id,
         #                         headless=headless)
+        # --- OPTION A: score this policy against OUR per-body reference -----------
+        # retargetedMotionDir (the g3 convention, <tree>/<body>/<clip>.pt) makes this
+        # task read the SAME reference the g3 students are scored against, for the one
+        # body an eval pair runs. WITHOUT the key nothing changes -- the paper's own
+        # pairing (motion_file raw + motion_file_retarget = the authors' tree) is
+        # untouched, so every existing InterMimic_All run is byte-identical.
+        #
+        # WHY BOTH LISTS. Here motion_file feeds hoi_data (what the metrics score
+        # against and what resets seed from) and motion_file_retarget feeds the
+        # policy's observation. The g3 task has ONE reference for both (intermimic.py
+        # replaces motion_file with the per-body files), so matching it means pointing
+        # both at our per-body clip.
+        #
+        # WHY THE CLIP LIST COMES FROM motion_file. The authors' retarget tree covers
+        # 2,209 clips; OMOMO_new (what the g3 students are scored on) has 3,356.
+        # Listing from motion_file puts this policy on the SAME clips as the students.
+        #
+        # ONE BODY ONLY: an eval runs one (body, source) pair (eval_per_pair.py passes
+        # --subject_bodies), so there is no body-major expansion and object_id /
+        # dataset_index stay clip-length. More than one body is refused rather than
+        # silently mis-indexed; training with this key is not supported.
+        retarget_dir = cfg['env'].get('retargetedMotionDir', None)
+        if retarget_dir:
+            bodies = list(cfg['env'].get('subjectBodies') or [])
+            src_dir = cfg['env']['motion_file']
+            files, clip_names = per_body_reference_files(retarget_dir, src_dir,
+                                                         cfg['env']['dataSub'], bodies)
+            motion_file_retarget = clip_names            # basenames, for object_name below
+            self.motion_file_retarget = files
+            self.num_motions = len(files)
+            self.dataset_index = to_torch([int(n.split('_')[0][3:]) for n in clip_names],
+                                          dtype=torch.long, device=self.device)
+            print(f"[retarget] InterMimic_All scored against OUR reference: {len(files)} clips of "
+                  f"body {bodies[0]} from '{retarget_dir}' (observation AND metrics; clip list "
+                  f"from {src_dir})", flush=True)
+
         object_name = [motion_example.split('_')[-2] for motion_example in self.motion_file_retarget]
-        self.motion_file = [os.path.join(cfg['env']['motion_file'], data_path) for data_path in motion_file_retarget]
+        if retarget_dir:
+            self.motion_file = list(self.motion_file_retarget)   # one reference for both (see above)
+        else:
+            self.motion_file = [os.path.join(cfg['env']['motion_file'], data_path) for data_path in motion_file_retarget]
         self.object_id = to_torch([self.object_name.index(name) for name in object_name], dtype=torch.long, device=self.device)
         self.obj2motion = torch.stack([self.object_id == k for k in range(len(self.object_name))], dim=0)
         self.hoi_data = self._load_motion(self.motion_file, startk=1)
