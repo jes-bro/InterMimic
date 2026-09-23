@@ -20,7 +20,8 @@
 #       --source-mjcf isaacgym/src/intermimic/data/assets/smplx/smplh_behave_sub404.xml \
 #       --target-mjcf isaacgym/src/intermimic/data/assets/smplx/smplh_behave_sub204.xml \
 #       --iters 300 --out-dir InterAct/behave_cari4d_novice_bodymajor/sub204
-#   (the sub401 solve went 0.58 -> 0.16 cm; record this one's numbers here too)
+#   -> contact error 0.90 -> 0.17 cm, all-body 1.06 -> 0.45 cm (2026-09-23, ikura)
+#      (the sub401 solve went 0.58 -> 0.16 cm)
 #
 # Mirrors omomo_eval_student_g3_act_xf_ret_nvadlr__f0.yaml (the student's eval
 # config) apart from the keys this demo has to change:
