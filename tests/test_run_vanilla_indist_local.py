@@ -6,8 +6,10 @@ sweep does the right work, and the parts that quietly ruin a sweep if wrong:
 
   * every body is assigned exactly once (none dropped, none scored twice)
   * the bodies spread evenly over the GPUs rather than piling on one
-  * a body whose CSV already exists is SKIPPED, so a re-run after a crash fills
-    gaps instead of redoing finished work (and cannot double-write a CSV)
+  * a body whose CSV is COMPLETE is SKIPPED, so a re-run after a crash (or to add
+    GPUs as they free up) fills gaps instead of redoing finished work -- while a
+    startup failure's full CSV of exit_code=1 rows, and a killed sweep's partial
+    CSV, are both redone rather than taken as results
   * a missing input fails loudly instead of launching jobs that die in a rollout
 
 DRY=1 makes this testable: the script prints its plan and exits before any GPU
@@ -89,26 +91,44 @@ def _csv(repo, body, rows):
     (repo / "eval_results" / f"vanilla_indist_{body}.csv").write_text(HEADER + rows)
 
 
-def test_scored_csv_is_skipped(repo):
-    _csv(repo, "sub5", SCORED)
+def test_complete_csv_is_skipped(repo):
+    """13 sources -> 13 rows, at least one scored."""
+    _csv(repo, "sub5", SCORED * 13)
     got = plan_lines(run(repo, GPUS="4 5").stdout)
     assert got["sub5"][1] is True                      # skipped
     assert got["sub1"][1] is False                     # others still run
 
 
+def test_partial_csv_from_a_killed_sweep_is_redone(repo):
+    """A sweep killed mid-body leaves a FEW scored rows. That body is not done:
+    skipping it would freeze it at 1/13 pairs and the mean would quietly be over
+    one source instead of thirteen."""
+    _csv(repo, "sub5", SCORED)
+    got = plan_lines(run(repo, GPUS="4 5").stdout)
+    assert got["sub5"][1] is False
+
+
+def test_completeness_follows_the_source_count(repo):
+    """With one source, one row IS complete -- the bar is per-sweep, not a constant."""
+    _csv(repo, "sub5", SCORED)
+    got = plan_lines(run(repo, GPUS="4", SOURCES="sub1").stdout)
+    assert got["sub5"][1] is True
+
+
 def test_all_failure_csv_is_not_treated_as_done(repo):
-    """A job that dies at startup writes a FULL csv of exit_code=1 rows with empty
-    metrics (what a missing MJCF did). Skipping that would leave a silent hole."""
+    """A job that dies at startup writes a FULL csv (13 rows) of exit_code=1 rows
+    with empty metrics -- what a missing MJCF did. Row count alone would accept it,
+    so the scored-row half of the check is what rejects it."""
     _csv(repo, "sub5", FAILED * 13)
     got = plan_lines(run(repo, GPUS="4 5").stdout)
     assert got["sub5"][1] is False                     # re-run, not skipped
 
 
-def test_partially_failed_csv_counts_as_done(repo):
-    """One real scored row is enough: the pair-level failures are recorded in the
-    CSV itself (exit_code=1) and are visible to the summary, so the body is not
-    silently re-run and half-overwritten."""
-    _csv(repo, "sub5", FAILED + SCORED)
+def test_finished_body_with_some_failed_pairs_counts_as_done(repo):
+    """A COMPLETE body whose individual pairs partly failed is done: those failures
+    are recorded as exit_code=1 rows and are visible to the summary, so re-running
+    would only redo work and could half-overwrite the file."""
+    _csv(repo, "sub5", FAILED * 12 + SCORED)
     got = plan_lines(run(repo, GPUS="4 5").stdout)
     assert got["sub5"][1] is True
 
