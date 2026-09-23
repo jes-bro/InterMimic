@@ -23,6 +23,18 @@
 #   objectPropsFile      object_props_novice_bball.yaml -- this clip's object is
 #                        the generic `bball`, which the activity props file does
 #                        not cover, and an uncovered object is refused.
+#   teacherPolicy        checkpoints/teachers/g3_act_novice_demo -- a COPY of
+#                        the g3_act teacher dir whose teachers.yaml also claims
+#                        source 204 (appended to the bball7 entry). The task
+#                        routes every env to the teacher that owns its clip's
+#                        source and REFUSES a source with no teacher
+#                        (utils/distill_g3.build_source_lookup), which a novice
+#                        by definition has. Which teacher it names is
+#                        immaterial here: at rollout the teacher's action is
+#                        computed and thrown away (the player keeps only the
+#                        student's), so it never touches the sim. Build it with:
+#                          cp -r checkpoints/teachers/g3_act checkpoints/teachers/g3_act_novice_demo
+#                          (then add 204 to the bball7 entry's `sources`)
 #   subjectHeightsFile   demo_novice_heights.json, holding 204 -> 1.585 m, the
 #                        canonical SMPL-X height the task itself falls back to
 #                        when no per-subject body is set. NOT measured from his
@@ -187,7 +199,7 @@ env:
   subjectHeightsFile: scripts/demo_novice_heights.json   # demo-only; see header
   terminationHeight: 0.15
   # --- distillation (InterMimicDistillG3) ---
-  teacherPolicy: checkpoints/teachers/g3_act
+  teacherPolicy: checkpoints/teachers/g3_act_novice_demo   # routes sub204; see header
   teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoall__f0.yaml
   studentObsHorizons: [1, 4, 7, 10, 13, 16]
   numObsRetarget: 9594
