@@ -14,8 +14,13 @@
 #
 # ONE CSV PER BODY. Parallel jobs writing one CSV lose rows (that is how
 # ho2_xf_sub10 was clobbered). Each body writes eval_results/<PREFIX>_<body>.csv
-# and its own log; a body whose CSV already exists is SKIPPED, so re-running
-# after a crash fills the gaps instead of redoing finished work.
+# and its own log; a body whose CSV already holds a SCORED row is SKIPPED, so
+# re-running after a crash fills the gaps instead of redoing finished work.
+#
+# "Scored", not merely "exists": a job that dies at startup still writes a full
+# CSV whose every row is exit_code=1 with empty metrics (a missing MJCF does
+# exactly this). Skipping on existence alone would treat that as done and leave
+# a hole in the sweep that only shows up as a body missing from the final mean.
 #
 # Usage (from this worktree's root, in the conda env):
 #   GPUS="4 5 6 7" sh scripts/run_vanilla_indist_local.sh
@@ -50,6 +55,14 @@ for f in "$CKPT" "$ENV_YAML" "$TRAIN_YAML" slurm_eval_curriculum.sh; do
 done
 mkdir -p eval_results
 
+# done(csv) -- true only if the CSV holds at least one row with a success_rate
+# (column 7) and exit_code 0 (column 10). See the header note: an all-failure CSV
+# exists but is not a result.
+done_csv() {
+  [ -f "$1" ] || return 1
+  awk -F, 'NR > 1 && $7 != "" && $10 == 0 { found = 1 } END { exit !found }' "$1"
+}
+
 # Deal the bodies round-robin onto the GPUs: GPU i takes bodies i, i+N, i+2N...
 # so the work is spread evenly even when the body count is not a multiple of N.
 n_gpu=$(echo "$GPUS" | wc -w)
@@ -65,7 +78,7 @@ echo "   checkpoint : $CKPT"
 echo "   sources    : $SOURCES"
 echo "$plan" | while read -r g b; do
   out="eval_results/${PREFIX}_${b}.csv"
-  if [ -f "$out" ]; then echo "   gpu $g  $b  SKIP (exists: $out)"; else echo "   gpu $g  $b  -> $out"; fi
+  if done_csv "$out"; then echo "   gpu $g  $b  SKIP (scored: $out)"; else echo "   gpu $g  $b  -> $out"; fi
 done
 
 [ "${DRY:-0}" = 1 ] && { echo "   (DRY=1: not running)"; exit 0; }
@@ -75,7 +88,9 @@ for g in $GPUS; do
   (
     for b in $(echo "$plan" | awk -v g="$g" '$1 == g { print $2 }'); do
       out="eval_results/${PREFIX}_${b}.csv"
-      [ -f "$out" ] && continue
+      done_csv "$out" && continue
+      # a previous all-failure CSV would otherwise make eval_per_pair refuse to write
+      rm -f "$out"
       CUDA_VISIBLE_DEVICES="$g" OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 \
       CHECKPOINT="$CKPT" OUT="$out" \
       ENV_YAML="$ENV_YAML" TRAIN_YAML="$TRAIN_YAML" \

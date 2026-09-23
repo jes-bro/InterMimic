@@ -78,12 +78,45 @@ def test_one_gpu_takes_everything(repo):
     assert len(got) == 13
 
 
-def test_existing_csv_is_skipped(repo):
+HEADER = ("body,source,is_identity,avg_steps,human_pose_error,object_pose_error,"
+          "success_rate,success_count,success_total,exit_code,timed_out,checkpoint\n")
+SCORED = "sub5,sub1,False,120.0,0.11,0.09,75.0,3,4,0,False,ckpt.pth\n"
+FAILED = "sub5,sub1,False,,,,,,,1,False,ckpt.pth\n"
+
+
+def _csv(repo, body, rows):
     (repo / "eval_results").mkdir(exist_ok=True)
-    (repo / "eval_results" / "vanilla_indist_sub5.csv").write_text("body,source\n")
+    (repo / "eval_results" / f"vanilla_indist_{body}.csv").write_text(HEADER + rows)
+
+
+def test_scored_csv_is_skipped(repo):
+    _csv(repo, "sub5", SCORED)
     got = plan_lines(run(repo, GPUS="4 5").stdout)
     assert got["sub5"][1] is True                      # skipped
     assert got["sub1"][1] is False                     # others still run
+
+
+def test_all_failure_csv_is_not_treated_as_done(repo):
+    """A job that dies at startup writes a FULL csv of exit_code=1 rows with empty
+    metrics (what a missing MJCF did). Skipping that would leave a silent hole."""
+    _csv(repo, "sub5", FAILED * 13)
+    got = plan_lines(run(repo, GPUS="4 5").stdout)
+    assert got["sub5"][1] is False                     # re-run, not skipped
+
+
+def test_partially_failed_csv_counts_as_done(repo):
+    """One real scored row is enough: the pair-level failures are recorded in the
+    CSV itself (exit_code=1) and are visible to the summary, so the body is not
+    silently re-run and half-overwritten."""
+    _csv(repo, "sub5", FAILED + SCORED)
+    got = plan_lines(run(repo, GPUS="4 5").stdout)
+    assert got["sub5"][1] is True
+
+
+def test_empty_csv_is_not_treated_as_done(repo):
+    _csv(repo, "sub5", "")
+    got = plan_lines(run(repo, GPUS="4 5").stdout)
+    assert got["sub5"][1] is False
 
 
 def test_missing_input_fails_loudly(repo):
