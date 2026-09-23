@@ -1,0 +1,229 @@
+# DEMO config -- the ACTIVITY XF student performing a RETRIEVED EXPERT's motion
+# on a NOVICE's body. SECOND expert choice; the first is
+# omomo_demo_novice_act_xf__f0.yaml (sub401 rev009c), left exactly as run.
+#
+# Qualitative demo, NOT a scored eval. The MOTION is the expert clip
+# sub404_bballd06s04t018c_007 -- EgoExo4D take unc_basketball_03-30-23_02_18,
+# frames 1600-1655, participant 382, tier LATE EXPERT, drill Reverse Layup,
+# one of the seven bball7 people the student trained on. It is rank 4 of the
+# retrieval for this novice (scripts' matches.json); ranks 1 and 3 scored higher
+# but are participant 385, tier 'unlabelled', which is not an expert.
+# The BODY is sub204, an EgoExo4D NOVICE (sfu_basketball014_4 /
+# Date170_Sub204_bball_t004a) reconstructed by CARI4D and converted to sim -- a
+# body no policy has driven before. That pairing is the point: what the expert
+# did, performed on this person's body.
+#
+# Its reference has to be solved first, since the training tree only covers the
+# 43 OMOMO bodies:
+#   scripts/retarget_contact.py --clip InterAct/behave_cari4d_bball7_cf2/sub404_bballd06s04t018c_007.pt \
+#       --source sub404 --target sub204 \
+#       --source-mjcf isaacgym/src/intermimic/data/assets/smplx/smplh_behave_sub404.xml \
+#       --target-mjcf isaacgym/src/intermimic/data/assets/smplx/smplh_behave_sub204.xml \
+#       --iters 300 --out-dir InterAct/behave_cari4d_novice_bodymajor/sub204
+#   (the sub401 solve went 0.58 -> 0.16 cm; record this one's numbers here too)
+#
+# Mirrors omomo_eval_student_g3_act_xf_ret_nvadlr__f0.yaml (the student's eval
+# config) apart from the keys this demo has to change:
+#   dataSub              sub404, the expert whose motion is performed
+#   dataObjects          that clip's object alone -- sub404 has nine clips in
+#                        the folder and only this one has a sub204 reference,
+#                        and a missing (body, clip) reference is a hard error
+#   subjectBodies        sub204 -- the NOVICE's body. The conversion writes
+#                        smplh_behave_sub204.xml; humanoid.py:235 builds body
+#                        paths as smplx/smplx_omomo_<sub>.xml, so it is
+#                        installed under that name. Same rig (52 bodies, 154
+#                        joints), so the policy's 153 actions map across.
+#   motion_file          the bball7 clips (the expert's own folder)
+#   retargetedMotionDir  InterAct/behave_cari4d_novice_bodymajor -- holds the
+#                        solve above: <tree>/<body>/<clip>.pt for body sub204.
+#                        teacherPolicy and objectPropsFile stay the activity
+#                        student's: source 404 has the bball7 teacher, and that
+#                        props file must carry an entry for THIS ball
+#                        (bballd06s04t018c) -- a missing one is a hard error.
+#   subjectHeightsFile   demo_novice_heights.json, holding 204 -> 1.585 m, the
+#                        canonical SMPL-X height the task itself falls back to
+#                        when no per-subject body is set. NOT measured from his
+#                        body: it is a PLACEHOLDER, safe here because the height
+#                        enters only the body-normalized REWARD
+#                        (intermimic.py:2300-2304) and never the observation or
+#                        the actions, so it cannot change the rendered motion.
+#                        Measure it (scripts/generate_synthetic_bodies.py
+#                        neutral_height, from his betas) before any NUMBER from
+#                        this config is reported.
+#
+# Deliberately NOT named omomo_eval_*: check_eval_cfg.py mirrors eval configs
+# against an arm's train config, and this is a demo, not an arm. Run it through
+# intermimic.run_distill / InterMimicDistillG3 with RECORD_VIDEO for the Isaac
+# Gym rollout, and a SEPARATE run with DUMP_TRAJ for the offline SMPL-X surface
+# render (scripts/render_mesh_replay.py --dump): DUMP_FRAMES counts sim steps
+# and exits the process, which truncates a video recorded in the same run.
+evalEntry: intermimic.run_distill
+evalTask: InterMimicDistillG3
+
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  raggedMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub404']                       # the EXPERT whose motion is retargeted (see header)
+  dataObjects: ['bballd06s04t018c']         # just that one clip of his
+  enableDebugVis: false
+  enableEarlyTermination: true
+  enableEvaluation: True
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_bball7_cf2
+  numEnvs: 1024                            # = InterMimic's own eval scripts
+                                           # (isaacgym/scripts/eval_teacher.sh and
+                                           # eval_student.sh pass --num_envs 1024).
+                                           # This is CONCURRENCY, not the attempt
+                                           # budget: the player runs games_num*10 =
+                                           # 20,000 episodes per (body, source) pair
+                                           # and stops on that count (learning/
+                                           # intermimic_players.py:52-60,173,363,392;
+                                           # rl_games player.py:41 games_num=2000),
+                                           # so attempts per clip do not depend on
+                                           # this value. Kept IDENTICAL across every
+                                           # eval cfg (check_eval_cfg.py enforces it
+                                           # and the value). Was 2048 until 2026-09-18.
+  numObs: 9594
+  objectConvexHull: true
+  objectPropsFile: isaacgym/src/intermimic/data/cfg/object_props_g3_act.yaml
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 1                    # PSI off at eval (identical mocap copies otherwise)
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_novice_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 1000                     # uniform across every eval cfg; > every clip in any arm (longest: cpr 691)
+  saveImages: false
+  stateInit: "Start"                       # metrics only exist in Start init (intermimic.py)
+  subjectBodies: ['sub204']                # the novice's OWN body (see header)
+  subjectHeightsFile: scripts/demo_novice_heights.json   # demo-only; see header
+  terminationHeight: 0.15
+  # --- distillation (InterMimicDistillG3) ---
+  teacherPolicy: checkpoints/teachers/g3_act
+  teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoall__f0.yaml
+  studentObsHorizons: [1, 4, 7, 10, 13, 16]
+  numObsRetarget: 9594
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
