@@ -51,6 +51,17 @@ def test_clips_come_from_motion_dir_filtered_by_datasub(tree):
     assert len(files) == len(clips)
 
 
+def test_paths_are_strings_not_path_objects(tree):
+    """The caller splits these as filenames (object name out of the stem), which a
+    PosixPath cannot do -- resolve_repo_path returns one, so the helper converts."""
+    import pathlib
+    tmp, motion, rt = tree
+    files, _ = per_body_reference_files(rt, motion, ["sub1"], ["sub10"],
+                                        resolve=lambda p: pathlib.Path(p))
+    assert all(isinstance(f, str) for f in files)
+    assert files[0].split("_")[-2] == "largetable"
+
+
 def test_non_pt_files_are_ignored(tree):
     tmp, motion, rt = tree
     _, clips = _call(tmp, motion, rt, ["sub1", "sub2", "sub3"], ["sub13"])

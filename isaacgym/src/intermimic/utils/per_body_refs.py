@@ -40,7 +40,10 @@ def per_body_reference_files(retarget_dir, motion_file_dir, data_sub, bodies,
         rel = os.path.join(retarget_dir, body, cn)
         p = resolve(rel)
         if exists(p):
-            files.append(p)
+            # str(), not the Path resolve_repo_path returns: callers treat these
+            # as filenames and split them (intermimic_all.py reads the object
+            # name out of '<src>_<object>_<idx>.pt'), which a PosixPath cannot do.
+            files.append(str(p))
         else:
             missing.append(rel)
     if missing:
