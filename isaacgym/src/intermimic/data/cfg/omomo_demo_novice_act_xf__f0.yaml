@@ -1,0 +1,199 @@
+# DEMO config -- the ACTIVITY XF student driving a NOVICE's OWN body.
+#
+# Zero-shot embodiment demo for a qualitative video, NOT a scored eval. One
+# EgoExo4D novice take (sfu_basketball014_4 / Date170_Sub204_bball_t004a, 135
+# frames), reconstructed by CARI4D and converted to sim as
+# InterAct/behave_cari4d_novice/sub204_bball_000.pt, driven on sub204's own
+# body: source subject and embodiment are both unseen, which is the point.
+#
+# Mirrors omomo_eval_student_g3_act_xf_ret_nvadlr__f0.yaml (the student's eval
+# config) apart from the five keys this demo has to change:
+#   dataSub              sub204 instead of the 35 training people
+#   subjectBodies        sub204 -- HIS body. The conversion writes
+#                        smplh_behave_sub204.xml; humanoid.py:235 builds body
+#                        paths as smplx/smplx_omomo_<sub>.xml, so it is
+#                        installed under that name. Same rig (52 bodies, 154
+#                        joints), so the policy's 153 actions map across.
+#   motion_file          InterAct/behave_cari4d_novice
+#   retargetedMotionDir  InterAct/behave_cari4d_novice_bodymajor -- the student
+#                        reads <tree>/<body>/<clip>.pt. Source subject == target
+#                        body, so the reference IS the clip (identity retarget
+#                        is a no-op by construction: retarget_contact.py holds
+#                        identity to under 0.05 cm).
+#   objectPropsFile      object_props_novice_bball.yaml -- this clip's object is
+#                        the generic `bball`, which the activity props file does
+#                        not cover, and an uncovered object is refused.
+#
+# Deliberately NOT named omomo_eval_*: check_eval_cfg.py mirrors eval configs
+# against an arm's train config, and this is a demo, not an arm. Run it through
+# intermimic.run_distill / InterMimicDistillG3 with DUMP_TRAJ set, then render
+# the SMPL-X surface offline with scripts/render_mesh_replay.py --dump.
+evalEntry: intermimic.run_distill
+evalTask: InterMimicDistillG3
+
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  raggedMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub204']                       # the novice take's source subject
+  enableDebugVis: false
+  enableEarlyTermination: true
+  enableEvaluation: True
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_novice
+  numEnvs: 1024                            # = InterMimic's own eval scripts
+                                           # (isaacgym/scripts/eval_teacher.sh and
+                                           # eval_student.sh pass --num_envs 1024).
+                                           # This is CONCURRENCY, not the attempt
+                                           # budget: the player runs games_num*10 =
+                                           # 20,000 episodes per (body, source) pair
+                                           # and stops on that count (learning/
+                                           # intermimic_players.py:52-60,173,363,392;
+                                           # rl_games player.py:41 games_num=2000),
+                                           # so attempts per clip do not depend on
+                                           # this value. Kept IDENTICAL across every
+                                           # eval cfg (check_eval_cfg.py enforces it
+                                           # and the value). Was 2048 until 2026-09-18.
+  numObs: 9594
+  objectConvexHull: true
+  objectPropsFile: isaacgym/src/intermimic/data/cfg/object_props_novice_bball.yaml
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 1                    # PSI off at eval (identical mocap copies otherwise)
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_novice_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: true
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 1000                     # uniform across every eval cfg; > every clip in any arm (longest: cpr 691)
+  saveImages: false
+  stateInit: "Start"                       # metrics only exist in Start init (intermimic.py)
+  subjectBodies: ['sub204']                # the novice's OWN body (see header)
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+  # --- distillation (InterMimicDistillG3) ---
+  teacherPolicy: checkpoints/teachers/g3_act
+  teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoall__f0.yaml
+  studentObsHorizons: [1, 4, 7, 10, 13, 16]
+  numObsRetarget: 9594
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
