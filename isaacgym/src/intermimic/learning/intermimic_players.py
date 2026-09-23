@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import os
+import sys
 import torch, time
 
 try:
@@ -281,8 +282,12 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                 # DUMP_TRAJ run with no RECORD_VIDEO replayed games_num *
                 # n_game_life * 10 times and never reached the save.
                 if _record_path is not None or _dump_path is not None:
-                    import sys
-                    sys.exit(0)
+                    # os._exit for the same reason as the inference path below:
+                    # the outputs are already closed/written and Isaac Gym's
+                    # teardown segfaults once camera sensors exist.
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    os._exit(0)
             else:
                 # inference
                 for n in range(self.max_steps):
@@ -312,26 +317,22 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                     if _tk_wandering is not None:
                         _tk_wander_deaths += _takeover_mod.count_wander_deaths(
                             done, _tk_wandering)
-                    # A policy rollout dumps the same way a replay does, so the
-                    # two render identically and can be compared frame to frame.
-                    if _traj is not None:
-                        if len(_traj["body_rot"]) < _dump_max:
-                            _dump_step()
-                        else:
-                            _dump_save()
-                            import sys
-                            sys.exit(0)
                     cr += r
                     steps += 1
 
                     self._post_step(info)
 
-                    if _traj is not None:
+                    # A policy rollout dumps the same way a replay does, so the
+                    # two render identically and can be compared frame to frame.
+                    # EXACTLY ONE capture per sim step, taken at the same point in
+                    # the step as the video frame below so dump frame i and video
+                    # frame i are the same instant. There used to be a second
+                    # _dump_step() before _post_step as well: two captures per step
+                    # made the dump hit DUMP_FRAMES in half the steps and exit
+                    # mid-recording, which is what truncated a 400-frame video at
+                    # 199.
+                    if _traj is not None and len(_traj["body_rot"]) < _dump_max:
                         _dump_step()
-                        if len(_traj["body_rot"]) >= _dump_max:
-                            _dump_save()
-                            import sys
-                            sys.exit(0)
 
                     if _writer is not None:
                         task = self.env.task
@@ -345,13 +346,30 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                         _frames_written += 1
                         if _frames_written >= _max_video_frames:
                             _writer.close()
-                            print(f"[player] wrote {_frames_written} frames to {_record_path}, video done")
+                            print(f"[player] wrote {_frames_written} frames to {_record_path}, video done",
+                                  flush=True)
                             _writer = None
-                            # When recording was the whole point (RECORD_VIDEO set),
-                            # exit now — don't keep running the policy and printing
-                            # reward stats that block the next render in the script.
-                            import sys
-                            sys.exit(0)
+
+                    # Stop once EVERY requested output is complete -- not as soon as
+                    # the FIRST one is. A run asking for both a video and a dump must
+                    # finish both, or the npz and the mp4 describe different lengths
+                    # of the same rollout and cannot be compared frame to frame.
+                    # Recording was the whole point when RECORD_VIDEO/DUMP_TRAJ is
+                    # set, so don't fall through and keep printing reward stats.
+                    if _record_path is not None or _dump_path is not None:
+                        _video_done = _record_path is None or _writer is None
+                        _dump_done = _traj is None or len(_traj["body_rot"]) >= _dump_max
+                        if _video_done and _dump_done:
+                            if _traj is not None:
+                                _dump_save()
+                            # os._exit, not sys.exit: every output above is already
+                            # closed/written, and Isaac Gym's interpreter teardown
+                            # segfaults once camera sensors have been created. The
+                            # segfault was cosmetic (it happened after the files were
+                            # on disk) but it made a good run look like a failed one.
+                            sys.stdout.flush()
+                            sys.stderr.flush()
+                            os._exit(0)
 
                     if render:
                         self.env.render(mode = 'human')
