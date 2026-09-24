@@ -164,6 +164,52 @@ class InterMimicDistillG3(InterMimic):
                                                  'obs': curr_obs, 'rnn_states': None})
         return res['mus'], res['sigmas']
 
+    # Smallest sigma the teacher sampler is allowed. Only ever applied to
+    # entries that were already NaN/inf or negative -- see _sanitize_teacher.
+    _TEACHER_SIGMA_FLOOR = 1e-4
+
+    def _sanitize_teacher(self, mus_all, sigma_all):
+        """Repair a NaN/inf teacher output instead of crashing the whole job.
+
+        WHY. An env whose observation goes numerically invalid feeds NaN into
+        every teacher, so mus/sigmas come back NaN and
+        Normal(mus, sigma).sample() raises "normal expects all elements of
+        std >= 0.0" -- killing all 16 envs of an eval over a handful of bad
+        ones (4 of 169 pairs in the xf@29k in-dist matrix, all source sub8).
+        The humanoid already handles the same event one level up ("invalid
+        observation in N env(s); terminating those envs and continuing"); this
+        is that policy applied to the teacher query.
+
+        This cannot change a healthy run. It only touches entries that are
+        NaN, inf or negative, and every one of those is a value the sampler
+        would have raised on -- so the previous behaviour for them was a
+        crash, not a number. At EVAL it cannot move a metric at all, because
+        the player discards the teacher action (intermimic_players_distill.py
+        env_reset returns obs only).
+
+        Loud, not silent: the first repair prints what it fixed and how much,
+        so a teacher that has genuinely gone bad is visible rather than
+        quietly sampled around.
+        """
+        bad_mu = ~torch.isfinite(mus_all)
+        bad_sigma = ~torch.isfinite(sigma_all) | (sigma_all < 0)
+        n_mu, n_sigma = int(bad_mu.sum()), int(bad_sigma.sum())
+        if n_mu == 0 and n_sigma == 0:
+            return mus_all, sigma_all
+        if not getattr(self, '_teacher_nan_warned', False):
+            self._teacher_nan_warned = True
+            print(f"[distill_g3] WARNING: teacher query produced {n_mu} non-finite "
+                  f"mu and {n_sigma} invalid sigma value(s) out of {mus_all.numel()}; "
+                  f"repairing (mu->0, sigma->{self._TEACHER_SIGMA_FLOOR}) and "
+                  f"continuing. This follows an invalid observation upstream, and "
+                  f"the teacher action is unused at eval. Further occurrences are "
+                  f"not reported.", flush=True)
+        mus_all = torch.nan_to_num(mus_all, nan=0.0, posinf=0.0, neginf=0.0)
+        sigma_all = torch.nan_to_num(sigma_all, nan=self._TEACHER_SIGMA_FLOOR,
+                                     posinf=self._TEACHER_SIGMA_FLOOR,
+                                     neginf=self._TEACHER_SIGMA_FLOOR)
+        return mus_all, sigma_all.clamp_min(self._TEACHER_SIGMA_FLOOR)
+
     def _query_teachers(self):
         with torch.no_grad():
             batched = vmap(self.single_model_forward, in_dims=(0, 0, 0, 0))
@@ -171,6 +217,7 @@ class InterMimicDistillG3(InterMimic):
             mus_all, sigma_all = batched(self.stacked_params,
                                          self.obs_buf.unsqueeze(0).repeat(n, 1, 1),
                                          self.running_means_all, self.running_vars_all)
+            mus_all, sigma_all = self._sanitize_teacher(mus_all, sigma_all)
             act = torch.clamp(torch.distributions.Normal(mus_all, sigma_all).sample(), -1.0, 1.0)
             self.action_buf = act[self.model_indices, self.sample_indices]
             self.mu_buf = mus_all[self.model_indices, self.sample_indices]
