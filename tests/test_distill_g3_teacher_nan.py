@@ -140,3 +140,106 @@ def test_sigma_floor_is_small_enough_to_be_a_repair_not_a_policy(sanitize):
     """The floor stands in for 'this teacher said nothing usable', so it must be
     negligible next to a real sigma rather than a distribution anyone samples."""
     assert 0 < _Bare._TEACHER_SIGMA_FLOOR <= 1e-3
+
+
+# --- the student's own observation -------------------------------------------
+# humanoid.compute_humanoid_reset already zeroes non-finite entries of obs_buf,
+# because "the policy's next forward pass would crash on these inputs". That was
+# written when obs_buf WAS the policy input; this task feeds the policy
+# obs_buf_retarget, which the guard never followed. Repairing only the teacher
+# left 3 of 169 pairs dying in rl_games models.py:243 distr.sample().
+
+@pytest.fixture(scope="module")
+def sanitize_student():
+    tree = ast.parse(open(SRC).read())
+    cls = next(n for n in tree.body
+               if isinstance(n, ast.ClassDef) and n.name == "InterMimicDistillG3")
+    fn = next(n for n in cls.body
+              if isinstance(n, ast.FunctionDef) and n.name == "_sanitize_student_obs")
+    ns = {"torch": torch}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), SRC, "exec"), ns)
+    return ns["_sanitize_student_obs"]
+
+
+class _Env:
+    def __init__(self, buf):
+        self.obs_buf_retarget = buf
+
+
+def test_student_obs_healthy_is_untouched(sanitize_student):
+    buf = torch.randn(4, 6)
+    env = _Env(buf.clone())
+    buf_in = env.obs_buf_retarget.clone()
+    sanitize_student(env)
+    assert torch.equal(env.obs_buf_retarget, buf_in)
+
+
+def test_student_obs_healthy_is_silent(sanitize_student):
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        sanitize_student(_Env(torch.zeros(3, 3)))
+    assert buf.getvalue() == ""
+
+
+def test_student_obs_nan_is_zeroed_and_becomes_samplable(sanitize_student):
+    """The exact crash: a NaN in the policy input reaches Normal(loc=...)."""
+    buf = torch.zeros(2, 4)
+    buf[1, 2] = float("nan")
+    env = _Env(buf)
+    with redirect_stdout(io.StringIO()):
+        sanitize_student(env)
+    assert torch.isfinite(env.obs_buf_retarget).all()
+    assert env.obs_buf_retarget[1, 2] == 0.0
+
+
+def test_student_obs_good_rows_survive(sanitize_student):
+    """Only the bad env is touched; the other envs are the ones being scored."""
+    buf = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    buf[1, 1] = float("inf")
+    keep0, keep2 = buf[0].clone(), buf[2].clone()
+    env = _Env(buf)
+    with redirect_stdout(io.StringIO()):
+        sanitize_student(env)
+    assert torch.equal(env.obs_buf_retarget[0], keep0)
+    assert torch.equal(env.obs_buf_retarget[2], keep2)
+
+
+def test_student_obs_env_ids_path_writes_back(sanitize_student):
+    """The env_ids branch indexes a COPY; if it forgot to write back, the NaN
+    would survive into the policy and the crash would be unchanged."""
+    buf = torch.zeros(4, 3)
+    buf[2, 0] = float("nan")
+    env = _Env(buf)
+    with redirect_stdout(io.StringIO()):
+        sanitize_student(env, torch.tensor([1, 2]))
+    assert torch.isfinite(env.obs_buf_retarget).all()
+
+
+def test_student_obs_env_ids_leaves_other_envs_alone(sanitize_student):
+    buf = torch.ones(4, 3)
+    env = _Env(buf.clone())
+    with redirect_stdout(io.StringIO()):
+        sanitize_student(env, torch.tensor([0]))
+    assert torch.equal(env.obs_buf_retarget, buf)
+
+
+def test_student_obs_warning_is_loud_and_counts_envs(sanitize_student):
+    buf = torch.zeros(5, 3)
+    buf[1, 0] = float("nan")
+    buf[3, 2] = float("nan")
+    out = io.StringIO()
+    with redirect_stdout(out):
+        sanitize_student(_Env(buf))
+    txt = out.getvalue()
+    assert "WARNING" in txt and "student observation" in txt
+    assert "2 env(s)" in txt
+
+
+def test_student_obs_warning_fires_once(sanitize_student):
+    env = _Env(torch.zeros(2, 2))
+    out = io.StringIO()
+    with redirect_stdout(out):
+        for _ in range(4):
+            env.obs_buf_retarget[0, 0] = float("nan")
+            sanitize_student(env)
+    assert out.getvalue().count("WARNING") == 1

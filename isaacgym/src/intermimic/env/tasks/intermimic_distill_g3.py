@@ -156,6 +156,49 @@ class InterMimicDistillG3(InterMimic):
             self.obs_buf_retarget[:] = self._stack_obs_horizons(None, self._student_horizons, None)
         else:
             self.obs_buf_retarget[env_ids] = self._stack_obs_horizons(env_ids, self._student_horizons, None)
+        self._sanitize_student_obs(env_ids)
+
+    def _sanitize_student_obs(self, env_ids=None):
+        """Zero non-finite entries in the STUDENT's observation buffer.
+
+        WHY. humanoid.compute_humanoid_reset already does exactly this for
+        obs_buf, and its comment says what for: "the policy's next forward pass
+        would crash on these inputs (Normal(loc=NaN) raises ValueError). Zero is
+        finite and the policy can produce a valid (garbage) action that gets
+        discarded on reset." That guard was written when obs_buf WAS the policy's
+        input. This task feeds the policy obs_buf_retarget instead, and the guard
+        never followed it -- so the teacher path is protected and the student
+        path is not. This restores that invariant ("what the policy is fed is
+        finite") for the buffer the policy actually reads; it is not a new
+        policy, and declining it here while every teacher eval has it would make
+        the student's numbers less comparable to the teachers', not more.
+
+        The envs concerned are already being terminated by the same reset logic
+        that flagged the NaN, so the action taken from a zeroed observation is
+        discarded. Without this, three of the 169 xf@29k in-dist pairs (bodies
+        sub12/sub14/sub17, all against source sub8) died in rl_games'
+        models.py:243 distr.sample() and scored nothing at all.
+
+        Loud once, like the teacher guard: a student input going non-finite is
+        worth seeing, and silence here would hide a real numerical problem.
+        """
+        buf = self.obs_buf_retarget if env_ids is None else self.obs_buf_retarget[env_ids]
+        bad = ~torch.isfinite(buf)
+        if not bool(bad.any()):
+            return
+        n_env = int(torch.any(bad, dim=-1).sum())
+        if not getattr(self, '_student_obs_nan_warned', False):
+            self._student_obs_nan_warned = True
+            print(f"[distill_g3] WARNING: non-finite student observation in {n_env} "
+                  f"env(s) ({int(bad.sum())} of {bad.numel()} values); zeroing, as "
+                  f"humanoid.py does for obs_buf. Those envs are terminated by the "
+                  f"reset logic, so the action is discarded. Further occurrences "
+                  f"are not reported.", flush=True)
+        if env_ids is None:
+            self.obs_buf_retarget[bad] = 0.0
+        else:
+            buf[bad] = 0.0
+            self.obs_buf_retarget[env_ids] = buf
 
     # ------------------------------------------------------------------ teacher query
     def single_model_forward(self, params, obs, mean, var):
