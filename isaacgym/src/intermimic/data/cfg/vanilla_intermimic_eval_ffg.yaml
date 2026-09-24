@@ -1,0 +1,141 @@
+# EVAL config -- the PAPER'S InterMimic student (the released student.pth), scored
+# on the same exam as the g3 students. Mirror of omomo_all_test.yaml (the repo's own
+# eval config for this policy, used by isaacgym/scripts/eval_student.sh); every value
+# below is that file's except the ones listed here.
+#
+# WHAT IS DIFFERENT, AND WHY
+#   retargetedMotionDir  ADDED. Points at OUR per-body contact-retargeted tree, so
+#                        this policy sees and is scored against the SAME reference as
+#                        the g3 students, for the body the pair runs (option A,
+#                        env/tasks/intermimic_all.py + utils/per_body_refs.py). The
+#                        authors' flat motion_file_retarget is then unused.
+#   motion_file          InterAct/OMOMO -> InterAct/OMOMO_new, the students' clips
+#                        (their names all exist in OMOMO_new; verified 2,209/2,209).
+#   subjectBodies        ADDED, one placeholder body; eval_per_pair.py overrides it
+#                        (and dataSub) per pair via --subject_bodies / --data_sub.
+#   dataSub              the 13 OMOMO sources the students are scored on, not the
+#                        authors' 4. Also overridden per pair.
+#   numEnvs 4096 -> 1024, physicalBufferSize 1, enableEvaluation True, stateInit
+#                        Start, rolloutLength 1000: the eval-owned values every other
+#                        eval config in this repo uses.
+#
+# WHAT IS NOT CHANGED: numObs / numObsRetarget stay 3198 (this policy's own
+# observation layout), robotType, rewards, plane, PhysX, teacherPolicy. The teachers
+# load at startup and their output never reaches the sim (the player discards it).
+#
+# NOT under scripts/check_eval_cfg.py: that guard mirrors an eval config against a g3
+# ARM's train config, and this policy has none (it comes from the InterMimic release).
+# It is run directly through eval_per_pair.py --env-yaml this file --entry
+# intermimic.run_distill --task InterMimic_All.
+#
+# ==== THIS FILE: vanilla_intermimic_eval.yaml + the free-flight GATE ==========
+# Added, and nothing else:
+#
+#   rewardTerms:
+#     freeFlightGate: {resets: true, reward: false}
+#
+# WHY. Both g3 student eval configs carry that block, and this one did not -- so
+# the students were scored with object/igRatio resets neutralised on frames where
+# the REFERENCE has no hand-object contact, and the baseline was not. Measured on
+# the OMOMO clips this sweep uses (scripts/count_free_flight_frames.py): 26.3% of
+# frames are free flight, and some clips are 85-100%. A termination rule is part
+# of the evaluation protocol, not part of a method, so both sides get it.
+#
+# The direction matters: the gate only ever REMOVES a reset, so giving it to the
+# baseline can only help the baseline. That is the conservative way to equalise.
+#
+# The ORIGINAL vanilla_intermimic_eval.yaml is left exactly as it was run; the
+# CSVs it produced (ungated) stay valid as what they are, and every number in the
+# final table comes from this file instead.
+#
+# InterMimic_All inherits _compute_reward from InterMimic and does not override
+# it (intermimic_all.py:210 post_physics_step calls it), so the key takes effect
+# here. If the reference lacks the contact_obj channel the task RAISES rather
+# than quietly ignoring the gate.
+# =============================================================================
+env:
+  numEnvs: 1024                  # = InterMimic's own eval scripts (eval_student.sh)
+  envSpacing: 2
+  episodeLength: 1000
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: False
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"
+  rolloutLength: 1000            # uniform across every eval cfg; > every OMOMO clip
+  physicalBufferSize: 1          # PSI off at eval (identical mocap copies otherwise)
+  hybridInitProb: 0.5
+  dataFPS: 30
+  dataFramesScale: 1 # 25->30fps
+  ballSize: 1.
+  numObsRetarget: 3198
+  numObs: 3198
+  motion_file: InterAct/OMOMO_new
+  motion_file_retarget: InterAct/OMOMO_retarget   # unused while retargetedMotionDir is set
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_srcall13
+  robotType: "smplx/omomo.xml"
+  objectDensity: 200
+  subjectBodies: ['sub2']        # placeholder: every pair overrides it (and dataSub)
+  dataSub: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3","L_Thumb3","R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3","R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+  teacherPolicy: checkpoints/smplx_teachers
+  teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo.yaml
+  enableEvaluation: True
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardTerms:
+    freeFlightGate:
+      resets: true                 # matches both g3 student eval configs
+      reward: false                # reward is not scored at eval; resets are
+  rewardWeights:
+    p: 30.
+    r: 2.5
+    pv: 0.
+    rv: 0.
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.
+
+    ig: 5.
+
+    cg_hand: 5.
+    cg_other: 5.
+    cg_all: 3.
+
+    eg1: 0.00002
+    eg2: 0.00002
+    eg3: 0.000000001
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1  # 0: pgs, 1: tgs
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
