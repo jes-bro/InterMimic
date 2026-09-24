@@ -119,3 +119,12 @@ base_task.py            → vec_task.py → humanoid.py (Humanoid_SMPLX)
 - The `requirement.txt` pins `numpy==1.21.1`, `rl-games==1.1.4`, `protobuf==3.20.0` — these are not arbitrary; Isaac Gym and the local rl_games subclasses depend on these exact versions.
 - Don't add the task name to a script and expect `parse_task.py` to pick it up — you must also import the class in `parse_task.py` so `eval()` can resolve it.
 - `--record-video` (Isaac Lab) needs `imageio` + `imageio-ffmpeg` installed into the Isaac Sim Python, not the conda env: `$ISAACLAB_PATH/isaaclab.sh -p -m pip install --upgrade imageio imageio-ffmpeg`.
+
+## Commit messages
+
+- **No session links.** Commit messages must not contain links to Claude Code
+  sessions, transcripts, or chat URLs — they rot, they are not readable by
+  collaborators, and a commit should stand on its own. Explain the change in the
+  message itself.
+- Say what changed and *why it was wrong before*; a reader six months out needs
+  the reasoning, not a pointer to where it was discussed.
