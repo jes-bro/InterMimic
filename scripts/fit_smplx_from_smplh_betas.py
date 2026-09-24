@@ -83,20 +83,41 @@ def lengths(model, betas, pairs):
     return np.array([np.linalg.norm(J[c] - J[p]) for c, p in pairs])
 
 
-def fit_one(src_model, src_betas, src_pairs, tgt_model, tgt_pairs, n_betas=16):
-    """-> (smplx_betas, report). Least squares on bone-length residuals."""
+def fit_one(src_model, src_betas, src_pairs, tgt_model, tgt_pairs, n_betas=16,
+            ridge=1e-6):
+    """-> (smplx_betas, report). Ridge-regularised least squares on bone lengths.
+
+    THE RIDGE IS NOT OPTIONAL. 51 bone lengths do not pin 16 shape coefficients:
+    whole directions of the shape space barely move a joint, so plain least
+    squares is free to run off into them. Unregularised, these fits came back at
+    |beta| = 67-152 with a 2-6 mm residual -- a skeleton that matches and a body
+    nobody has (real shapes sit at |beta| ~ 2-6). The MJCF built from such a beta
+    has the right bone lengths and arbitrary girth and mass.
+
+    The penalty sqrt(ridge)*beta is appended to the residual vector, which is
+    ridge regression: among the shapes that explain the bones, prefer the one
+    nearest the mean body.
+
+    1e-6 is measured, not guessed. On the identity case (SMPL-X -> SMPL-X, where
+    the answer is known) it costs 0.03 mm of bone error and recovers |beta| 1.77
+    of a true 1.81. Stronger weights bias real shapes: 1e-4 already costs 0.7 mm
+    and shrinks to 1.56, and 3e-3 costs 5.8 mm and halves the shape. Weaker
+    weights let the blow-up back in.
+    """
     from scipy.optimize import least_squares
 
     target = lengths(src_model, src_betas, src_pairs)
+    w = np.sqrt(ridge)
 
     def residual(b):
-        return lengths(tgt_model, b, tgt_pairs) - target
+        return np.concatenate([lengths(tgt_model, b, tgt_pairs) - target, w * b])
 
     sol = least_squares(residual, np.zeros(n_betas), method="lm", max_nfev=20000)
-    r = residual(sol.x)
+    r = residual(sol.x)[:len(tgt_pairs)]            # report the BONE error only
     return sol.x, dict(n_bones=len(tgt_pairs),
                        rms_mm=float(np.sqrt((r ** 2).mean()) * 1000),
-                       max_mm=float(np.abs(r).max() * 1000))
+                       max_mm=float(np.abs(r).max() * 1000),
+                       norm=float(np.linalg.norm(sol.x)))
 
 
 def genders_of(path):
@@ -135,6 +156,11 @@ def main():
                     help="any per-subject MJCF; only its TREE is used, for the bone list")
     ap.add_argument("--src-family", default="smplh")
     ap.add_argument("--tgt-family", default="smplx")
+    ap.add_argument("--ridge", type=float, default=1e-6,
+                    help="weight on ||beta||; keeps the fit near the shape prior. "
+                         "0 reproduces the unregularised fit, which returned "
+                         "|beta|~140 bodies that match the bones and nothing else. "
+                         "1e-6 costs 0.03 mm on a known shape (see fit_one)")
     a = ap.parse_args()
 
     src_names = SMPLH_JOINTS if a.src_family == "smplh" else SMPLX_JOINTS
@@ -162,11 +188,14 @@ def main():
             if (fam, g) not in cache:
                 cache[(fam, g)] = _load_model_file(model_path(a.models, fam, g))
         betas_x, rep = fit_one(cache[(a.src_family, g)], np.asarray(d[b], dtype=np.float64),
-                               src_pairs, cache[(a.tgt_family, g)], tgt_pairs)
+                               src_pairs, cache[(a.tgt_family, g)], tgt_pairs,
+                               ridge=a.ridge)
         out[b] = betas_x.astype(np.float32)
         meta.append(f"{b}:{g}")
-        print(f"  {b} ({g}): |betas| {np.linalg.norm(betas_x):.2f}  "
-              f"rms {rep['rms_mm']:.1f} mm  max {rep['max_mm']:.1f} mm over {rep['n_bones']} bones")
+        flag = "  <-- IMPLAUSIBLE, |beta| should be ~2-6" if rep["norm"] > 12 else ""
+        print(f"  {b} ({g}): |betas| {rep['norm']:.2f}  "
+              f"rms {rep['rms_mm']:.1f} mm  max {rep['max_mm']:.1f} mm "
+              f"over {rep['n_bones']} bones{flag}")
 
     np.savez(a.out, _genders=np.array(meta),
              _source=np.array([f"fit from {a.src_family} betas in {os.path.basename(a.betas)}"]),
