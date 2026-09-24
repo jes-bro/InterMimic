@@ -1,0 +1,24 @@
+# sub13 probe -- sub13 failed all three reverse-layup clips that sub10 and sub16
+# did well on (2026-09-24). This batch separates the two explanations: is sub13
+# bad at THAT MOTION, or bad in general?
+#
+#   layups fail, soccer/cpr/omomo work -> motion-class weakness; the chair render
+#     already shows the body itself works
+#   everything fails                    -> a body-level problem, and a finding
+#
+# <body> <source> <clip> <arm-key>
+
+# three reverse layups it has not seen yet
+sub13 sub401 sub401_bballd03s01rev015at_002.pt act
+sub13 sub402 sub402_bballd03s02rev036b_006.pt act
+sub13 sub402 sub402_bballd03s02rev039d_009.pt act
+
+# soccer
+sub13 sub487 sub487_soccerd62s87t004a_002.pt act
+sub13 sub493 sub493_soccerd68s93t006c_000.pt act
+
+# cpr
+sub13 sub517 sub517_cprd95s117t002c_001.pt act
+
+# omomo (a different object class again)
+sub13 sub15 sub15_largetable_000.pt omomo
