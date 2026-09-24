@@ -72,3 +72,39 @@ def test_table_uses_source_mean_not_last_row(tmp_path):
     assert "sub16=" not in line                     # crashed-only body: no number
     assert "55.0" in line                           # held-out group mean
     assert "1 crashed row(s) dropped" in line
+
+
+# --- decimal places ---------------------------------------------------------
+# Pose errors are metres: at 1 dp, two policies 3 mm apart print the same number,
+# which is how a real difference disappears into the table. success_rate is a
+# percentage and 1 dp is right for it, so the default depends on the metric.
+
+def _err_csv(tmp_path):
+    p = tmp_path / "errs.csv"
+    p.write_text(
+        "body,source,is_identity,avg_steps,human_pose_error,object_pose_error,"
+        "success_rate,success_count,success_total,exit_code,timed_out,checkpoint\n"
+        "sub10,sub1,False,100,0.11234,0.09876,50.0,1,2,0,False,nn/mimic_00010000.pth\n"
+        "sub13,sub1,False,100,0.11534,0.09276,50.0,1,2,0,False,nn/mimic_00010000.pth\n"
+        "sub16,sub1,False,100,0.11834,0.09076,50.0,1,2,0,False,nn/mimic_00010000.pth\n")
+    return p
+
+
+def _run(args):
+    return subprocess.run([sys.executable, str(SCRIPT)] + args,
+                          capture_output=True, text=True).stdout
+
+
+def test_pose_error_defaults_to_four_decimals(tmp_path):
+    out = _run([str(_err_csv(tmp_path)), "--metric", "human_pose_error"])
+    assert "sub10=0.1123" in out and "sub16=0.1183" in out
+
+
+def test_success_rate_still_defaults_to_one_decimal(tmp_path):
+    out = _run([str(_err_csv(tmp_path)), "--metric", "success_rate"])
+    assert "sub10=50.0" in out
+
+
+def test_decimals_is_overridable(tmp_path):
+    out = _run([str(_err_csv(tmp_path)), "--metric", "object_pose_error", "--decimals", "2"])
+    assert "sub10=0.10" in out

@@ -58,11 +58,17 @@ def main():
                          "filename, else sub10/sub13/sub16)")
     ap.add_argument("--metric", default="success_rate",
                     choices=["success_rate", "human_pose_error", "object_pose_error"])
+    ap.add_argument("--decimals", type=int, default=None,
+                    help="decimal places (default: 1 for success_rate, which is a "
+                         "percentage, and 4 for the pose errors, which are metres "
+                         "-- at 1 dp two policies 3 mm apart print the same number)")
     args = ap.parse_args()
 
     m = args.metric
+    dp = args.decimals if args.decimals is not None else (1 if m == "success_rate" else 4)
+    w = max(8, dp + 5)                      # keep the columns wide enough for the digits
     print(f"metric: {m} (unweighted mean over bodies per group)")
-    print(f"{'run':34s} {'epoch':>7s} {'in-dist':>8s} {'held-out':>9s} {'syn':>6s}"
+    print(f"{'run':34s} {'epoch':>7s} {'in-dist':>{w}s} {'held-out':>{w+1}s} {'syn':>{w}s}"
           f"  {'held-out bodies':s}")
     for p in args.csvs:
         rows = list(csv.DictReader(open(p)))
@@ -96,10 +102,10 @@ def main():
             "syn": [v for b, v in d.items() if int(b[3:]) >= 100],
         }
         g = {k: (float(np.mean(v)) if v else float("nan")) for k, v in groups.items()}
-        per_held = "  ".join(f"{b}={d[b]:.1f}" for b in sorted(held) if b in d)
+        per_held = "  ".join(f"{b}={d[b]:.{dp}f}" for b in sorted(held) if b in d)
         note = f"  [{len(dropped)} crashed row(s) dropped]" if dropped else ""
         step_s = f"{step:,}" if step is not None else "rolling"
-        print(f"{run:34s} {step_s:>7s} {g['ind']:8.1f} {g['held']:9.1f} {g['syn']:6.1f}"
+        print(f"{run:34s} {step_s:>7s} {g['ind']:{w}.{dp}f} {g['held']:{w+1}.{dp}f} {g['syn']:{w}.{dp}f}"
               f"  {per_held}{note}")
 
 
