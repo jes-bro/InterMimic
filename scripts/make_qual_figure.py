@@ -94,6 +94,98 @@ def frame_indices(n_total, start, end, count, frac=ATTEMPT_FRAC):
     return [int(round(start + i * step)) for i in range(count)]
 
 
+def _load(path, bg="white"):
+    """Open a frame, flattening any alpha onto bg.
+
+    Photoshop hands back transparent PNGs when the background is cut out;
+    .convert('RGB') on those makes the transparent region BLACK, which looks
+    deliberate and is not.
+    """
+    im = Image.open(path)
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        im = im.convert("RGBA")
+        flat = Image.new("RGBA", im.size, bg)
+        return Image.alpha_composite(flat, im).convert("RGB")
+    return im.convert("RGB")
+
+
+def motion_bbox(paths, thresh=12, pad=0.10, min_frac=1e-4):
+    """One crop box per ROW, covering wherever anything moved across its frames.
+
+    THE CAMERA MUST STAY STILL. A per-frame box that follows the humanoid would
+    re-centre him in every panel, which reads as a tracking shot and destroys the
+    thing a filmstrip is for -- seeing him move THROUGH the scene. So the box is
+    the union over the row's frames, applied identically to each one.
+
+    The camera is static and the backdrop is a fixed gradient, so the pixels that
+    change between frames are the humanoid and the object. The per-pixel maximum
+    deviation from the median frame is thresholded; the union of that mask is the
+    box, padded by `pad` of its size.
+
+    Returns (x, y, w, h), or None when almost nothing moved (a near-static clip
+    like a CPR compression), in which case the caller keeps the full frame rather
+    than cropping to a speck.
+    """
+    import numpy as np
+
+    arrs = [np.asarray(_load(p).convert("L"), dtype=np.float32) for p in paths]
+    if len(arrs) < 2:
+        return None
+    stack = np.stack(arrs)
+    med = np.median(stack, axis=0)
+    diff = np.abs(stack - med).max(axis=0)
+    mask = diff > thresh
+    if mask.sum() < min_frac * mask.size:
+        return None
+    ys, xs = np.nonzero(mask)
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+    px, py = int(w * pad), int(h * pad)
+    H, W = mask.shape
+    x0 = max(0, x0 - px); y0 = max(0, y0 - py)
+    x1 = min(W - 1, x1 + px); y1 = min(H - 1, y1 + py)
+    return x0, y0, x1 - x0 + 1, y1 - y0 + 1
+
+
+def fit_aspect(box, aspect, W, H):
+    """Grow a box to the given w/h aspect, staying inside the frame.
+
+    Every row is scaled to the same height in the figure, so rows with different
+    aspects would come out different widths and the grid would not line up.
+    """
+    x, y, w, h = box
+    if w / h < aspect:
+        new_w = min(W, int(round(h * aspect)))
+        x = max(0, min(W - new_w, x - (new_w - w) // 2))
+        w = new_w
+    else:
+        new_h = min(H, int(round(w / aspect)))
+        y = max(0, min(H - new_h, y - (new_h - h) // 2))
+        h = new_h
+    return x, y, w, h
+
+
+def _slug(label):
+    """'Basketball\\nsub10 (held out)' -> 'basketball_sub10_held_out'."""
+    keep = [c.lower() if c.isalnum() else "_" for c in label]
+    return "".join(keep).strip("_").replace("__", "_") or "row"
+
+
+def frames_from_dir(path):
+    """A row can be a DIRECTORY of stills instead of a video.
+
+    That is the Photoshop round-trip: --frames-dir writes the sampled frames out,
+    you cut the background in an editor, and the cleaned PNGs are handed straight
+    back as a row. Files are taken in sorted order, which is why the dump names
+    them f000, f001, ... -- an editor that appends '_edited' keeps that order.
+    """
+    files = sorted(os.path.join(path, f) for f in os.listdir(path)
+                   if f.lower().endswith((".png", ".jpg", ".jpeg")))
+    if not files:
+        raise SystemExit(f"no .png/.jpg frames in {path}")
+    return files
+
+
 def extract(path, idxs, fps, outdir, crop=None):
     """Pull the given frame numbers out as PNGs. -> [paths], in order."""
     files = []
@@ -119,7 +211,7 @@ SERIF = ["Times New Roman", "Nimbus Roman", "Liberation Serif", "STIXGeneral",
 
 
 def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200,
-            title=None):
+            title=None, bg="white"):
     """rows: [(label, [frame paths])] -> one figure, one row per clip.
 
     matplotlib rather than hand-pasting tiles: the row labels sit outside the
@@ -142,7 +234,7 @@ def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200,
         raise SystemExit("nothing to compose")
     n_rows = len(rows)
     n_cols = max(len(f) for _, f in rows)
-    im0 = Image.open(rows[0][1][0])
+    im0 = _load(rows[0][1][0])
     aspect = im0.width / im0.height
 
     # Figure size in inches from the requested row height in px, so --height
@@ -163,7 +255,7 @@ def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200,
             ax = axes[r][c]
             ax.set_axis_off()
             if c < len(files):
-                ax.imshow(Image.open(files[c]).convert("RGB"))
+                ax.imshow(_load(files[c], bg))
             if c == 0 and labels:
                 # Outside the axes, vertically centred on the row.
                 # First line is the task, the rest identify the body. The body
@@ -190,11 +282,27 @@ def main():
                     help="the extension picks the format: .pdf for LaTeX, .png otherwise")
     ap.add_argument("--frames", type=int, default=6)
     ap.add_argument("--height", type=int, default=220)
-    ap.add_argument("--crop", default=None, help="W:H:X:Y, applied before scaling")
+    ap.add_argument("--crop", default=None,
+                    help="fixed ffmpeg crop W:H:X:Y, applied at extraction. "
+                         "Disables the automatic crop.")
+    ap.add_argument("--no-auto-crop", dest="auto_crop", action="store_false",
+                    help="keep the full 1280x720 frame")
+    ap.add_argument("--motion-thresh", dest="motion_thresh", type=float, default=12,
+                    help="grey-level change counted as motion (default 12)")
+    ap.add_argument("--min-crop", dest="min_crop", type=int, default=420,
+                    help="smallest crop height in px (default 420). A clip where "
+                         "the subject barely moves would otherwise crop to a "
+                         "speck and be upscaled into mush.")
+    ap.add_argument("--pad", type=float, default=0.10,
+                    help="padding around the motion box, as a fraction (default 0.10)")
     ap.add_argument("--frac", type=float, default=ATTEMPT_FRAC,
                     help="fraction of the video treated as one attempt when a "
                          "spec gives no explicit range (default 0.25)")
     ap.add_argument("--no-labels", action="store_true")
+    ap.add_argument("--frames-dir", default=None,
+                    help="keep the sampled frames here as PNGs instead of "
+                         "discarding them -- edit the background out in Photoshop, "
+                         "then rebuild passing the directory in place of the video")
     ap.add_argument("--title", default=None,
                     help="caption across the top, e.g. \"Zero-shot generalization "
                          "to unseen embodiments across tasks in CrossMimic4D\"")
@@ -207,13 +315,68 @@ def main():
         rows = []
         for i, spec in enumerate(a.specs):
             label, path, start, end = parse_spec(spec)
+            one_line = label.replace("\n", " / ")
+            if os.path.isdir(path):
+                files = frames_from_dir(path)
+                print(f"  {one_line}: {len(files)} still(s) from {path}")
+                rows.append((label, files))
+                continue
             n, fps, w, h = probe(path)
             idxs = frame_indices(n, start, end, a.frames, a.frac)
-            print(f"  {label}: {os.path.basename(path)}  {n} frames @ {fps:g} fps "
+            print(f"  {one_line}: {os.path.basename(path)}  {n} frames @ {fps:g} fps "
                   f"-> sampling {idxs}")
-            d = os.path.join(tmp, f"row{i}")
-            os.makedirs(d)
+            d = os.path.join(a.frames_dir, f"row{i}_{_slug(label)}") if a.frames_dir \
+                else os.path.join(tmp, f"row{i}")
+            os.makedirs(d, exist_ok=True)
             rows.append((label, extract(path, idxs, fps, d, a.crop)))
+        # Auto-crop: one static box per row, from where things moved. Skipped
+        # when --crop was given (ffmpeg already cropped) or --no-auto-crop.
+        if a.auto_crop and not a.crop:
+            boxes = {}
+            for i, (label, files) in enumerate(rows):
+                b = motion_bbox(files, thresh=a.motion_thresh, pad=a.pad)
+                if b is None:
+                    print(f"  {label.splitlines()[0]}: little motion -- keeping the full frame")
+                else:
+                    boxes[i] = b
+            if boxes:
+                # ONE crop SIZE for every row, centred on each row's own motion.
+                #
+                # Not just a common aspect: rows are scaled to the same height in
+                # the figure, so a row cropped to 157x177 would be blown up 1.5x
+                # while a 585x659 row is shrunk -- the person would appear at
+                # wildly different sizes and one row would be visibly soft. Same
+                # box size means same magnification and same sharpness, and the
+                # bodies stay comparable, which is the whole point when the rows
+                # differ only by embodiment.
+                im0 = _load(rows[0][1][0])
+                W0, H0 = im0.width, im0.height
+                aspect = sorted(w / h for _, _, w, h in boxes.values())[len(boxes) // 2]
+                fitted = {i: fit_aspect(b, aspect, W0, H0) for i, b in boxes.items()}
+                bw = min(W0, max(w for _, _, w, _ in fitted.values()))
+                bh = min(H0, max(h for _, _, _, h in fitted.values()))
+                bw = max(bw, int(a.min_crop * aspect))
+                bh = max(bh, a.min_crop)
+                bw, bh = min(bw, W0), min(bh, H0)
+                for i, (label, files) in enumerate(rows):
+                    if i not in fitted:
+                        continue
+                    fx, fy, fw, fh = fitted[i]
+                    cx, cy = fx + fw / 2, fy + fh / 2
+                    x = int(max(0, min(W0 - bw, cx - bw / 2)))
+                    y = int(max(0, min(H0 - bh, cy - bh / 2)))
+                    w, h = bw, bh
+                    print(f"  {label.splitlines()[0]}: crop {w}x{h}+{x}+{y}")
+                    out_files = []
+                    for f in files:
+                        c = _load(f).crop((x, y, x + w, y + h))
+                        dst = f[:-4] + "_crop.png"
+                        c.save(dst)
+                        out_files.append(dst)
+                    rows[i] = (label, out_files)
+        if a.frames_dir:
+            print(f"\nframes kept in {a.frames_dir} -- edit them and rebuild by "
+                  f"passing the DIRECTORY in place of the video")
         size = compose(rows, a.out, a.height, labels=not a.no_labels,
                        title=a.title)
         print(f"\nwrote {a.out}  ({size[0]}x{size[1]} px, {len(rows)} rows x {a.frames})")

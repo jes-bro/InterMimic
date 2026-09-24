@@ -182,6 +182,72 @@ def test_a_serif_font_is_actually_available(video, tmp_path):
     assert have & set(M.SERIF), f"none of {M.SERIF} installed"
 
 
+# --- the crop -----------------------------------------------------------------
+# The camera is static and the backdrop fixed, so what changes between frames is
+# the humanoid and the object. The box is the UNION over a row's frames, applied
+# identically to each -- a per-frame box would re-centre him every panel, which
+# reads as a tracking shot and hides the fact that he is moving through a scene.
+
+def _square_frames(tmp_path, positions, size=40, W=320, H=180):
+    from PIL import Image as I
+    out = []
+    for i, (x, y) in enumerate(positions):
+        im = I.new("RGB", (W, H), "black")
+        im.paste(I.new("RGB", (size, size), "white"), (x, y))
+        p = tmp_path / f"s{i:02d}.png"
+        im.save(p)
+        out.append(str(p))
+    return out
+
+
+def test_motion_box_covers_every_frames_subject(tmp_path):
+    files = _square_frames(tmp_path, [(10, 10), (100, 10), (200, 100)])
+    x, y, w, h = M.motion_bbox(files, pad=0.0)
+    assert x <= 10 and y <= 10
+    assert x + w >= 240 and y + h >= 140        # last square's far corner
+
+
+def test_motion_box_is_padded(tmp_path):
+    files = _square_frames(tmp_path, [(100, 60), (140, 60)])
+    tight = M.motion_bbox(files, pad=0.0)
+    padded = M.motion_bbox(files, pad=0.25)
+    assert padded[2] > tight[2] and padded[3] > tight[3]
+
+
+def test_motion_box_none_when_nothing_moves(tmp_path):
+    """A near-static clip must keep the full frame, not crop to a speck."""
+    files = _square_frames(tmp_path, [(100, 60), (100, 60), (100, 60)])
+    assert M.motion_bbox(files) is None
+
+
+def test_motion_box_stays_inside_the_frame(tmp_path):
+    files = _square_frames(tmp_path, [(0, 0), (280, 140)])
+    x, y, w, h = M.motion_bbox(files, pad=0.5)
+    assert x >= 0 and y >= 0 and x + w <= 320 and y + h <= 180
+
+
+def test_fit_aspect_grows_to_the_target():
+    x, y, w, h = M.fit_aspect((100, 50, 40, 80), 1.0, 320, 180)
+    assert abs(w / h - 1.0) < 0.05 and w >= 40
+
+
+def test_fit_aspect_stays_inside_the_frame():
+    x, y, w, h = M.fit_aspect((0, 0, 40, 80), 3.0, 320, 180)
+    assert x >= 0 and y >= 0 and x + w <= 320 and y + h <= 180
+
+
+def test_auto_crop_shrinks_the_figure(video, tmp_path):
+    """End to end: testsrc moves, so the crop must bite."""
+    from PIL import Image as I
+    full = tmp_path / "full.png"
+    crop = tmp_path / "crop.png"
+    _run(["--out", str(full), "--frames", "4", "--height", "120",
+          "--no-auto-crop", f"A={video}:0-71"])
+    _run(["--out", str(crop), "--frames", "4", "--height", "120",
+          f"A={video}:0-71"])
+    assert I.open(crop).width <= I.open(full).width
+
+
 def test_bad_frames_argument_fails_loudly(video, tmp_path):
     r = _run(["--out", str(tmp_path / "f.png"), "--frames", "0", f"A={video}"])
     assert r.returncode != 0
