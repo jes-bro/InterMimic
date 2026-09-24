@@ -122,7 +122,12 @@ for g in $GPUS; do
       # an incomplete or all-failure CSV would otherwise make eval_per_pair refuse
       # to write; it is not a result, so it goes
       rm -f "$out"
-      CUDA_VISIBLE_DEVICES="$g" OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 \
+      # env, not a bare assignment prefix: in dash (Ubuntu's /bin/sh) a word that
+      # comes from an EXPANSION ends the assignment prefix, so
+      # `${SOURCES:+SOURCES=...} BODIES=$b cmd` parses BODIES=... as the command
+      # and dies with "BODIES=sub1: not found". env takes them as arguments, which
+      # expands safely, and an unset SOURCES simply contributes nothing.
+      env CUDA_VISIBLE_DEVICES="$g" OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 \
       CHECKPOINT="$CKPT" OUT="$out" \
       ENV_YAML="$ENV_YAML" TRAIN_YAML="$TRAIN_YAML" \
       ${SOURCES:+SOURCES="$SOURCES"} BODIES="$b" RESUME=0 \

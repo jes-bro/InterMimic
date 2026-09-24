@@ -213,3 +213,34 @@ def test_sources_can_be_inherited_from_the_arm(repo):
 def test_sources_default_is_still_the_omomo_13(repo):
     out = run(repo, BODIES="sub1", GPUS="4").stdout
     assert "sub1 sub2 sub3 sub5" in out
+
+
+def test_launch_line_survives_dash(repo, tmp_path):
+    """Regression: `${SOURCES:+...} BODIES=$b cmd` is valid in bash but NOT in dash
+    (Ubuntu /bin/sh), where a word from an expansion ends the assignment prefix and
+    BODIES=... is then run as a command ("BODIES=sub1: not found"). Every body in a
+    43-body sweep failed this way. Run the real script under dash with a stub job
+    script and assert the environment arrives."""
+    import shutil
+    stub = repo / "slurm_eval_curriculum.sh"
+    stub.write_text('#!/bin/sh\necho "BODIES=$BODIES SOURCES=${SOURCES:-<unset>} '
+                    'CKPT=$CHECKPOINT OUT=$OUT"\n')
+    dash = shutil.which("dash") or "sh"
+    e = dict(os.environ, BODIES="sub1", GPUS="4", SOURCES="", PREFIX="t")
+    e.pop("DRY", None)
+    r = subprocess.run([dash, SCRIPT], cwd=repo, env=e, capture_output=True, text=True)
+    assert "not found" not in r.stderr, r.stderr
+    log = (repo / "t-sub1.log").read_text()
+    assert "BODIES=sub1" in log
+    assert "SOURCES=<unset>" in log          # inherited from the arm, not forced
+
+
+def test_launch_line_passes_explicit_sources(repo):
+    import shutil
+    (repo / "slurm_eval_curriculum.sh").write_text(
+        '#!/bin/sh\necho "BODIES=$BODIES SOURCES=${SOURCES:-<unset>}"\n')
+    dash = shutil.which("dash") or "sh"
+    e = dict(os.environ, BODIES="sub1", GPUS="4", SOURCES="sub2 sub3", PREFIX="t")
+    e.pop("DRY", None)
+    subprocess.run([dash, SCRIPT], cwd=repo, env=e, capture_output=True, text=True)
+    assert "SOURCES=sub2 sub3" in (repo / "t-sub1.log").read_text()
