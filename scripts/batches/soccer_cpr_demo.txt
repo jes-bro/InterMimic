@@ -1,0 +1,30 @@
+# Soccer + CPR demo hunt (2026-09-24). Looking for ONE good soccer clip and ONE
+# good CPR clip, so this is deliberately wide: 7 of each, different sources.
+#
+# Bodies are sub10 and sub16 only -- both are held out (so the demo still shows
+# an unseen body) and both rendered well on the layups. sub13 is excluded: all 7
+# of its renders failed across basketball, soccer, CPR and OMOMO, so it is a body
+# problem, not a clip problem, and spending cards on it here would waste the run.
+#
+# Bodies alternate per clip so a failure tells you whether it was the clip or the
+# body: the same motion class appears under both.
+#
+# <body> <source> <clip> <arm-key>
+
+# --- soccer
+sub16 sub405 sub405_soccerd07s05t002d_006.pt act
+sub10 sub482 sub482_soccerd57s82t002a_000.pt act
+sub16 sub484 sub484_soccerd59s84t004a_000.pt act
+sub10 sub485 sub485_soccerd60s85t002b_000.pt act
+sub16 sub490 sub490_soccerd65s90t004a_002.pt act
+sub10 sub495 sub495_soccerd70s95t006a_002.pt act
+sub16 sub496 sub496_soccerd71s96t005c_000.pt act
+
+# --- cpr
+sub16 sub509 sub509_cprd87s109t002a_001.pt act
+sub10 sub512 sub512_cprd90s112t002a_000.pt act
+sub16 sub513 sub513_cprd91s113t001b_000.pt act
+sub10 sub517 sub517_cprd95s117t002c_001.pt act
+sub16 sub564 sub564_cprd132s164t002a_000.pt act
+sub10 sub567 sub567_cprd135s167t002b_000.pt act
+sub16 sub579 sub579_cprd147s179t002a_000.pt act
