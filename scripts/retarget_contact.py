@@ -334,14 +334,15 @@ def _one(job):
     # One thread per worker: torch grabs ~n_cores threads per process by default, so
     # a pool of W workers oversubscribes W*n_cores threads and thrashes to a standstill.
     torch.set_num_threads(1)
-    clip_path, source, target, scale, iters, out_dir, source_mjcf, allow_worse = job
+    (clip_path, source, target, scale, iters, out_dir, source_mjcf, allow_worse,
+     w_contact) = job
     dst = os.path.join(out_dir, target, os.path.basename(clip_path))
     if os.path.exists(dst):                       # resume: never redo finished work
         return (target, os.path.basename(clip_path), None, None, "skip")
     try:
         clip = torch.load(clip_path, map_location="cpu", weights_only=False).detach()
         out, st = retarget(clip, source, target, scale, iters=iters, verbose=False,
-                           source_mjcf=source_mjcf)
+                           source_mjcf=source_mjcf, w_contact=w_contact)
         # An under-converged solve can end up WORSE than not retargeting at all
         # (measured: 25 iters took sub16 from 2.72cm to 4.86cm). Never write that --
         # it would silently hand training a reference worse than the original.
@@ -371,7 +372,7 @@ def _one(job):
 
 
 def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=None,
-          source_mjcf=None, allow_worse=0.0):
+          source_mjcf=None, allow_worse=0.0, w_contact=10.0):
     """Retarget EVERY clip of `source` onto EVERY target body. This is the
     preprocessing step that makes the retargeted reference usable for training:
     one file per (target_body, clip), written to <out_dir>/<body>/<clip>.pt."""
@@ -386,10 +387,14 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
     if not clips:
         raise SystemExit(f"no clips for source '{source}' in {motion_dir}")
     jobs = [(os.path.join(motion_dir, c), source, t, scale, iters, out_dir, source_mjcf,
-             allow_worse)
+             allow_worse, w_contact)
             for t in targets for c in clips]
     print(f"[batch] {len(clips)} clips x {len(targets)} bodies = {len(jobs)} pairs, "
           f"{workers} workers -> {out_dir}")
+    # Stated, not assumed: an ablation tree differs from the real one ONLY here, and
+    # a silently ignored flag would produce an identical tree and waste a whole arm.
+    print(f"[batch] w_contact={w_contact} "
+          f"({'UNIFORM -- contact bodies weighted the same as every other body (ABLATION)' if w_contact == 0 else f'contact bodies weighted {1.0 + w_contact:g}x'})")
 
     agg, errs, skipped, nearmiss = defaultdict(list), [], 0, []
     with mp.Pool(workers) as pool:
@@ -480,6 +485,14 @@ def main():
                          "(0.05) only for converged solves that miss by noise; it "
                          "does NOT substitute for raising --iters on an "
                          "under-converged one.")
+    ap.add_argument("--w-contact", type=float, default=10.0,
+                    help="extra weight on bodies IN CONTACT in the solve's position "
+                         "error (w = 1 + w_contact*contact, so the default 10 makes a "
+                         "contact body count 11x). --w-contact 0 is the ABLATION: "
+                         "every body weighted equally, i.e. plain kinematic "
+                         "retargeting with no contact awareness. Write it to its OWN "
+                         "--out-dir; overwriting the real tree would silently change "
+                         "what every trained arm tracked.")
     ap.add_argument("--out-dir", default="InterAct/OMOMO_retarget_contact")
     a = ap.parse_args()
     if a.selftest:
@@ -493,7 +506,8 @@ def main():
             ap.error("--batch needs --targets or --targets-from")
         batch(a.motion_dir, a.source, targets, a.out_dir, tuple(a.object_scale),
               a.iters, a.workers, a.limit,
-              source_mjcf=a.source_mjcf, allow_worse=a.allow_worse_cm)
+              source_mjcf=a.source_mjcf, allow_worse=a.allow_worse_cm,
+              w_contact=a.w_contact)
         return
     if not (a.clip and a.target):
         ap.error("--clip and --target required (or --selftest / --batch)")
