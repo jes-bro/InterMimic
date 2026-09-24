@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HODome subjects -> a betas npz that generate_per_subject_mjcfs.py can read.
+"""HODome / BEHAVE subjects -> a betas npz that generate_per_subject_mjcfs.py reads.
 
 WHY. The zero-shot body test scores our policies on people from a DATASET THEY
 WERE NEVER TRAINED ON. To put a HODome person in the simulator we need an MJCF
@@ -14,9 +14,16 @@ sequence, so any one sequence per subject is enough; with several we average and
 report the spread, which is also the check that they really are one body (a large
 spread means the fits disagree and the "person" we build is nobody).
 
-    python3 scripts/hodome_subject_betas.py --inspect ~/Downloads/hodome_smplx/smplx/subject01_box.npz
-    python3 scripts/hodome_subject_betas.py --src ~/Downloads/hodome_smplx/smplx \\
+    python3 scripts/hodome_subject_betas.py --inspect ~/Downloads/hodome_smplx/subject01_box.npz
+    python3 scripts/hodome_subject_betas.py --src ~/Downloads/hodome_smplx \\
         --out scripts/hodome_subject_betas.npz --first-id 300
+    python3 scripts/hodome_subject_betas.py --layout behave --src ~/Downloads/behave/x \\
+        --out scripts/behave_subject_betas.npz --first-id 320
+
+TWO LAYOUTS, same job. hodome: one npz per (subject, object) sequence, named
+subject01_box.npz. behave: one DIRECTORY per sequence, Date01_Sub01_backpack_back/,
+holding smpl_fit_all.npz. Both carry per-frame betas and a gender; the person is
+the grouping key in each case.
 
 --inspect prints the keys, shapes and dtypes of one file and exits: run it FIRST,
 because the key names below are an assumption until a real file confirms them.
@@ -77,9 +84,27 @@ def betas_of(path):
     return b, gender
 
 
-def subject_files(src):
-    """{'subject01': [paths...]} from names like subject01_box.npz."""
+def subject_files(src, layout="hodome"):
+    """{'<subject>': [fit files...]} -- the grouping is by PERSON, not sequence.
+
+    hodome: subject01_box.npz, subject01_chair.npz, ...  -> key 'subject01'
+    behave: Date01_Sub01_backpack_back/smpl_fit_all.npz  -> key 'Sub01'
+            (the same person appears across several Dates; BEHAVE's own naming
+            puts the subject in the middle field, so that is what we key on --
+            grouping by Date would split one person into several 'bodies')
+    """
     per = {}
+    if layout == "behave":
+        for d in sorted(Path(src).iterdir()):
+            m = re.match(r"Date\d+_(Sub\d+)_", d.name)
+            if not (m and d.is_dir()):
+                continue
+            f = d / "smpl_fit_all.npz"
+            if f.exists():
+                per.setdefault(m.group(1), []).append(f)
+        if not per:
+            raise SystemExit(f"ERROR: no Date*_Sub*/smpl_fit_all.npz under {src}")
+        return per
     for p in sorted(Path(src).glob("*.npz")):
         m = re.match(r"(subject\d+)_", p.name)
         if not m:
@@ -90,8 +115,8 @@ def subject_files(src):
     return per
 
 
-def build(src, first_id, genders_override=None, n_betas=16):
-    per = subject_files(src)
+def build(src, first_id, genders_override=None, n_betas=16, layout="hodome"):
+    per = subject_files(src, layout)
     out, meta, source = {}, [], []
     for i, (subj, paths) in enumerate(sorted(per.items())):
         vecs, gender = [], None
@@ -121,11 +146,15 @@ def build(src, first_id, genders_override=None, n_betas=16):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--inspect", metavar="NPZ", help="print one file's keys and exit")
-    ap.add_argument("--src", help="directory of HODome subject*_*.npz files")
+    ap.add_argument("--src", help="directory of fits (see --layout)")
+    ap.add_argument("--layout", default="hodome", choices=["hodome", "behave"],
+                    help="hodome: subject01_box.npz files; behave: Date*_Sub*/ dirs "
+                         "each holding smpl_fit_all.npz")
     ap.add_argument("--out", default="scripts/hodome_subject_betas.npz")
     ap.add_argument("--first-id", type=int, default=300,
-                    help="subject01 becomes sub<first-id>; default 300 keeps HODome "
-                         "clear of OMOMO (1-17), synthetics (100+) and CARI4D (204, 401+)")
+                    help="the first subject becomes sub<first-id>. 300 for HODome and "
+                         "320 for BEHAVE keeps both clear of OMOMO (1-17), synthetics "
+                         "(100+), CARI4D (204, 401+) and each other")
     ap.add_argument("--gender", nargs="*", default=[],
                     help="subject01=female ... when the npz carries no gender")
     a = ap.parse_args()
@@ -136,7 +165,7 @@ def main():
         ap.error("--src (or --inspect)")
 
     overrides = dict(kv.split("=", 1) for kv in a.gender)
-    out, meta, source = build(a.src, a.first_id, overrides)
+    out, meta, source = build(a.src, a.first_id, overrides, layout=a.layout)
     np.savez(a.out, _genders=np.array(meta), _source=np.array(source), **out)
     print(f"\nwrote {a.out}: {len(out)} bodies")
     print("next (on the cluster, where the SMPL-X models are):")

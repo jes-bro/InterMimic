@@ -73,9 +73,23 @@ done
 for s in $SOURCES; do
   n=$(ls "$MOTION_DIR"/${s}_*.pt 2>/dev/null | wc -l)
   [ "$n" -gt 0 ] || { echo "ERROR: no ${s}_* clips in $MOTION_DIR" >&2; exit 2; }
-  echo "== source $s ($n clips) -> $n_bodies bodies"
+
+  # SOURCE MJCF. retarget_contact resolves a bare id to smplx_omomo_<id>.xml,
+  # which is right for OMOMO sources (sub1..sub17) and WRONG for the CARI4D ones
+  # (sub401 etc are smplh_behave_sub401.xml -- a different body from the
+  # synthetic smplx_omomo_sub401 the convention would find, if one existed).
+  # Pass it explicitly whenever the convention's file is absent, and fail loudly
+  # if neither exists rather than solving against the wrong source body.
+  SRC_FLAG=""
+  if [ ! -f "$ASSETS/smplx/smplx_omomo_$s.xml" ]; then
+    SRC_MJCF=$(ls "$ASSETS"/smplx/smplh_*_"$s".xml 2>/dev/null | head -1)
+    [ -n "$SRC_MJCF" ] || { echo "ERROR: no MJCF for SOURCE $s (neither smplx_omomo_$s.xml nor smplh_*_$s.xml)" >&2; exit 2; }
+    SRC_FLAG="--source-mjcf $SRC_MJCF"
+  fi
+
+  echo "== source $s ($n clips) -> $n_bodies bodies ${SRC_FLAG:+[$SRC_FLAG]}"
   python3 -u scripts/retarget_contact.py --batch \
-      --motion-dir "$MOTION_DIR" --source "$s" \
+      --motion-dir "$MOTION_DIR" --source "$s" $SRC_FLAG \
       --targets $BODIES --iters "$ITERS" --workers "$WORKERS" \
       --allow-worse-cm "$ALLOW_WORSE_CM" --out-dir "$TREE"
 done

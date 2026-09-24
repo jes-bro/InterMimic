@@ -96,3 +96,52 @@ def test_allow_worse_defaults_to_zero(repo):
 def test_sources_overridable(repo):
     out = run(repo, BODIES="sub300", SOURCES="sub1").stdout
     assert "sources : sub1\n" in out
+
+
+# --- source MJCF resolution -------------------------------------------------
+# retarget_contact resolves a bare source id to smplx_omomo_<id>.xml. That is
+# right for OMOMO sources and wrong for the CARI4D ones (sub401 is
+# smplh_behave_sub401.xml), so the driver passes --source-mjcf when the
+# convention's file is absent -- and refuses when neither exists, rather than
+# solving every clip against the wrong source body.
+
+def test_cari4d_source_passes_its_smplh_mjcf_explicitly(repo):
+    """sub401's body is smplh_behave_sub401.xml; without --source-mjcf the solver
+    would look for smplx_omomo_sub401.xml. Run without DRY so the loop is reached
+    (it then fails on the absent retarget_contact.py, which is fine -- what is
+    asserted is the flag, not the solve)."""
+    motion = repo / "InterAct" / "behave_cari4d_act"
+    motion.mkdir(parents=True)
+    (motion / "sub401_ball_000.pt").write_text("")
+    mjcf = repo / "isaacgym/src/intermimic/data/assets/smplx"
+    (mjcf / "smplh_behave_sub401.xml").write_text("")
+    e = dict(os.environ, BODIES="sub300", SOURCES="sub401",
+             MOTION_DIR="InterAct/behave_cari4d_act")
+    e.pop("DRY", None)
+    r = subprocess.run(["sh", SCRIPT], cwd=repo, env=e, capture_output=True, text=True)
+    assert "--source-mjcf" in r.stdout
+    assert "smplh_behave_sub401.xml" in r.stdout
+    assert "no MJCF for SOURCE" not in r.stderr
+
+
+def test_omomo_source_passes_no_source_mjcf_flag(repo):
+    """sub1 IS smplx_omomo_sub1.xml, so the convention is right and no flag is
+    added -- the OMOMO path must not change."""
+    mjcf = repo / "isaacgym/src/intermimic/data/assets/smplx"
+    (mjcf / "smplx_omomo_sub1.xml").write_text("")
+    e = dict(os.environ, BODIES="sub300", SOURCES="sub1")
+    e.pop("DRY", None)
+    r = subprocess.run(["sh", SCRIPT], cwd=repo, env=e, capture_output=True, text=True)
+    assert "--source-mjcf" not in r.stdout
+
+
+def test_source_with_no_mjcf_at_all_fails_loudly(repo, tmp_path):
+    """Fails at the source, naming it -- not silently retargeting from the wrong body."""
+    motion = repo / "InterAct" / "behave_cari4d_act"
+    motion.mkdir(parents=True)
+    (motion / "sub999_ball_000.pt").write_text("")
+    e = dict(os.environ, BODIES="sub300", SOURCES="sub999",
+             MOTION_DIR="InterAct/behave_cari4d_act")
+    r = subprocess.run(["sh", SCRIPT], cwd=repo, env=e, capture_output=True, text=True)
+    assert r.returncode == 2
+    assert "SOURCE sub999" in r.stderr

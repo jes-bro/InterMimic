@@ -144,3 +144,64 @@ def test_no_subject_files_fails_loudly(tmp_path):
     s.mkdir()
     r = _run(["--src", str(s), "--out", str(tmp_path / "b.npz")])
     assert r.returncode != 0 and "no subject" in r.stderr
+
+
+# --- BEHAVE layout ----------------------------------------------------------
+# BEHAVE stores one DIRECTORY per sequence, Date01_Sub01_backpack_back/, holding
+# smpl_fit_all.npz. The same person appears across several Dates, so the subject
+# field is the grouping key -- grouping by Date would split one person into
+# several "bodies" and the zero-shot test would be scoring people who don't exist.
+
+def _behave_seq(root, date, sub, obj, betas, gender):
+    d = root / f"Date{date}_Sub{sub}_{obj}"
+    d.mkdir(parents=True)
+    np.savez(d / "smpl_fit_all.npz",
+             betas=np.tile(np.asarray([betas] * 10, dtype=np.float32), (4, 1)),
+             gender=np.array(gender))
+
+
+@pytest.fixture
+def behave_src(tmp_path):
+    s = tmp_path / "behave"
+    s.mkdir()
+    _behave_seq(s, "01", "01", "backpack_back", 1.0, "male")
+    _behave_seq(s, "03", "01", "chairwood", 1.0, "male")      # same person, later date
+    _behave_seq(s, "05", "02", "boxlong", -0.4, "female")
+    return s
+
+
+def test_behave_groups_by_subject_not_date(behave_src, tmp_path):
+    out = tmp_path / "b.npz"
+    r = _run(["--layout", "behave", "--src", str(behave_src), "--out", str(out),
+              "--first-id", "320"])
+    assert r.returncode == 0, r.stderr
+    d = np.load(out, allow_pickle=True)
+    bodies = sorted(k for k in d.files if k.startswith("sub"))
+    assert bodies == ["sub320", "sub321"]                     # two people, not three
+    src_map = {str(e).split(":")[0]: str(e).split(":")[1] for e in d["_source"]}
+    assert src_map == {"sub320": "Sub01", "sub321": "Sub02"}
+
+
+def test_behave_keeps_per_subject_gender(behave_src, tmp_path):
+    """BEHAVE is gendered (5M/3F); a body built with the wrong gender model is the
+    wrong person."""
+    out = tmp_path / "b.npz"
+    _run(["--layout", "behave", "--src", str(behave_src), "--out", str(out),
+          "--first-id", "320"])
+    d = np.load(out, allow_pickle=True)
+    got = {str(e).split(":", 1)[0]: str(e).split(":", 1)[1] for e in d["_genders"]}
+    assert got == {"sub320": "male", "sub321": "female"}
+
+
+def test_behave_missing_layout_fails_loudly(tmp_path):
+    s = tmp_path / "behave"
+    s.mkdir()
+    (s / "not_a_sequence").mkdir()
+    r = _run(["--layout", "behave", "--src", str(s), "--out", str(tmp_path / "b.npz")])
+    assert r.returncode != 0 and "Date*_Sub*" in r.stderr
+
+
+def test_hodome_layout_still_works(src, tmp_path):
+    out = tmp_path / "b.npz"
+    r = _run(["--src", str(src), "--out", str(out)])
+    assert r.returncode == 0 and "sub300" in np.load(out, allow_pickle=True).files
