@@ -44,17 +44,27 @@ cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OMOMO13="sub1 sub2 sub3 sub5 sub6 sub7 sub8 sub9 sub11 sub12 sub14 sub15 sub17"
 GPUS="${GPUS:-4 5 6 7}"
 BODIES="${BODIES:-$OMOMO13}"
-# SOURCES unset (or "") means: let eval_one resolve them from the ARM's own train
-# config. That is what you want for any arm whose source set is not the OMOMO 13
-# -- the activity student has 35 -- and it removes a 35-token line from every
-# launch, which is a paste error waiting to happen.
+# SOURCES unset (or "") means: read them from the eval config's dataSub.
+#
+# NOT "leave it unset and let something downstream figure it out": this launcher
+# runs slurm_eval_curriculum.sh DIRECTLY, and that script's own default is the
+# OMOMO six (sub1 sub2 sub3 sub5 sub9 sub17). An activity arm launched with an
+# empty SOURCES therefore scored six OMOMO sources that do not exist in its data
+# -- 43 bodies x 6 junk rows, which looks like a completed sweep. Resolve it here,
+# from the file that states it, or fail.
 SOURCES="${SOURCES-$OMOMO13}"
+if [ -z "$SOURCES" ]; then
+  SOURCES=$(grep -m1 '^[[:space:]]*dataSub:' "$ENV_YAML" | cut -d: -f2- \
+            | tr -d "[]'\"," | tr -s ' ' | sed 's/^ *//; s/ *$//')
+  [ -n "$SOURCES" ] || { echo "ERROR: could not read dataSub from $ENV_YAML" >&2; exit 2; }
+fi
 PREFIX="${PREFIX:-vanilla_indist}"
 TIMEOUT="${TIMEOUT:-7200}"
 
 CKPT="${CKPT:-checkpoints/vanilla/student.pth}"
 ENV_YAML="${ENV_YAML:-isaacgym/src/intermimic/data/cfg/vanilla_intermimic_eval.yaml}"
 TRAIN_YAML="${TRAIN_YAML:-isaacgym/src/intermimic/data/cfg/train/rlg/omomo_all.yaml}"
+[ -f "$ENV_YAML" ] || { echo "ERROR: missing $ENV_YAML" >&2; exit 2; }
 # The paper's student is InterMimic_All via run_distill; the g3 students are
 # InterMimicDistillG3 via the same entry. Both are overridable because this
 # launcher is no longer baseline-specific.
@@ -89,10 +99,6 @@ done_csv() {
 # so the work is spread evenly even when the body count is not a multiple of N.
 n_gpu=$(echo "$GPUS" | wc -w)
 n_src=$(echo "$SOURCES" | wc -w)      # a complete body has one row per source
-# With SOURCES unset the count is unknown here, so completeness falls back to
-# "has at least one scored row" -- a re-run then redoes only bodies that produced
-# nothing, which is the safe direction.
-[ -z "$SOURCES" ] && n_src=1
 i=0
 plan=$(for b in $BODIES; do
   g=$(echo "$GPUS" | cut -d' ' -f$(( i % n_gpu + 1 )))
@@ -105,7 +111,7 @@ echo "   checkpoint : $CKPT"
 echo "   env cfg    : $ENV_YAML"
 echo "   entry/task : $ENTRY / $TASK"
 echo "   timeout    : ${TIMEOUT:-7200}s per pair"
-echo "   sources    : ${SOURCES:-<from the arm's train cfg>}"
+echo "   sources    : $SOURCES"
 echo "$plan" | while read -r g b; do
   out="eval_results/${PREFIX}_${b}.csv"
   if done_csv "$out" "$n_src"; then echo "   gpu $g  $b  SKIP (complete: $out)"; else echo "   gpu $g  $b  -> $out"; fi
@@ -130,7 +136,7 @@ for g in $GPUS; do
       env CUDA_VISIBLE_DEVICES="$g" OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 \
       CHECKPOINT="$CKPT" OUT="$out" \
       ENV_YAML="$ENV_YAML" TRAIN_YAML="$TRAIN_YAML" \
-      ${SOURCES:+SOURCES="$SOURCES"} BODIES="$b" RESUME=0 \
+      SOURCES="$SOURCES" BODIES="$b" RESUME=0 \
       EVAL_ENTRY="$ENTRY" EVAL_TASK="$TASK" \
       TIMEOUT="${TIMEOUT:-7200}" \
       bash slurm_eval_curriculum.sh > "${PREFIX}-${b}.log" 2>&1 || \

@@ -202,12 +202,24 @@ def test_timeout_overridable(repo):
     assert "timeout    : 900s per pair" in out
 
 
-def test_sources_can_be_inherited_from_the_arm(repo):
-    """SOURCES="" -> don't pass a list; eval_one reads the arm's train cfg. The
-    activity student has 35 sources and the OMOMO default would silently score it
-    on the wrong 13."""
-    out = run(repo, BODIES="sub1", GPUS="4", SOURCES="").stdout
-    assert "from the arm's train cfg" in out
+def test_sources_read_from_the_eval_cfg_datasub(repo):
+    """SOURCES="" -> read dataSub from ENV_YAML. Leaving it unset instead let
+    slurm_eval_curriculum.sh apply ITS default (the OMOMO six), which scored 43
+    activity bodies against sources their data does not contain -- 6 junk rows per
+    body, looking like a finished sweep."""
+    cfg = repo / "isaacgym/src/intermimic/data/cfg/act_eval.yaml"
+    cfg.write_text("env:\n  dataSub: ['sub401', 'sub402', 'sub404']\n")
+    out = run(repo, BODIES="sub1", GPUS="4", SOURCES="",
+              ENV_YAML="isaacgym/src/intermimic/data/cfg/act_eval.yaml").stdout
+    assert "sources    : sub401 sub402 sub404" in out
+
+
+def test_unreadable_datasub_fails_loudly(repo):
+    cfg = repo / "isaacgym/src/intermimic/data/cfg/no_datasub.yaml"
+    cfg.write_text("env:\n  numEnvs: 1024\n")
+    r = run(repo, BODIES="sub1", GPUS="4", SOURCES="",
+            ENV_YAML="isaacgym/src/intermimic/data/cfg/no_datasub.yaml")
+    assert r.returncode == 2 and "could not read dataSub" in r.stderr
 
 
 def test_sources_default_is_still_the_omomo_13(repo):
@@ -226,13 +238,16 @@ def test_launch_line_survives_dash(repo, tmp_path):
     stub.write_text('#!/bin/sh\necho "BODIES=$BODIES SOURCES=${SOURCES:-<unset>} '
                     'CKPT=$CHECKPOINT OUT=$OUT"\n')
     dash = shutil.which("dash") or "sh"
-    e = dict(os.environ, BODIES="sub1", GPUS="4", SOURCES="", PREFIX="t")
+    cfg = repo / "isaacgym/src/intermimic/data/cfg/act_eval.yaml"
+    cfg.write_text("env:\n  dataSub: ['sub401', 'sub402']\n")
+    e = dict(os.environ, BODIES="sub1", GPUS="4", SOURCES="", PREFIX="t",
+             ENV_YAML="isaacgym/src/intermimic/data/cfg/act_eval.yaml")
     e.pop("DRY", None)
     r = subprocess.run([dash, SCRIPT], cwd=repo, env=e, capture_output=True, text=True)
     assert "not found" not in r.stderr, r.stderr
     log = (repo / "t-sub1.log").read_text()
     assert "BODIES=sub1" in log
-    assert "SOURCES=<unset>" in log          # inherited from the arm, not forced
+    assert "SOURCES=sub401 sub402" in log
 
 
 def test_launch_line_passes_explicit_sources(repo):
