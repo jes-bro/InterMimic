@@ -1,0 +1,20 @@
+# sub13 CPR hunt (2026-09-24), for the qualitative figure's CPR panel.
+#
+# sub13 is the weak held-out body (26.3% mean vs sub10 74.2% / sub16 61.9%) and
+# failed all 7 renders in sub13_probe -- but CPR is a near-stationary kneeling
+# task, so it is the motion class most likely to work on a body that falls over
+# in locomotion. Seven different CPR sources, one clip each; pick the one that
+# looks right.
+#
+# sub517_cprd95s117t002c_001 is deliberately NOT here: it is the CPR clip
+# sub13_probe already rendered, and it was among the bad ones.
+#
+# <body> <source> <clip> <arm-key>
+
+sub13 sub509 sub509_cprd87s109t002a_001.pt act
+sub13 sub510 sub510_cprd88s110t002a_000.pt act
+sub13 sub512 sub512_cprd90s112t002a_000.pt act
+sub13 sub513 sub513_cprd91s113t001b_000.pt act
+sub13 sub564 sub564_cprd132s164t002a_000.pt act
+sub13 sub567 sub567_cprd135s167t002b_000.pt act
+sub13 sub579 sub579_cprd147s179t002a_000.pt act
