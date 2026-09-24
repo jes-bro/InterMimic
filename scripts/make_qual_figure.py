@@ -72,7 +72,13 @@ def parse_spec(spec, default_frac=ATTEMPT_FRAC):
                 rest, start, end = head, int(a), int(b)
     if not label.strip():
         raise SystemExit(f"spec '{spec}': empty label")
-    return label.strip(), rest, start, end
+    # Multi-line labels: a qualitative figure has to say BOTH what the task is
+    # and which held-out body is doing it -- "Soccer" alone does not show
+    # zero-shot transfer to an unseen embodiment. '|' or a literal '\n' in the
+    # label starts a new line ('|' because a real newline is awkward to type in
+    # a shell argument).
+    label = label.strip().replace("\\n", "\n").replace("|", "\n")
+    return label, rest, start, end
 
 
 def frame_indices(n_total, start, end, count, frac=ATTEMPT_FRAC):
@@ -104,7 +110,16 @@ def extract(path, idxs, fps, outdir, crop=None):
     return files
 
 
-def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200):
+# Times, by preference, falling back through the metric-compatible clones. The
+# figure sits next to LaTeX body text, so a serif that matches the paper reads as
+# part of it rather than as a screenshot. Nimbus Roman is URW's Times clone and
+# is metrically identical; Liberation Serif is the same idea from another foundry.
+SERIF = ["Times New Roman", "Nimbus Roman", "Liberation Serif", "STIXGeneral",
+         "DejaVu Serif"]
+
+
+def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200,
+            title=None):
     """rows: [(label, [frame paths])] -> one figure, one row per clip.
 
     matplotlib rather than hand-pasting tiles: the row labels sit outside the
@@ -116,6 +131,13 @@ def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200):
     matplotlib.use("Agg")                      # no display on a login shell
     import matplotlib.pyplot as plt
 
+    matplotlib.rcParams.update({
+        "font.family": "serif",
+        "font.serif": SERIF,
+        "mathtext.fontset": "stix",
+        "text.color": "#111111",
+    })
+
     if not rows:
         raise SystemExit("nothing to compose")
     n_rows = len(rows)
@@ -125,13 +147,16 @@ def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200):
 
     # Figure size in inches from the requested row height in px, so --height
     # keeps meaning "how tall is one frame" whichever backend draws it.
+    title_h = (height * 0.45 / dpi) if title else 0.0
     fig_w = n_cols * height * aspect / dpi + (label_w / dpi if labels else 0)
-    fig_h = n_rows * height / dpi
+    fig_h = n_rows * height / dpi + title_h
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h), dpi=dpi,
                              squeeze=False)
     fig.subplots_adjust(left=(label_w / dpi) / fig_w if labels else 0,
-                        right=1, top=1, bottom=0,
+                        right=1, top=1 - (title_h / fig_h), bottom=0,
                         wspace=gap / height, hspace=gap / height)
+    if title:
+        fig.suptitle(title, y=1.0, va="top", fontsize=max(9, height / 16))
 
     for r, (label, files) in enumerate(rows):
         for c in range(n_cols):
@@ -141,10 +166,18 @@ def compose(rows, out, height, gap=4, label_w=150, labels=True, dpi=200):
                 ax.imshow(Image.open(files[c]).convert("RGB"))
             if c == 0 and labels:
                 # Outside the axes, vertically centred on the row.
-                ax.text(-0.04, 0.5, label, transform=ax.transAxes,
-                        ha="right", va="center", fontsize=max(7, height / 22),
-                        fontweight="bold")
-    fig.savefig(out, bbox_inches="tight", pad_inches=0.02, facecolor="white")
+                # First line is the task, the rest identify the body. The body
+                # line is the point of the figure, so it is legible but quieter
+                # than the task -- two weights rather than two sizes.
+                head, _, tail = label.partition("\n")
+                ax.text(-0.04, 0.5, head, transform=ax.transAxes,
+                        ha="right", va=("bottom" if tail else "center"),
+                        fontsize=max(8, height / 18), fontweight="bold")
+                if tail:
+                    ax.text(-0.04, 0.5, tail, transform=ax.transAxes,
+                            ha="right", va="top", fontsize=max(7, height / 22),
+                            color="#444444", linespacing=1.15)
+    fig.savefig(out, bbox_inches="tight", pad_inches=0.03, facecolor="white")
     plt.close(fig)
     return int(fig_w * dpi), int(fig_h * dpi)
 
@@ -162,6 +195,9 @@ def main():
                     help="fraction of the video treated as one attempt when a "
                          "spec gives no explicit range (default 0.25)")
     ap.add_argument("--no-labels", action="store_true")
+    ap.add_argument("--title", default=None,
+                    help="caption across the top, e.g. \"Zero-shot generalization "
+                         "to unseen embodiments across tasks in CrossMimic4D\"")
     a = ap.parse_args()
     if a.frames < 1:
         raise SystemExit("--frames must be at least 1")
@@ -178,7 +214,8 @@ def main():
             d = os.path.join(tmp, f"row{i}")
             os.makedirs(d)
             rows.append((label, extract(path, idxs, fps, d, a.crop)))
-        size = compose(rows, a.out, a.height, labels=not a.no_labels)
+        size = compose(rows, a.out, a.height, labels=not a.no_labels,
+                       title=a.title)
         print(f"\nwrote {a.out}  ({size[0]}x{size[1]} px, {len(rows)} rows x {a.frames})")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

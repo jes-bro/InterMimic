@@ -100,6 +100,18 @@ def test_spec_path_with_colon_but_no_range():
     assert path == "/a/12:30/b.mp4" and e is None
 
 
+def test_pipe_makes_a_second_label_line():
+    """The figure must name the held-out body, not just the task -- that is what
+    makes it an illustration of zero-shot transfer to an unseen embodiment."""
+    lab, _, _, _ = M.parse_spec("Soccer|sub16 (held out)=/a/b.mp4")
+    assert lab == "Soccer\nsub16 (held out)"
+
+
+def test_backslash_n_also_makes_a_line():
+    lab, _, _, _ = M.parse_spec("Soccer\\nsub16=/a/b.mp4")
+    assert lab == "Soccer\nsub16"
+
+
 def test_spec_without_equals_fails_loudly():
     with pytest.raises(SystemExit):
         M.parse_spec("just_a_path.mp4")
@@ -148,6 +160,26 @@ def test_reports_which_frames_it_sampled(video, tmp_path):
     r = _run(["--out", str(tmp_path / "f.png"), "--frames", "3",
               f"A={video}:0-71"])
     assert "sampling [0, 36, 71]" in r.stdout, r.stdout
+
+
+def test_title_is_drawn_and_makes_room_for_itself(video, tmp_path):
+    """A title must not overlap the top row -- the figure grows instead."""
+    from PIL import Image as I
+    plain = tmp_path / "plain.png"
+    titled = tmp_path / "titled.png"
+    _run(["--out", str(plain), "--frames", "3", "--height", "120", f"A={video}:0-60"])
+    _run(["--out", str(titled), "--frames", "3", "--height", "120",
+          "--title", "Zero-shot generalization to unseen embodiments",
+          f"A={video}:0-60"])
+    assert I.open(titled).height > I.open(plain).height
+
+
+def test_a_serif_font_is_actually_available(video, tmp_path):
+    """The figure sits beside LaTeX body text; falling back to the sans default
+    silently would make it look like a screenshot."""
+    import matplotlib.font_manager as fm
+    have = {f.name for f in fm.fontManager.ttflist}
+    assert have & set(M.SERIF), f"none of {M.SERIF} installed"
 
 
 def test_bad_frames_argument_fails_loudly(video, tmp_path):
