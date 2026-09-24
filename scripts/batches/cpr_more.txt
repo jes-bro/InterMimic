@@ -1,0 +1,22 @@
+# More CPR rollouts on the two bodies that work, before deciding whether CPR goes
+# in the figure at all (2026-09-24).
+#
+# Already rendered: sub10 x {512, 517, 567}, sub16 x {509, 513, 564, 579}, and all
+# 7 sub13 ones (bad). This adds 8 more across the CPR sources not yet tried on
+# each body, so the decision rests on ~15 rollouts rather than 7.
+#
+# Both bodies are held out, so any of these is usable in the figure.
+#
+# <body> <source> <clip> <arm-key>
+
+# --- sub10, sources it has not seen
+sub10 sub509 sub509_cprd87s109t002a_001.pt act
+sub10 sub513 sub513_cprd91s113t001b_000.pt act
+sub10 sub564 sub564_cprd132s164t002a_000.pt act
+sub10 sub579 sub579_cprd147s179t002a_000.pt act
+
+# --- sub16, sources it has not seen
+sub16 sub512 sub512_cprd90s112t002a_000.pt act
+sub16 sub517 sub517_cprd95s117t002c_001.pt act
+sub16 sub567 sub567_cprd135s167t002b_000.pt act
+sub16 sub510 sub510_cprd88s110t002a_000.pt act
