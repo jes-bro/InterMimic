@@ -34,13 +34,28 @@ from pathlib import Path
 import numpy as np
 
 
-def neutral_height(models_dir, betas):
-    """T-pose SMPL-X NEUTRAL mesh height in metres (copy of
-    generate_synthetic_bodies.neutral_height, kept identical on purpose)."""
-    z = np.load(Path(models_dir) / "SMPLX_NEUTRAL.npz", allow_pickle=True)
+def mesh_height(models_dir, betas, gender="neutral"):
+    """T-pose SMPL-X mesh height in metres, built with the subject's OWN model.
+
+    GENDER MATTERS, and getting it wrong is silent. generate_per_subject_mjcfs
+    builds each body with its gendered model, so a height computed from
+    SMPLX_NEUTRAL describes a different body. Measured on the 8 BEHAVE bodies:
+    against the MJCFs the gendered heights correlate r=1.00 (offset 0.064 +/-
+    0.003 m, the mesh-vs-capsule gap), the neutral ones r=0.21 (offset 0.128 +/-
+    0.13) -- with the shortest body computing as the tallest. The synthetic
+    bodies and HODome are neutral fits, so nothing there changes.
+    """
+    f = Path(models_dir) / f"SMPLX_{gender.strip().upper()}.npz"
+    if not f.is_file():
+        f = Path(models_dir) / "SMPLX_NEUTRAL.npz"
+    z = np.load(f, allow_pickle=True)
     sd = z["shapedirs"][:, :, :len(betas)].astype(np.float64)
     V = z["v_template"].astype(np.float64) + np.einsum("vni,i->vn", sd, betas)
     return float(V[:, 1].max() - V[:, 1].min())          # SMPL-X up = +y
+
+
+def neutral_height(models_dir, betas):                   # back-compat
+    return mesh_height(models_dir, betas, "neutral")
 
 
 def main():
@@ -49,9 +64,20 @@ def main():
     ap.add_argument("--heights", required=True, help="json to extend")
     ap.add_argument("--models-dir", default=str(Path.home() / "Downloads" / "models" / "smplx"))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="replace existing entries. Needed once, to correct the 8 "
+                         "BEHAVE heights written with the neutral model before "
+                         "gender was handled; otherwise leave it off, since a "
+                         "changed height changes what a finished run meant")
     a = ap.parse_args()
 
     betas = np.load(a.betas, allow_pickle=True)
+    genders = {}
+    for e in np.atleast_1d(betas["_genders"]) if "_genders" in betas.files else []:
+        t = (e.decode() if isinstance(e, bytes) else str(e))
+        if ":" in t:
+            k, v = t.split(":", 1)
+            genders[k] = v
     heights = json.load(open(a.heights)) if Path(a.heights).exists() else {}
 
     added, kept, conflict = {}, [], []
@@ -59,12 +85,14 @@ def main():
         if not k.startswith("sub"):
             continue                                      # _genders / _source
         n = k[3:]
-        h = round(neutral_height(a.models_dir, np.asarray(betas[k], dtype=np.float64)), 4)
-        if n in heights:
+        g = genders.get(k, "neutral")
+        h = round(mesh_height(a.models_dir, np.asarray(betas[k], dtype=np.float64), g), 4)
+        if n in heights and not a.overwrite:
             (kept if abs(heights[n] - h) < 1e-3 else conflict).append((n, heights[n], h))
             continue
         added[n] = h
-        print(f"  {k}: {h:.4f} m")
+        print(f"  {k} ({g}): {h:.4f} m"
+              + (f"   [was {heights[n]}]" if n in heights and heights[n] != h else ""))
 
     if conflict:
         print("\nERROR: these bodies already have a DIFFERENT height in "

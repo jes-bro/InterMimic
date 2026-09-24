@@ -103,3 +103,36 @@ def test_taller_betas_give_a_taller_body(tmp_path):
     _run(["--betas", str(b), "--heights", str(h), "--models-dir", str(MODELS)])
     got = json.loads(h.read_text())
     assert got["900"] != got["901"]
+
+
+# --- gender ------------------------------------------------------------------
+# generate_per_subject_mjcfs builds each body with its gendered model, so a
+# height from SMPLX_NEUTRAL describes a different body. On the 8 BEHAVE bodies
+# the gendered heights matched the MJCFs at r=1.00 and the neutral ones at
+# r=0.21, with the shortest body computing as the tallest.
+
+def test_gender_changes_the_height(tmp_path):
+    b = tmp_path / "b.npz"
+    v = np.zeros(16, dtype=np.float32)
+    np.savez(b, sub900=v, sub901=v,
+             _genders=np.array(["sub900:male", "sub901:female"]))
+    h = tmp_path / "h.json"
+    h.write_text("{}")
+    r = _run(["--betas", str(b), "--heights", str(h), "--models-dir", str(MODELS)])
+    assert r.returncode == 0, r.stderr
+    got = json.loads(h.read_text())
+    assert got["900"] != got["901"], "same height for male and female mean bodies"
+    assert "(male)" in r.stdout and "(female)" in r.stdout
+
+
+def test_overwrite_is_required_to_change_a_value(tmp_path):
+    b = tmp_path / "b.npz"
+    np.savez(b, sub900=np.zeros(16, dtype=np.float32),
+             _genders=np.array(["sub900:male"]))
+    h = tmp_path / "h.json"
+    h.write_text(json.dumps({"900": 1.2345}))
+    r = _run(["--betas", str(b), "--heights", str(h), "--models-dir", str(MODELS)])
+    assert r.returncode == 2 and json.loads(h.read_text())["900"] == 1.2345
+    r = _run(["--betas", str(b), "--heights", str(h), "--models-dir", str(MODELS),
+              "--overwrite"])
+    assert r.returncode == 0 and json.loads(h.read_text())["900"] != 1.2345
