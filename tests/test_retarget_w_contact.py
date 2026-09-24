@@ -32,7 +32,8 @@ def captured(monkeypatch, tmp_path):
         seen["w_contact"] = w_contact
         seen["source"] = source
         seen["target"] = target
-        return "CLIP_OUT", {"contact_before_cm": 1.0, "contact_after_cm": 0.2}
+        return "CLIP_OUT", {"contact_before_cm": 1.0, "contact_after_cm": 0.2,
+                            "all_before_cm": 1.5, "all_after_cm": 0.6}
 
     monkeypatch.setattr(rc, "retarget", fake_retarget)
     monkeypatch.setattr(rc.torch, "load", lambda *a, **k: types.SimpleNamespace(
@@ -59,7 +60,7 @@ def test_worker_forwards_the_ablation_weight(captured):
     assert seen["w_contact"] == 0.0
 
 
-def test_batch_puts_the_weight_in_every_job(monkeypatch, tmp_path):
+def test_batch_puts_the_weight_in_every_job(monkeypatch, tmp_path, capsys):
     """batch() builds the job tuples; the weight must ride along on each one."""
     motion = tmp_path / "clips"
     motion.mkdir()
@@ -81,7 +82,7 @@ def test_batch_puts_the_weight_in_every_job(monkeypatch, tmp_path):
         def imap_unordered(self, fn, jobs):
             jobs_seen.extend(jobs)
             for j in jobs:
-                yield (j[2], os.path.basename(j[0]), 1.0, 0.2, "ok")
+                yield (j[2], os.path.basename(j[0]), 1.0, 0.2, 1.5, 0.6, "ok")
 
     import multiprocessing as mp
     monkeypatch.setattr(mp, "Pool", FakePool)
@@ -91,6 +92,8 @@ def test_batch_puts_the_weight_in_every_job(monkeypatch, tmp_path):
 
     assert len(jobs_seen) == 4                      # 2 clips x 2 bodies
     assert {j[-1] for j in jobs_seen} == {0.0}      # every job carries the ablation weight
+    out = capsys.readouterr().out
+    assert "all-body" in out, "the summary must show all-body error beside contact"
 
 
 def test_cli_default_and_override():

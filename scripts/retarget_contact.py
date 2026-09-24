@@ -338,7 +338,7 @@ def _one(job):
      w_contact) = job
     dst = os.path.join(out_dir, target, os.path.basename(clip_path))
     if os.path.exists(dst):                       # resume: never redo finished work
-        return (target, os.path.basename(clip_path), None, None, "skip")
+        return (target, os.path.basename(clip_path), None, None, None, None, "skip")
     try:
         clip = torch.load(clip_path, map_location="cpu", weights_only=False).detach()
         out, st = retarget(clip, source, target, scale, iters=iters, verbose=False,
@@ -359,6 +359,7 @@ def _one(job):
                               allow_worse):
             return (target, os.path.basename(clip_path),
                     st["contact_before_cm"], st["contact_after_cm"],
+                    st["all_before_cm"], st["all_after_cm"],
                     f"WORSE {st['contact_before_cm']:.2f}->{st['contact_after_cm']:.2f}cm "
                     f"(raise --iters)")
         os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -366,9 +367,11 @@ def _one(job):
         worse = st["contact_after_cm"] > st["contact_before_cm"]
         return (target, os.path.basename(clip_path),
                 st["contact_before_cm"], st["contact_after_cm"],
+                st["all_before_cm"], st["all_after_cm"],
                 "ok_worse" if worse else "ok")
     except Exception as e:                        # never let one clip kill the sweep
-        return (target, os.path.basename(clip_path), None, None, f"ERROR {e!r}")
+        return (target, os.path.basename(clip_path), None, None, None, None,
+                f"ERROR {e!r}")
 
 
 def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=None,
@@ -398,14 +401,14 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
 
     agg, errs, skipped, nearmiss = defaultdict(list), [], 0, []
     with mp.Pool(workers) as pool:
-        for i, (tgt, clip, before, after, status) in enumerate(pool.imap_unordered(_one, jobs), 1):
+        for i, (tgt, clip, before, after, all_b, all_a, status) in enumerate(pool.imap_unordered(_one, jobs), 1):
             if status == "ok":
-                agg[tgt].append((before, after))
+                agg[tgt].append((before, after, all_b, all_a))
             elif status == "ok_worse":
                 # Written under --allow-worse-cm. Counted in the per-body mean
                 # like any other clip, AND listed separately below so a run can
                 # never quietly accumulate them.
-                agg[tgt].append((before, after))
+                agg[tgt].append((before, after, all_b, all_a))
                 nearmiss.append((tgt, clip, before, after))
             elif status == "skip":
                 skipped += 1
@@ -420,23 +423,42 @@ def batch(motion_dir, source, targets, out_dir, scale, iters, workers, limit=Non
     # 3 of 293, sub2 none). Those must be EXCLUDED from the mean, not allowed to
     # poison it -- a plain mean turns every body's average into nan and the whole
     # generation looks failed when the data is fine. Counted and reported, not hidden.
-    print(f"\n[batch] per-body contact error (cm), mean over clips:")
+    # CONTACT error is the objective's target; ALL-BODY error is the control.
+    # Reading them together separates the two ways a solve can regress:
+    #   contact worse + all-body better/flat -> the weighting traded contact
+    #       accuracy for overall accuracy. Expected with --w-contact 0; it is
+    #       the ablation working, not a failure.
+    #   BOTH worse                           -> the solve did not converge.
+    #       Raise --iters; this is not a property of the weighting.
+    # With only the contact number the two are indistinguishable.
+    print(f"\n[batch] per-body error (cm), mean over clips -- contact | all-body:")
     summary = {}
     for t in targets:
         if not agg[t]:
             continue
-        pairs = [(x[0], x[1]) for x in agg[t]]
-        live = [(b, a) for b, a in pairs if not (np.isnan(b) or np.isnan(a))]
+        pairs = list(agg[t])
+        live = [x for x in pairs if not (np.isnan(x[0]) or np.isnan(x[1]))]
         n_nc = len(pairs) - len(live)
+        # All-body error is defined for EVERY clip, including the no-contact ones
+        # that have no contact error to report -- so it is averaged over its own
+        # set rather than being dropped along with them.
+        live_all = [x for x in pairs
+                    if x[2] is not None and not (np.isnan(x[2]) or np.isnan(x[3]))]
+        ab = float(np.mean([x[2] for x in live_all])) if live_all else float("nan")
+        aa = float(np.mean([x[3] for x in live_all])) if live_all else float("nan")
         if not live:
             summary[t] = dict(before_cm=float("nan"), after_cm=float("nan"),
+                              all_before_cm=ab, all_after_cm=aa,
                               n=0, n_no_contact=n_nc)
-            print(f"    {t:>8}:   no clip with any contact frame ({n_nc} clips)")
+            print(f"    {t:>8}:   no clip with any contact frame ({n_nc} clips)"
+                  f"   | all-body {ab:6.2f} -> {aa:6.2f}")
             continue
         b = float(np.mean([x[0] for x in live])); a = float(np.mean([x[1] for x in live]))
-        summary[t] = dict(before_cm=b, after_cm=a, n=len(live), n_no_contact=n_nc)
+        summary[t] = dict(before_cm=b, after_cm=a, all_before_cm=ab, all_after_cm=aa,
+                          n=len(live), n_no_contact=n_nc)
         note = f"   [{n_nc} clip(s) had no contact frames, excluded]" if n_nc else ""
-        print(f"    {t:>8}: {b:6.2f} -> {a:6.2f}   ({len(live)} clips){note}")
+        print(f"    {t:>8}: {b:6.2f} -> {a:6.2f}   | all-body {ab:6.2f} -> {aa:6.2f}"
+              f"   ({len(live)} clips){note}")
     if nearmiss:
         print(f"\n[batch] {len(nearmiss)} written under --allow-worse-cm {allow_worse} "
               f"(converged but marginally worse than the source):")
