@@ -24,7 +24,7 @@
 #   off-diagonal            = cross-retarget
 # Override via env vars:
 #   CHECKPOINT=path/to.pth   BODIES="sub2 sub3"   SOURCES="sub2"
-#   TIMEOUT=900  OUT=eval_results/foo.csv
+#   TIMEOUT=7200  OUT=eval_results/foo.csv
 # (numEnvs is NOT a launcher knob -- it lives in the eval config; see below.)
 #
 # FAST first read (~12 min, 1 pair) -- do this before the full matrix:
@@ -100,7 +100,13 @@ SOURCES="${SOURCES:-sub1 sub2 sub3 sub5 sub9 sub17}"
 # beat whatever the config said, which is how two arms could be compared on
 # different scoring budgets. To change it, change the eval config, where it is
 # reviewable and shared by every arm compared against it.
-TIMEOUT="${TIMEOUT:-900}"
+# 7200, not 900: an OMOMO pair takes 15-20 min on a quiet box and longer when
+# the machine is also training or retargeting. At 900 a slow pair is CUT OFF and
+# its row is written anyway, scored from however many attempts finished -- 7 of
+# 13 pairs in one 2026-09-23 run, one of them from 52 attempts. That reads as a
+# low score, not as a failure. The timeout exists to stop a WEDGED pair, so it
+# should sit far above the slowest healthy one.
+TIMEOUT="${TIMEOUT:-7200}"
 # Which entrypoint/task scores the checkpoint. Teachers: intermimic.run +
 # InterMimic. g3 STUDENTS: intermimic.run_distill + InterMimicDistillG3 -- the
 # task that builds the student observation and the wrapper that feeds it to the
