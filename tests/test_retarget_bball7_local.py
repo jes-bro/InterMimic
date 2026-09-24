@@ -81,3 +81,24 @@ def test_missing_cfg_fails_loudly(repo):
     os.remove(repo / "isaacgym/src/intermimic/data/cfg/omomo_teacher_g3_bball7_geoall__f0.yaml")
     r = run(repo, W_CONTACT="0")
     assert r.returncode == 2 and "no cfg" in r.stderr
+
+
+def test_real_tree_refuses_regressed_solves(repo):
+    """allow-worse 0: a regression means an under-converged solve, and writing it
+    would hand training a reference worse than no retargeting at all."""
+    out = run(repo).stdout
+    assert "--allow-worse-cm 0" in out
+
+
+def test_ablation_keeps_regressed_solves(repo):
+    """The ablation is SUPPOSED to solve contacts badly. Refusing those pairs would
+    keep only the ones uniform weighting happened to do well on -- a cherry-picked
+    tree that understates the cost of dropping contact weighting."""
+    out = run(repo, W_CONTACT="0").stdout
+    assert "--allow-worse-cm 1000" in out
+    assert "cherry-pick" in out
+
+
+def test_allow_worse_can_be_overridden(repo):
+    out = run(repo, W_CONTACT="0", ALLOW_WORSE_CM="0.05").stdout
+    assert "--allow-worse-cm 0.05" in out

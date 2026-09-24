@@ -23,7 +23,9 @@
 #   DRY=1 W_CONTACT=0 sh scripts/retarget_bball7_local.sh      # print the plan
 #
 # Env: W_CONTACT (default 10), WORKERS (default nproc-2), ITERS (300),
-#      MOTION_DIR, CFG, OUT_PREFIX, MERGED, HELDOUT, DRY.
+#      ALLOW_WORSE_CM (0 for the real tree, 1000 = keep-everything for an
+#      ablation -- see the note where it is set), MOTION_DIR, CFG, OUT_PREFIX,
+#      MERGED, HELDOUT, DRY.
 #
 # CPU only, no Isaac Gym, no GPU -- it can run beside training and evals.
 set -eu
@@ -48,6 +50,21 @@ else
   MERGED="${MERGED:-InterAct/behave_cari4d_bball7_f0_bodymajor_w${W_CONTACT}}"
 fi
 
+# A solve that ends up WORSE than not retargeting is refused by default -- right
+# for the real tree, where a regression means an under-converged solve.
+#
+# WRONG for an ablation. With uniform weights the solve is SUPPOSED to do badly
+# at contacts; refusing those pairs would keep only the ones where it happened to
+# do well and leave holes elsewhere, so the arm would train on a cherry-picked
+# subset and the ablation would understate its own cost. So when W_CONTACT is not
+# the real 10, keep every solve and let the arm train on the bad references --
+# that is the thing being measured.
+if [ "$W_CONTACT" = "10" ]; then
+  ALLOW_WORSE_CM="${ALLOW_WORSE_CM:-0}"
+else
+  ALLOW_WORSE_CM="${ALLOW_WORSE_CM:-1000}"      # cm: effectively "write them all"
+fi
+
 [ -d "$MOTION_DIR" ] || { echo "ERROR: no motion dir $MOTION_DIR" >&2; exit 2; }
 [ -f "$CFG" ] || { echo "ERROR: no cfg $CFG" >&2; exit 2; }
 
@@ -56,7 +73,10 @@ echo "   motion : $MOTION_DIR"
 echo "   bodies : subjectBodies of $(basename "$CFG") + held-out [$HELDOUT]"
 echo "   per-src: ${OUT_PREFIX}_src<id>"
 echo "   merged : $MERGED"
-[ "$W_CONTACT" = "0" ] && echo "   NOTE: w_contact=0 is the ABLATION tree (uniform weights, no contact awareness)"
+echo "   worse  : --allow-worse-cm $ALLOW_WORSE_CM"
+[ "$W_CONTACT" = "0" ] && echo "   NOTE: w_contact=0 is the ABLATION tree (uniform weights, no contact awareness);
+         regressed solves are KEPT (allow-worse $ALLOW_WORSE_CM cm) -- refusing them
+         would cherry-pick the pairs uniform weighting happened to do well on"
 
 # Refuse to write into a tree that already exists with DIFFERENT settings: the
 # per-source dirs are resumable by design (finished pairs are skipped), which is
@@ -79,12 +99,14 @@ for SID in $SUBJECTS; do
   python3 -u scripts/retarget_contact.py --batch \
       --motion-dir "$MOTION_DIR" --source "sub$SID" --source-mjcf "$MJCF" \
       --targets-from "$CFG" --iters "$ITERS" --workers "$WORKERS" \
-      --w-contact "$W_CONTACT" --out-dir "${OUT_PREFIX}_src$SID"
+      --w-contact "$W_CONTACT" --allow-worse-cm "$ALLOW_WORSE_CM" \
+      --out-dir "${OUT_PREFIX}_src$SID"
   # held-out eval bodies, same tree (additive; finished pairs are skipped)
   python3 -u scripts/retarget_contact.py --batch \
       --motion-dir "$MOTION_DIR" --source "sub$SID" --source-mjcf "$MJCF" \
       --targets $HELDOUT --iters "$ITERS" --workers "$WORKERS" \
-      --w-contact "$W_CONTACT" --out-dir "${OUT_PREFIX}_src$SID"
+      --w-contact "$W_CONTACT" --allow-worse-cm "$ALLOW_WORSE_CM" \
+      --out-dir "${OUT_PREFIX}_src$SID"
 done
 
 echo "== merging 7 per-source trees -> $MERGED"
