@@ -43,8 +43,16 @@ import torch
 
 VALID_SHAPES = ('product', 'geometric', 'geometric_all')
 
-# The terms are exp(-x) and so strictly positive, but a zero from underflow
-# would make the root's gradient non-finite.
+# A floor, NOT a numerical requirement. The reward is computed from simulator
+# state and used as a scalar by PPO; autograd never touches it, and torch's
+# forward 0 ** (1/N) is 0, so an underflowed factor would not crash anything.
+# What the clamp does is turn a zero factor into a floored reward (~0.003 under
+# the 4-factor root, ~0.012 under the 5-factor one -- see the docstring's
+# caveat) instead of a zero one. It is KEPT because every geometric run since
+# r7, all g3 teachers and students included, trained with it; removing it now
+# would make new runs non-comparable on reward with the runs they are read
+# against. Candidate for removal at the next reward-recipe generation, when
+# nothing in flight is being compared against a floored run (Jess 2026-09-25).
 _FLOOR = 1e-8
 
 
