@@ -70,6 +70,32 @@ launch, not its wall. NUM_ENVS=1024 matches the Sep-16 run; on a VM that already
 had a tmux server running, `tmux kill-server` first or the new session inherits
 the old environment and NUM_ENVS silently reverts to the launcher default.
 
+## `nopose` students (no relative joint-angle reward factor), branch `g3-distill-nopose`
+
+Two arms with `rewardTerms.pose.enable: false`; everything else is the tfinal
+recipe. This is a METHOD CANDIDATE, not an ablation: the teacher nopose arm beat
+the with-pose teacher, so the pose term is being dropped from the method and
+these arms test that on the students. In a student the env reward only reaches the loss through the critic
+(from epoch 2300) and the PPO actor term (after 2900), so read both at a
+MATCHED EPOCH well past 2900, never at matched wall time.
+
+OMOMO XF on the final teachers, one key off `_tfinal` (same teacher dir, same data):
+
+    git fetch origin g3-distill-nopose && git checkout g3-distill-nopose
+    sbatch --exclude=simurgh6,simurgh2 slurm_student_g3_omomo_xf_ret_nvadlr_tfinal_nopose__f0.sh
+
+Activities WITHOUT cpr (bball7 + soccer15, 22 sources): a NEW source set, so its
+own merged data, props file and teacher dir first (each step refuses to redo):
+
+    python3 scripts/merge_activity_data.py --arms bball7 soccer15 --out-motion InterAct/behave_cari4d_act_nocpr --out-retarget InterAct/behave_cari4d_act_nocpr_f0_bodymajor --props-out isaacgym/src/intermimic/data/cfg/object_props_g3_act_nocpr.yaml --bodies-from isaacgym/src/intermimic/data/cfg/omomo_student_g3_act_nocpr_xf_ret_nvadlr_nopose__f0.yaml --student-plane-restitution 0.7
+    python3 scripts/collect_g3_teachers.py --activities bball7 soccer15 --out checkpoints/teachers/g3_act_nocpr
+    sbatch --exclude=simurgh6,simurgh2 slurm_student_g3_act_nocpr_xf_ret_nvadlr_nopose__f0.sh
+
+Commit the props file the merge writes (`object_props_g3_act_nocpr.yaml`) next
+to the cfg. The collect step prints the epoch it picked per teacher; record the
+two numbers. No with-pose twin of this source set exists, so its read against
+the act students confounds "no cpr" with "no pose".
+
 ## Activity student (bball7 + soccer15 + cpr13 teachers -> one student)
 
     sh scripts/gcp_stage.sh pull-assets
