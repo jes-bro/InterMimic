@@ -1,0 +1,232 @@
+# STUDENT, ACTIVITIES WITHOUT CPR (act_nocpr), XF / RET / NVADLR, METHOD CANDIDATE
+# nopose. Distills the bball7 + soccer15 g3 teachers (2 checkpoints, 22 sources =
+# the act student's 35 minus cpr13's 13) into one 6-TOKEN TRANSFORMER student via
+# InterMimicDistillG3, WITHOUT the relative joint-angle reward factor. NOT an
+# ablation: the teacher nopose arm beat the with-pose teacher, so the pose term
+# is being dropped from the method and this is the candidate recipe.
+#
+# Hand-written from omomo_student_g3_act_xf_ret_nvadlr_tfinal__f0.yaml. Keys that
+# differ from it (python3 scripts/cfg_diff.py), and why each one:
+#   dataSub              35 -> 22 sources: the act roster minus cpr13's 13
+#   motion_file          InterAct/behave_cari4d_act       -> ..._act_nocpr        (own merge)
+#   retargetedMotionDir  InterAct/behave_cari4d_act_f0_bodymajor -> ..._act_nocpr_f0_bodymajor
+#   objectPropsFile      object_props_g3_act.yaml         -> object_props_g3_act_nocpr.yaml
+#   teacherPolicy        checkpoints/teachers/g3_act_tfinal -> checkpoints/teachers/g3_act_nocpr
+#   rewardTerms.pose.enable  true -> false               (the method change; lambda left inert)
+# The first four are ONE change (a merged data set is built per source set by
+# scripts/merge_activity_data.py, which also writes the props file and refuses a
+# roster mismatch at launch); the teacher dir is its own so the manifest records
+# which bball7 / soccer15 snapshots it saw ("final" = latest at collect time).
+# plane.restitution stays 0.7 (the act student's), so the solved per-object
+# restitutions (bball 1.0, soccer 0.6) and the physics are the act student's.
+# Everything else -- bodies, recipe, horizons, physics -- is the act student's.
+#
+# NO with-pose control exists for this source set (Jess 2026-09-25: nopose only);
+# its read is against the act (with cpr) students, so "no cpr" and "no pose"
+# are confounded there until a with-pose act_nocpr twin is trained.
+#
+# WHERE THE KEY BITES IN A STUDENT (learning/intermimic_agent_distill.py
+# calc_gradients): the env reward reaches the loss only through the critic
+# (warm-in from epoch 2300) and the PPO actor term (epoch > 2900, once the
+# critic's explained variance holds). Below epoch 2300 the loss is the expert
+# (BC) term alone, PSI harvest ranks by episode length not reward, and
+# termination is resetThresholds. Read at a MATCHED EPOCH well past 2900.
+#
+# See the act MLP twin's header for every data / physics decision, and the OMOMO
+# XF twin's for the 6-token layout (transformer.num_tokens 6, readout token 0).
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  raggedMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub401', 'sub402', 'sub404', 'sub405', 'sub409', 'sub411', 'sub412', 'sub458', 'sub480', 'sub482', 'sub484', 'sub485', 'sub487', 'sub488', 'sub489', 'sub490', 'sub491', 'sub493', 'sub494', 'sub495', 'sub496', 'sub497']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_act_nocpr
+  numEnvs: 4096
+  numObs: 9594
+  objectConvexHull: true
+  objectPropsFile: isaacgym/src/intermimic/data/cfg/object_props_g3_act_nocpr.yaml
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_act_nocpr_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: false
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub100
+  - sub101
+  - sub102
+  - sub103
+  - sub104
+  - sub105
+  - sub106
+  - sub107
+  - sub108
+  - sub110
+  - sub111
+  - sub112
+  - sub113
+  - sub114
+  - sub115
+  - sub116
+  - sub117
+  - sub118
+  - sub119
+  - sub120
+  - sub124
+  - sub127
+  - sub128
+  - sub130
+  - sub131
+  - sub132
+  - sub133
+  - sub136
+  - sub137
+  - sub139
+  subjectHeightsFile: scripts/synthetic_heights.json
+  terminationHeight: 0.15
+  # --- distillation (InterMimicDistillG3) ---
+  teacherPolicy: checkpoints/teachers/g3_act_nocpr   # bball7 + soccer15 only (see header)
+  teacherPolicyCFG: intermimic/data/cfg/train/rlg/omomo_teacher_g3_omomo_geoall__f0.yaml
+  studentObsHorizons: [1, 4, 7, 10, 13, 16]
+  numObsRetarget: 9594
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
