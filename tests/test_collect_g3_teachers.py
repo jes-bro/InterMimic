@@ -59,9 +59,9 @@ def _ckpt(root, exp, names):
             fh.write(n.encode())
 
 
-def _cfg(cfg_dir, name, subs):
+def _cfg(cfg_dir, name, subs, suffix=""):
     os.makedirs(cfg_dir, exist_ok=True)
-    with open(os.path.join(cfg_dir, cg.ACT_CFG.format(name=name)), "w") as fh:
+    with open(os.path.join(cfg_dir, cg.with_suffix(cg.ACT_CFG.format(name=name), suffix)), "w") as fh:
         yaml.safe_dump({"env": {"dataSub": subs}}, fh)
 
 
@@ -123,6 +123,36 @@ def test_write_manifest_and_refuse_overwrite(tree):
     assert open(os.path.join(out, "sub2.pth"), "rb").read() == b"mimic_00012000.pth"
     with pytest.raises(SystemExit, match="never overwrite"):
         cg.main(["--omomo-sources", "2", "--out", out, "--root", root, "--cfg-dir", cfg_dir])
+
+
+def test_exp_suffix_selects_the_variant_fleet_and_names_sub2_src2(tree):
+    """The _xf_nvadlr_nopose fleet (2026-09-25): every source under _src{S}<suffix>,
+    sub2 included; activities under <name>_geoall<suffix> with their OWN env
+    cfg. The plain fleet's dirs must NOT be picked up by mistake."""
+    root, cfg_dir, out = tree
+    sfx = "_xf_nvadlr_nopose"
+    _ckpt(root, f"smplx_teacher_g3_omomo_geoall_src2{sfx}__f0", ["mimic_00030000.pth"])
+    _ckpt(root, f"smplx_teacher_g3_omomo_geoall_src5{sfx}__f0", ["mimic_00031000.pth"])
+    _ckpt(root, f"smplx_teacher_g3_bball7_geoall{sfx}__f0", ["mimic_00007000.pth"])
+    _cfg(cfg_dir, "bball7", ["sub401", "sub402"], sfx)          # the variant's own cfg, a different roster
+    plan = cg.plan_teachers(root, [2, 5], ["bball7"], cfg_dir, suffix=sfx)
+    by = {f: (srcs, ck, ep) for f, srcs, ck, ep in plan}
+    assert by["sub2.pth"][1].endswith(f"src2{sfx}__f0/nn/mimic_00030000.pth") and by["sub2.pth"][2] == 30000
+    assert by["sub5.pth"][1].endswith(f"src5{sfx}__f0/nn/mimic_00031000.pth")
+    assert by["bball7.pth"][0] == [401, 402] and by["bball7.pth"][1].endswith(f"bball7_geoall{sfx}__f0/nn/mimic_00007000.pth")
+    # a source the variant fleet lacks is missing, even though the plain fleet has it (src5 plain exists)
+    with pytest.raises(SystemExit, match=rf"sub9: .*src9{sfx}__f0/nn has no mimic"):
+        cg.plan_teachers(root, [2, 9], [], cfg_dir, suffix=sfx)
+    # the plain call is unchanged by the option's existence
+    assert cg.plan_teachers(root, [2], [], cfg_dir)[0][2].endswith("geoall__f0/nn/mimic_00012000.pth")
+    # a suffix without the leading underscore is refused rather than resolved to nothing
+    with pytest.raises(SystemExit, match="must start with '_'"):
+        cg.plan_teachers(root, [2], [], cfg_dir, suffix="xf_nvadlr_nopose")
+    cg.main(["--exp-suffix", sfx, "--omomo-sources", "2", "5", "--activities", "bball7",
+             "--out", out, "--root", root, "--cfg-dir", cfg_dir])
+    m = yaml.safe_load(open(os.path.join(out, "teachers.yaml")))["teachers"]
+    assert [e["file"] for e in m] == ["sub2.pth", "sub5.pth", "bball7.pth"]
+    assert m[0]["from"].endswith(f"src2{sfx}__f0/nn/mimic_00030000.pth")
 
 
 def test_dry_run_writes_nothing(tree):

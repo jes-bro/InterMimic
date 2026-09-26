@@ -24,10 +24,21 @@ had reached and that must be on record.
   # the two activity students
   python3 scripts/collect_g3_teachers.py --activities bball7 soccer15 cpr13 \\
       --out checkpoints/teachers/g3_act
+  # a VARIANT fleet (2026-09-25: the transformer+nvadlr+nopose teachers, exp
+  # smplx_teacher_g3_omomo_geoall_src{S}_xf_nvadlr_nopose__f0 for EVERY source,
+  # sub2 included -- that fleet names sub2 _src2 -- and
+  # smplx_teacher_g3_{name}_geoall_xf_nvadlr_nopose__f0 for the activities):
+  python3 scripts/collect_g3_teachers.py --exp-suffix _xf_nvadlr_nopose \\
+      --omomo-sources 1 2 3 5 6 7 8 9 11 12 14 15 17 --out checkpoints/teachers/g3_omomo_xf_nopose
 
 Run from the repo root on the machine that holds the checkpoints (--root to
 point elsewhere). Refuses a partial set: a missing teacher would silently drop
 its sources' clips from the student, or mis-route them.
+
+The student's teacherPolicyCFG must name a train cfg with the SAME network as
+the collected fleet (InterMimicDistillG3 builds one architecture for all
+teachers): the MLP fleets use omomo_teacher_g3_omomo_geoall__f0.yaml, a
+_xf_nvadlr_nopose fleet needs one of ITS train cfgs there.
 """
 import argparse
 import os
@@ -42,9 +53,20 @@ CFG_DIR = os.path.join(REPO, "isaacgym", "src", "intermimic", "data", "cfg")
 
 OMOMO_EXP = "smplx_teacher_g3_omomo_geoall_src{S}__f0"
 # sub2 is the base arm (the recipe was tuned on it); its dir carries no _src2.
+# Only the plain fleet has that irregularity: a variant fleet (--exp-suffix)
+# names sub2 _src2 like every other source, so the override applies only when
+# the suffix is empty.
 OMOMO_EXP_OVERRIDE = {2: "smplx_teacher_g3_omomo_geoall__f0"}
 ACT_EXP = "smplx_teacher_g3_{name}_geoall__f0"
 ACT_CFG = "omomo_teacher_g3_{name}_geoall__f0.yaml"
+
+
+def with_suffix(name, suffix):
+    """Insert a variant fleet's infix before the fold tag: 'x__f0.yaml' + '_xf' -> 'x_xf__f0.yaml'."""
+    if not suffix:
+        return name
+    assert "__f0" in name, name
+    return name.replace("__f0", f"{suffix}__f0", 1)
 
 
 def epoch_inside(path):
@@ -94,9 +116,9 @@ OMOMO_ARM_EXP = "smplx_teacher_g3_omomo_geoall_{name}__f0"      # multi-source O
 OMOMO_ARM_CFG = "omomo_teacher_g3_omomo_geoall_{name}__f0.yaml"
 
 
-def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG):
+def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG, suffix=""):
     """The arm's dataSub as ints, from its env cfg -- the same list the teacher trained on."""
-    path = os.path.join(cfg_dir, cfg_pattern.format(name=name))
+    path = os.path.join(cfg_dir, with_suffix(cfg_pattern.format(name=name), suffix))
     if not os.path.isfile(path):
         raise SystemExit(f"ERROR: no env cfg for arm '{name}' at {path}")
     with open(path) as fh:
@@ -113,11 +135,20 @@ def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG):
     return out
 
 
-def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=()):
-    """[(file, sources, origin, epoch)] or a SystemExit listing what is missing."""
+def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=(), suffix=""):
+    """[(file, sources, origin, epoch)] or a SystemExit listing what is missing.
+
+    suffix: a variant fleet's experiment-name infix, e.g. "_xf_nvadlr_nopose"
+    (see the module docstring). Must start with "_" when given, so a typo like
+    "xf" cannot silently resolve to a different fleet's dirs."""
+    if suffix and not suffix.startswith("_"):
+        raise SystemExit(f"ERROR: --exp-suffix must start with '_' (got {suffix!r})")
     plan, missing = [], []
     for s in omomo_sources:
-        exp = OMOMO_EXP_OVERRIDE.get(s, OMOMO_EXP.format(S=s))
+        if suffix:
+            exp = with_suffix(OMOMO_EXP.format(S=s), suffix)    # variant fleets name sub2 _src2 too
+        else:
+            exp = OMOMO_EXP_OVERRIDE.get(s, OMOMO_EXP.format(S=s))
         ck, ep = latest_ckpt(os.path.join(root, exp, "nn"))
         if ck is None:
             missing.append(f"sub{s}: {os.path.join(root, exp, 'nn')} has no mimic*.pth")
@@ -126,8 +157,8 @@ def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=()):
     # multi-source teachers: one checkpoint serving every source in the arm's dataSub
     for name, exp_pat, cfg_pat in ([(n, ACT_EXP, ACT_CFG) for n in activities]
                                    + [(n, OMOMO_ARM_EXP, OMOMO_ARM_CFG) for n in omomo_arms]):
-        exp = exp_pat.format(name=name)
-        srcs = activity_sources(name, cfg_dir, cfg_pat)
+        exp = with_suffix(exp_pat.format(name=name), suffix)
+        srcs = activity_sources(name, cfg_dir, cfg_pat, suffix)
         ck, ep = latest_ckpt(os.path.join(root, exp, "nn"))
         if ck is None:
             missing.append(f"{name}: {os.path.join(root, exp, 'nn')} has no mimic*.pth")
@@ -156,6 +187,9 @@ def main(argv=None):
     ap.add_argument("--omomo-arms", nargs="*", default=[], metavar="NAME",
                     help="multi-source OMOMO teacher arms, e.g. srchalf6 srchalf7 or srcall13 "
                          "(exp smplx_teacher_g3_omomo_geoall_<NAME>__f0; sources from its cfg)")
+    ap.add_argument("--exp-suffix", default="", metavar="_SUFFIX",
+                    help="variant fleet infix before __f0 in every experiment name and activity "
+                         "cfg name, e.g. _xf_nvadlr_nopose (sub2 is then _src2 like the others)")
     ap.add_argument("--out", required=True, help="teacherPolicy dir to write")
     ap.add_argument("--root", default=os.path.join(REPO, "checkpoints"),
                     help="checkpoint tree (default: <repo>/checkpoints)")
@@ -163,7 +197,9 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
-    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms)
+    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms, a.exp_suffix)
+    if a.exp_suffix:
+        print(f"  (variant fleet: experiment names carry {a.exp_suffix!r} before __f0)")
     for f, srcs, ck, ep in plan:
         print(f"  {f:<14} sources {srcs}  <- {os.path.relpath(ck, a.root)}  (epoch {ep})")
     if a.dry_run:
