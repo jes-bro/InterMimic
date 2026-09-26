@@ -109,6 +109,49 @@ to the cfg. The collect step prints the epoch it picked per teacher; record the
 two numbers. No with-pose twin of this source set exists, so its read against
 the act students confounds "no cpr" with "no pose".
 
+## `xf_nvadlr_nopose` TEACHER fleet (transformer + nvadlr, no pose term), branch `g3-distill-nopose`
+
+15 teacher arms, the method's teacher set for a future nopose student on nopose
+transformer teachers. METHOD CANDIDATE, not an ablation. Each is its MLP base's
+env with ONE key off (`rewardTerms.pose.enable: false`) and the srcall13 XF
+teacher's train knobs (6-token transformer, normalize_value, adaptive LR at
+exact-KL 0.06). Own experiment names; the MLP teachers are untouched.
+`tests/test_xf_nopose_teachers.py` pins all of it.
+
+| arms | base | --mem | where it fits |
+|---|---|---|---|
+| OMOMO sub1 3 5 6 7 8 9 11 12 14 15 17 | `g3_omomo_geoall_src{S}__f0` | 384G (padded, as the base trained) | simurgh only |
+| OMOMO sub2 (named `_src2` here) | `g3_omomo_geoall__f0` | 64G | GCP a2-highgpu-1g or simurgh |
+| bball7, soccer15 | `g3_{name}_geoall__f0` | 64G | GCP a2-highgpu-1g or simurgh |
+
+Data: nothing new. Every arm reads exactly the motion dir and retarget tree its
+MLP base reads, so the retarget trees already on the cluster serve it.
+
+    git fetch origin g3-distill-nopose && git checkout g3-distill-nopose
+    for s in 1 2 3 5 6 7 8 9 11 12 14 15 17; do sbatch --exclude=simurgh6,simurgh2 slurm_teacher_g3_omomo_geoall_src${s}_xf_nvadlr_nopose__f0.sh; done
+    sbatch --exclude=simurgh6,simurgh2 slurm_teacher_g3_bball7_geoall_xf_nvadlr_nopose__f0.sh
+    sbatch --exclude=simurgh6,simurgh2 slurm_teacher_g3_soccer15_geoall_xf_nvadlr_nopose__f0.sh
+
+On GCP (no Slurm) the 64G arms run as `NUM_ENVS=1024 sh scripts/gcp_run_in_tmux.sh <launcher> <tag>`
+like the students; the 384G arms do not fit an 85 GB VM.
+
+READ: at a MATCHED EPOCH against the MLP teacher of the same source. That pair
+moves two things at once (arch + optimizer, and the pose term): no with-pose
+transformer twin per source exists (Jess 2026-09-25). The srcall13_xf_nvadlr
+teacher is the with-pose XF reference on the union of the 13 sources only.
+Eval cfgs for these arms are NOT written; hand-write `omomo_eval_<arm>.yaml`
+mirroring the pose key (as the `_nopose` ablation evals do) before `eval_one.sh`.
+
+Collecting them for a student (the checkpoint dirs carry `_xf_nvadlr_nopose`,
+sub2 included, so the plain collect would silently pick the MLP fleet):
+
+    python3 scripts/collect_g3_teachers.py --exp-suffix _xf_nvadlr_nopose --omomo-sources 1 2 3 5 6 7 8 9 11 12 14 15 17 --out checkpoints/teachers/g3_omomo_xf_nopose
+    python3 scripts/collect_g3_teachers.py --exp-suffix _xf_nvadlr_nopose --activities bball7 soccer15 --out checkpoints/teachers/g3_act_nocpr_xf_nopose
+
+That student's cfg must then point `teacherPolicyCFG` at one of THIS fleet's
+train cfgs (the distill task builds one teacher architecture from that file;
+the MLP fleets' cfgs would build the wrong net). No such student cfg exists yet.
+
 ## Activity student (bball7 + soccer15 + cpr13 teachers -> one student)
 
     sh scripts/gcp_stage.sh pull-assets
