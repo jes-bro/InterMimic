@@ -142,3 +142,57 @@ def test_arch_kept_in_config_label(evaldir, tmp_path):
              "--metric", "success_rate"])
     assert r.returncode == 0, r.stderr
     assert "mlp_plain_stock" in r.stdout and "xf_plain_stock" in r.stdout
+
+
+def test_legend_wraps_and_stays_inside_canvas_for_eight_arms(tmp_path):
+    """All 8 gen-2 f0 arms in one figure: every entry must be on the canvas.
+
+    The bug: the legend was built with ncol=len(handles), so every entry was
+    forced onto a single row no matter how wide the figure was. With the four
+    MLP and four transformer f0 arms (8 configs + the 'held out' patch = 9
+    entries) that row was wider than the canvas and the outermost entries were
+    cropped away, which silently removed two arms from the figure's key.
+
+    Asserted geometrically rather than by eye: the legend's rendered bounding
+    box must sit inside the figure's.
+    """
+    d = tmp_path / "eval"
+    d.mkdir()
+    configs = [f"{arch}_{refs}_{recipe}"
+               for arch in ("mlp", "xf")
+               for refs in ("plain", "ret")
+               for recipe in ("stock", "nvadlr")]
+    assert len(configs) == 8
+    for cfg in configs:
+        write_csv(d / f"g2_{cfg}__f0.csv", ckpt_for(cfg, "f0"), REAL_BODIES)
+
+    out = tmp_path / "eight.png"
+    r = run(["--in", str(d), "--metric", "success_rate", "--out", str(out)])
+    assert r.returncode == 0, r.stderr
+    assert out.exists()
+
+    # Re-render the same figure in-process to inspect the legend's extent; the
+    # subprocess above only proves it did not crash.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import runpy
+
+    sys.argv = ["plot_gen2_by_subject.py", "--in", str(d), "--metric",
+                "success_rate", "--out", str(tmp_path / "eight2.png")]
+    try:
+        runpy.run_path(str(SCRIPT), run_name="__main__")
+    except SystemExit as exc:          # the script exits 0 once it has written
+        assert exc.code in (0, None), f"script exited {exc.code}"
+    fig = plt.gcf()
+    fig.canvas.draw()
+    legend = fig.legends[0]
+    lb = legend.get_window_extent(fig.canvas.get_renderer())
+    fb = fig.bbox
+    assert lb.x0 >= fb.x0 - 1 and lb.x1 <= fb.x1 + 1, (
+        f"legend runs off the canvas horizontally: legend x=[{lb.x0:.0f},"
+        f"{lb.x1:.0f}] vs figure x=[{fb.x0:.0f},{fb.x1:.0f}]")
+    assert lb.y0 >= fb.y0 - 1, "legend runs off the bottom of the canvas"
+    # 9 entries capped at 5 per row => it must actually have wrapped.
+    assert legend._ncols <= 5, f"legend did not wrap: ncol={legend._ncols}"
+    plt.close("all")

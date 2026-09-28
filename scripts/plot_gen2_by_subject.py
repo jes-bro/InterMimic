@@ -239,10 +239,17 @@ def main():
     handles, labels = axes[0][0].get_legend_handles_labels()
     handles.append(mpatches.Patch(color="0.88", label="held out (never trained)"))
     labels.append("held out (never trained)")
-    fig.legend(handles, labels, fontsize=9, ncol=len(handles),
+    # ncol=len(handles) forced every entry onto ONE row whatever the figure
+    # width, so past ~5 arms the legend ran off both edges -- the 8-arm
+    # MLP-vs-transformer f0 figure lost its first and last config entirely.
+    # Cap the row width and let the legend wrap; the strip reserved at the
+    # bottom grows with the row count so tight_layout never crops it.
+    ncol = min(5, len(handles))
+    nrow = int(np.ceil(len(handles) / ncol))
+    fig.legend(handles, labels, fontsize=9, ncol=ncol,
                loc="lower center", bbox_to_anchor=(0.5, 0.0), framealpha=0.9)
     fig.suptitle(a.title, fontsize=13)
-    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.035 * nrow + 0.02, 1, 0.95])
     fig.savefig(a.out, dpi=170)
 
     # The number the figure exists to show: in-distribution mean vs held-out

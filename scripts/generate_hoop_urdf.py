@@ -25,7 +25,13 @@ def main():
     ap.add_argument("--board-offset", type=float, default=0.45,
                     help="ring center to backboard face along +x")
     ap.add_argument("--rim-height", type=float, default=3.034,
-                    help="pole extends this far DOWN from the ring to reach the floor")
+                    help="stanchion reaches this far DOWN from ring level to the floor")
+    ap.add_argument("--arm-length", type=float, default=1.2,
+                    help="gooseneck: the vertical pole stands this far BEHIND the "
+                         "backboard, connected by an overhead arm -- real stanchions "
+                         "keep the under-rim zone clear so players can run beneath "
+                         "and past the hoop (the straight-drop pole put structure "
+                         "in the layup lane)")
     args = ap.parse_args()
 
     seg_len = 2 * math.pi * args.rim_radius / args.segments * 1.05  # slight overlap
@@ -39,9 +45,12 @@ def main():
     # backboard: 1.1 x 0.8 plate, bottom edge near ring level
     geoms.append((f"{args.board_offset:.3f} 0 0.35", "0 0 0",
                   '<box size="0.04 1.10 0.80"/>'))
-    # pole: from behind the board down to the floor
-    geoms.append((f"{args.board_offset + 0.06:.3f} 0 {-args.rim_height/2:.4f}", "0 0 0",
-                  f'<box size="0.10 0.10 {args.rim_height:.4f}"/>'))
+    # gooseneck stanchion: vertical pole well behind the board + overhead arm
+    pole_x = args.board_offset + args.arm_length
+    geoms.append((f"{pole_x:.3f} 0 {-args.rim_height/2 + 0.35:.4f}", "0 0 0",
+                  f'<box size="0.14 0.14 {args.rim_height + 0.7:.4f}"/>'))
+    geoms.append((f"{(args.board_offset + pole_x)/2:.3f} 0 0.72", "0 0 0",
+                  f'<box size="{args.arm_length:.3f} 0.10 0.10"/>'))
 
     parts = []
     for pos, rpy, geo in geoms:

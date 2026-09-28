@@ -118,6 +118,36 @@ def read_tb(run_dir, tags=None):
     return np.asarray(ep), np.asarray(rw), tag
 
 
+def break_gaps(x, *ys, factor=6.0):
+    """Insert NaN where x jumps, so the line is drawn with a hole, not across it.
+
+    A run resubmitted across several jobs can lose a stretch entirely -- a job
+    whose log was never written, or training that happened outside the globbed
+    files. The segments either side are real, but matplotlib joins the last
+    point of one to the first of the next with a straight line, which reads as
+    smooth linear progress through a region holding no data at all. That is the
+    single most misleading thing this plot can draw.
+
+    A gap is a step more than `factor` times the median step. Returns the padded
+    x and each y, plus the list of (from, to) gaps so the caller can report them.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    if len(x) < 3 or factor <= 0:
+        return (x, *[np.asarray(y, dtype=np.float64) for y in ys]), []
+    d = np.diff(x)
+    med = np.median(d[d > 0]) if np.any(d > 0) else 0.0
+    idx = np.flatnonzero(d > factor * med) if med > 0 else np.array([], dtype=int)
+    if len(idx) == 0:
+        return (x, *[np.asarray(y, dtype=np.float64) for y in ys]), []
+    gaps = [(float(x[i]), float(x[i + 1])) for i in idx]
+    # Insert after each gap-opening index; np.insert takes positions in the
+    # ORIGINAL array, so idx+1 is correct for all of them at once.
+    at = idx + 1
+    xo = np.insert(x, at, np.nan)
+    yo = [np.insert(np.asarray(y, dtype=np.float64), at, np.nan) for y in ys]
+    return (xo, *yo), gaps
+
+
 def ewma(y, alpha):
     """Exponentially weighted mean, alpha = smoothing in [0, 1)."""
     if alpha <= 0 or len(y) < 2:
@@ -171,6 +201,12 @@ def main():
                    help="EWMA factor in [0,1); 0 disables (default 0.95)")
     p.add_argument("--min-epochs", type=int, default=50,
                    help="skip runs with fewer logged epochs than this")
+    p.add_argument("--gap-factor", type=float, default=6.0,
+                   help="break the line where the epoch step exceeds this many "
+                        "times the median step (default 6). A resubmitted run "
+                        "can lose a whole stretch of training -- joining across "
+                        "it draws a straight line that reads as real progress. "
+                        "Set 0 to disable and connect everything.")
     p.add_argument("--title", default="Reward vs epoch")
     p.add_argument("--out", help="output PNG (not needed with --list-tags)")
     a = p.parse_args()
@@ -288,13 +324,20 @@ def main():
                          "font.size": 11})
     fig, ax = plt.subplots(figsize=(11, 6))
     cmap = plt.get_cmap("tab10")
+    all_gaps = []
     print(f"{'run':<40} {'epochs':>16} {'final':>8} {'best':>8}  source")
     print("-" * 82)
     for i, (label, ep, rw, njobs) in enumerate(series):
         x = ep - ep[0] if a.relative else ep
         c = cmap(i % 10)
-        ax.plot(x, rw, color=c, alpha=0.15, linewidth=0.8)          # raw, faint
-        ax.plot(x, ewma(rw, a.smoothing), color=c, linewidth=1.8, label=label)
+        # Smooth BEFORE inserting the gap NaNs -- an EWMA over NaN propagates it
+        # through the whole remaining series.
+        sm = ewma(rw, a.smoothing)
+        (xg, rwg, smg), gaps = break_gaps(x, rw, sm, factor=a.gap_factor)
+        if gaps:
+            all_gaps.append((label, gaps))
+        ax.plot(xg, rwg, color=c, alpha=0.15, linewidth=0.8)         # raw, faint
+        ax.plot(xg, smg, color=c, linewidth=1.8, label=label)
         # int(), not :d -- the tensorboard path and --auto-epochs both yield
         # float epoch arrays, and :d raises on those. Only the .out-log path
         # gives ints, so this crashed on whichever run happened to come second.
@@ -304,6 +347,17 @@ def main():
         print("\nskipped (too few epochs logged):")
         for label, n in skipped:
             print(f"  {label}: {n}")
+
+    # Say where the data is missing. The line is drawn broken there, but a hole
+    # in a curve is easy to miss and the numbers on either side are not
+    # continuous training.
+    if all_gaps:
+        print("\nGAPS -- no data logged across these ranges (line is broken there):")
+        for label, gaps in all_gaps:
+            for lo, hi in gaps:
+                print(f"  {label}: {lo:,.0f} -> {hi:,.0f}  ({hi - lo:,.0f} epochs)")
+        print("  Usually a job whose .out is missing from --glob, or training "
+              "that happened under a different job-name prefix.")
 
     ax.set_xlabel("epochs since this run's first" if a.relative else "epoch_num")
     ax.set_ylabel("mean_rewards")

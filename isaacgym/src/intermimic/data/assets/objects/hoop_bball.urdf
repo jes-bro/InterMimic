@@ -158,15 +158,27 @@
       </geometry>
     </collision>
     <visual>
-      <origin rpy="0 0 0" xyz="0.510 0 -1.5170"/>
+      <origin rpy="0 0 0" xyz="1.650 0 -1.1670"/>
       <geometry>
-        <box size="0.10 0.10 3.0340"/>
+        <box size="0.14 0.14 3.7340"/>
       </geometry>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0.510 0 -1.5170"/>
+      <origin rpy="0 0 0" xyz="1.650 0 -1.1670"/>
       <geometry>
-        <box size="0.10 0.10 3.0340"/>
+        <box size="0.14 0.14 3.7340"/>
+      </geometry>
+    </collision>
+    <visual>
+      <origin rpy="0 0 0" xyz="1.050 0 0.72"/>
+      <geometry>
+        <box size="1.200 0.10 0.10"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="1.050 0 0.72"/>
+      <geometry>
+        <box size="1.200 0.10 0.10"/>
       </geometry>
     </collision>
   </link>

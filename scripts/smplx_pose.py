@@ -381,33 +381,101 @@ class SMPLXPoser:
         return (tm["Q"] @ Jp.T).T + trans                              # Z-up + trans
 
     def fit_sequence(self, subject, target_joints, iters_first=150, iters_warm=80,
-                     lr=0.05, smooth=0.02, verbose=False):
+                     lr=0.05, smooth=0.02, verbose=False, pinned=None, reg=0.0,
+                     reg_weights=None, target_weights=None):
         """Fit native SMPL-X pose to target joint positions per frame.
 
         target_joints: (T,52,3) Z-up (clip body_pos or DUMP_TRAJ body_pos), ordered
         like the MJCF body order. Warm-starts each frame from the previous for speed;
         `smooth` regularizes toward it so the fit can't drift into an awkward pose
         that matches the joints but mangles the surface. Returns (pose_aa[T,n_j,3],
-        trans[T,3])."""
+        trans[T,3]).
+
+        `pinned` is {joint index: (T,3) axis-angle} for joints this objective
+        CANNOT see, held at the caller's values instead of being optimised.
+        Rotation about a bone moves no joint, so along a near-collinear chain
+        like the spine the axial twist is nearly unobservable and the fit puts
+        an arbitrary value there -- a torso twisted off to one side. A leaf
+        (head, toes) is the degenerate case: wholly unobservable, so it simply
+        keeps its initial value. Pinning also shrinks the search space, so the
+        remaining joints converge in fewer iterations. dump_to_interact.py fills
+        these from the rollout's own body_rot.
+
+        NOTE `smooth` damps every joint, not just the twitchy ones: measured on
+        a 400-frame rollout, smooth=0.15 cut the knee's pose variation ~95x and
+        tripled the joint residual. Prefer iterations (or `pinned`) over it.
+        """
         import torch
         b2s = torch.tensor(self.b2s)
         T = len(target_joints)
         n_j = len(self.joint_names)   # 52 for SMPL-H, 55 for SMPL-X
+        pinned = pinned or {}
+        pin_idx = sorted(pinned)
+        # Per-joint prior weight, (n_j, 1). A flat prior does not stop the fit
+        # reaching a target through a joint that should barely move: measured
+        # against a CARI4D reconstruction of the same person, the fitted collars
+        # ran 1.8x larger (54 degrees, where a real collar moves a few) and the
+        # hips and spine about 2x. Those are exactly the joints whose excess
+        # shows up in the SURFACE -- an arched back, a distorted seat -- because
+        # linear blend skinning has to spread the rotation across the trunk.
+        # Weighting them up costs little, since the joints below them can reach
+        # the same targets.
+        # (n_j,) weights one joint uniformly; (n_j, 3) weights each AXIS, which
+        # is what a hinge needs: a knee or elbow bends about one axis only, and
+        # weighting the joint as a whole cannot tell flexion from the sideways
+        # rotation that swings a shin out from under its thigh. Measured against
+        # a CARI4D reconstruction of the same person, the fitted knee carried
+        # 0.358 mean on its abduction axis against the reconstruction's 0.098,
+        # peaking at 0.79 rad -- 45 degrees of sideways knee, which no knee does.
+        reg_w = torch.ones(n_j, 3, dtype=torch.float64)
+        if reg_weights is not None:
+            w = np.asarray(reg_weights, dtype=np.float64)
+            reg_w = torch.tensor(w.reshape(n_j, 1) if w.ndim == 1 else w.reshape(n_j, 3))
+        # Per-TARGET weights, (n_b, 1), over the MJCF bodies being matched. The
+        # loss treats every joint's centimetres alike, but a centimetre does not
+        # cost the same everywhere: the trunk segments are ~13 cm, so the few
+        # centimetres of residual left over there swing the trunk by 20-30
+        # degrees, while the same error on a 38 cm thigh is invisible. Measured
+        # against the rollout's own trunk angles, every prior setting -- flat
+        # included -- left the fitted back 18-31 degrees straighter than the
+        # motion it was fitting. Weighting the short segments up is a statement
+        # about geometry, not about how a body ought to move.
+        tgt_w = torch.ones(len(self.b2s), 1, dtype=torch.float64)
+        if target_weights is not None:
+            tgt_w = torch.tensor(
+                np.asarray(target_weights, dtype=np.float64)).reshape(-1, 1)
         poses = np.zeros((T, n_j, 3)); transl = np.zeros((T, 3))
         prev = torch.zeros(n_j, 3, dtype=torch.float64)
         for t in range(T):
             tgt = torch.tensor(np.asarray(target_joints[t], dtype=np.float64))
-            pose = prev.clone().requires_grad_(True)
+            pose = prev.clone()
+            for j in pin_idx:
+                pose[j] = torch.tensor(np.asarray(pinned[j][t], dtype=np.float64))
+            pose = pose.requires_grad_(True)
             trans = torch.tensor(tgt.mean(0).detach().numpy(), requires_grad=True)
             opt = torch.optim.Adam([pose, trans], lr=lr)
             n = iters_first if t == 0 else iters_warm
             for _ in range(n):
                 opt.zero_grad()
                 J = self._fk_joints_torch(subject, pose, trans)[b2s]
-                loss = ((J - tgt) ** 2).sum(1).mean()
+                loss = (((J - tgt) ** 2).sum(1, keepdim=True) * tgt_w).mean()
                 if t > 0:                              # stay near the previous frame
                     loss = loss + smooth * ((pose - prev) ** 2).sum()
-                loss.backward(); opt.step()
+                # Keep the UNOBSERVABLE components small. A hinge's child sits ON
+                # its bone axis -- the wrist on the forearm, the ankle on the
+                # shin -- so roll about that axis moves no target and the fit can
+                # put anything there; measured values reached 12-16 rad, which
+                # linear blend skinning renders as forearms twisted around
+                # themselves and a knee pinched to nothing. This costs the
+                # observable components almost nothing (they are pinned down by
+                # the targets) while sending the free ones to neutral instead of
+                # wherever the optimiser drifted.
+                if reg:
+                    loss = loss + reg * ((pose ** 2) * reg_w).sum()
+                loss.backward()
+                if pin_idx:          # never let the optimiser move a pinned joint
+                    pose.grad[pin_idx] = 0.0
+                opt.step()
             poses[t] = pose.detach().numpy(); transl[t] = trans.detach().numpy()
             prev = pose.detach()
             if verbose:

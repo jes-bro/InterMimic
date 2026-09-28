@@ -70,3 +70,51 @@ def test_no_matching_logs_is_reported(tmp_path):
     r = run("--glob", str(tmp_path / "nothing-*.out"), "--out", tmp_path / "o.png")
     assert r.returncode != 0
     assert not (tmp_path / "o.png").exists()
+
+
+def test_gap_between_job_segments_breaks_the_line(tmp_path):
+    """A missing stretch must be a hole, not a straight line across it.
+
+    Two jobs, 5-5000 and 30000-35000, with nothing logged between. Joining them
+    draws a straight segment over 25k epochs of absent data, which reads as
+    smooth linear training.
+    """
+    write_log(tmp_path / "teacher-alpha-1.out", range(100, 5100, 100))
+    write_log(tmp_path / "teacher-alpha-2.out", range(30000, 35100, 100))
+    r = run("--glob", str(tmp_path / "*.out"), "--out", tmp_path / "o.png")
+    assert r.returncode == 0, r.stderr
+    assert "GAPS" in r.stdout
+    assert "5,000 -> 30,000" in r.stdout
+    assert "25,000 epochs" in r.stdout
+
+
+def test_contiguous_segments_report_no_gap(tmp_path):
+    write_log(tmp_path / "teacher-alpha-1.out", range(100, 5100, 100))
+    write_log(tmp_path / "teacher-alpha-2.out", range(5200, 10100, 100))
+    r = run("--glob", str(tmp_path / "*.out"), "--out", tmp_path / "o.png")
+    assert r.returncode == 0, r.stderr
+    assert "GAPS" not in r.stdout
+
+
+def test_gap_factor_zero_disables_breaking(tmp_path):
+    write_log(tmp_path / "teacher-alpha-1.out", range(100, 5100, 100))
+    write_log(tmp_path / "teacher-alpha-2.out", range(30000, 35100, 100))
+    r = run("--glob", str(tmp_path / "*.out"), "--gap-factor", "0",
+            "--out", tmp_path / "o.png")
+    assert r.returncode == 0, r.stderr
+    assert "GAPS" not in r.stdout
+
+
+def test_break_gaps_keeps_series_aligned():
+    """NaNs must be inserted at the same index in x and every y."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pe", SCRIPT)
+    pe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pe)
+    x = [0, 1, 2, 100, 101, 102]
+    (xo, yo), gaps = pe.break_gaps(x, [0, 1, 2, 3, 4, 5])
+    assert len(xo) == len(yo) == 7
+    assert gaps == [(2.0, 100.0)]
+    import math
+    holes = [i for i, v in enumerate(xo) if math.isnan(v)]
+    assert holes == [i for i, v in enumerate(yo) if math.isnan(v)]
