@@ -32,8 +32,10 @@ ASSET_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
                           "isaacgym", "src", "intermimic", "data", "assets", "smplx")
 
 
-def load(gym, sim, subject):
-    """Load smplx_omomo_<subject>.xml exactly the way humanoid.py does."""
+def load(gym, sim, subject, env_index):
+    """Load smplx_omomo_<subject>.xml exactly the way humanoid.py does, create one
+    actor from it (Isaac Gym exposes body/shape properties per ACTOR, not per
+    asset) and read back what PhysX built."""
     from isaacgym import gymapi
     opts = gymapi.AssetOptions()
     opts.angular_damping = 0.01
@@ -42,11 +44,17 @@ def load(gym, sim, subject):
     asset = gym.load_asset(sim, ASSET_ROOT, f"smplx_omomo_{subject}.xml", opts)
     if asset is None:
         sys.exit(f"ERROR: load_asset returned None for {subject}")
-    names = gym.get_asset_rigid_body_names(asset)
+    # one env per subject, same layout as humanoid.py (start pose at z=0.89)
+    env = gym.create_env(sim, gymapi.Vec3(-2.0, -2.0, 0.0), gymapi.Vec3(2.0, 2.0, 2.0), 4)
+    pose = gymapi.Transform()
+    pose.p = gymapi.Vec3(0.0, 0.0, 0.89)
+    pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
+    handle = gym.create_actor(env, asset, pose, f"humanoid_{subject}", env_index, 1, 0)
+    names = gym.get_actor_rigid_body_names(env, handle)
     dof_names = gym.get_asset_dof_names(asset)
-    rb = gym.get_asset_rigid_body_properties(asset)
+    rb = gym.get_actor_rigid_body_properties(env, handle)
     dofs = gym.get_asset_dof_properties(asset)
-    shapes = gym.get_asset_rigid_shape_properties(asset)
+    shapes = gym.get_actor_rigid_shape_properties(env, handle)
     bodies = []
     for n, p in zip(names, rb):
         I = p.inertia
@@ -162,10 +170,10 @@ def main():
     if sim is None:
         sys.exit("ERROR: create_sim failed")
 
-    C = load(gym, sim, a.control)
+    C = load(gym, sim, a.control, 0)
     verdict = {}
-    for s in [a.suspect] + list(a.extra):
-        S = load(gym, sim, s)
+    for k, s in enumerate([a.suspect] + list(a.extra), start=1):
+        S = load(gym, sim, s, k)
         print("=" * 100)
         print(f"ENGINE VIEW  {s} (suspect) vs {a.control} (control)")
         print("=" * 100)
