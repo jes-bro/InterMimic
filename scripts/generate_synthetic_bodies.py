@@ -1,263 +1,159 @@
 #!/usr/bin/env python3
-"""Generate synthetic SMPL-X bodies for TRAINING augmentation, in shared NEUTRAL space.
+"""Generate synthetic SMPL-X bodies for TRAINING augmentation by sampling the
+SMPL-X shape prior directly, spread evenly over it, in the shared NEUTRAL space.
 
 These are target-only bodies: the policy is trained to drive them with REAL source
-motions (no ground truth of their own needed). Interpolating betas is only valid
-because everyone's already in the neutral frame (see project_betas_gendered_not_shared)
--- so this consumes omomo_betas_neutral.npz, NOT the gendered omomo_betas.npz.
+motions (no ground truth of their own needed). They live in the neutral frame
+(see project_betas_gendered_not_shared), like the refit real subjects in
+omomo_betas_neutral.npz.
 
-Two kinds, tagged so the fold-in experiments can use them separately:
-  inhull  -- blends of 2-3 real (non-held-out) subjects (realistic interpolation)
-  extrap  -- a real subject pushed AWAY from the population centroid (extrapolation,
-             to test whether training on out-of-hull shapes helps the held-out bodies)
+WHAT THE AXES ARE. Each of the 16 betas is a coefficient on one principal
+component of human shape, learned from ~3800 CAESAR body scans (SMPL-X paper,
+Sec. 3.1). The authors scaled the space "for unit variance" (Sec. 3.2): on every
+axis, a beta of 1.0 is one standard deviation of that scan population. Axis 0
+moves height a lot per unit, axis 15 is a subtle shape change per unit, and
+both are "one standard deviation of people". So the population prior over
+betas is a standard normal on every axis.
 
-Held-out subjects {sub4,sub10,sub16} are EXCLUDED from the blend basis, and any
-synthetic body landing within --min-heldout-dist of a held-out subject is rejected
-and resampled -- so training on these can't contaminate the OOD test.
+HOW BODIES ARE PLACED. Latin hypercube sampling over the prior: on every axis
+the population is cut into --n equal-probability slices and exactly one body
+lands in each slice, axes shuffled independently, then each slice position is
+mapped through the normal inverse CDF so values are in the model's unit-
+variance scale. Every axis is therefore covered end to end evenly (one body
+among the shortest 1/n of people, one among the tallest 1/n, likewise for each
+other axis) instead of clumping the way n random draws do. scipy's
+"random-cd" optimization additionally pushes the n points apart in the full
+16-D space. The clip (default 4 std) touches 0.006% of draws per axis and
+exists only in case a freak tail value makes the mesh self-intersect; it does
+not shape the distribution.
 
-Output npz: syn0..syn{N-1} (16,) neutral betas + _genders (all 'neutral') +
-_kinds ('inhull'/'extrap'). Feed to generate_per_subject_mjcfs.py (gender=neutral).
+NO SUBJECT IS INVOLVED. The set is a function of --seed alone. This script
+never reads any real person's betas: not the training subjects (no blending,
+no centroid, no bands calibrated on them) and not the test subjects (no
+distance checks). The only use of --betas is to COPY the real subjects into
+the combined file the env loads, unchanged and uninspected. The tests pin
+this: replacing every real body's betas leaves the synthetics bit-identical.
+
+History: earlier sets (sub100-239) were blends/extrapolations of the training
+subjects, filtered by distance to the TEST subjects. That shaped the training
+set with the test set and is invalid; this script cannot produce such sets.
+
+Outputs:
+  --out           sub<start-id>.. (16,) float32 betas + _genders ('<name>:neutral')
+                  + _kinds (all 'prior'). Feed to generate_per_subject_mjcfs.py.
+  --combined-out  every entry of --betas + the synthetics, for the env's betas_file
+  --heights-out   {"<id>": height_m} for bodyNormalizedReward's subjectHeightsFile
+                  (neutral mesh extent; measure_subject_bodies.py on the MJCFs is exact)
+
+Naming: the env identifies a body only by its name sub<N> (MJCF
+smplx_omomo_sub<N>.xml + betas key), so --start-id must be a free block.
+In use: 1-17 real OMOMO subjects, 100-239 the retired synthetic sets, 401-580
+CARI4D / soccer subjects. Default 600.
 """
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
-
-
-# SMPL-X body joint order (standard): 0 pelvis, 1/2 L/R hip, 4/5 L/R knee,
-# 7/8 L/R ankle, 12 neck, 15 head, 16/17 L/R shoulder, 18/19 L/R elbow,
-# 20/21 L/R wrist.
-_J = {"L_hip": 1, "R_hip": 2, "L_knee": 4, "L_ankle": 7, "neck": 12, "head": 15,
-      "L_shoulder": 16, "R_shoulder": 17, "L_elbow": 18, "L_wrist": 20}
+from scipy.special import ndtri            # standard normal inverse CDF
+from scipy.stats import qmc                # Latin hypercube sampler
 
 
 def load_model(models_dir):
+    """v_template (V,3) and shapedirs (V,3,C) of the neutral model, for heights."""
     z = np.load(models_dir / "SMPLX_NEUTRAL.npz", allow_pickle=True)
-    return (z["v_template"].astype(np.float64),
-            z["shapedirs"].astype(np.float64),
-            z["J_regressor"].astype(np.float64))
+    return z["v_template"].astype(np.float64), z["shapedirs"].astype(np.float64)
 
 
-def proportions(model, betas):
-    """Anthropometric ratios for a betas vector, from the shaped mesh + joints.
-    All normalized by height so the bands are scale-free."""
-    v_template, shapedirs, J_reg = model
+def neutral_height(model, betas):
+    """Standing height of the rest-pose mesh: extent along SMPL-X's up axis (+y)."""
+    v_template, shapedirs = model
     V = v_template + np.einsum("vni,i->vn", shapedirs[:, :, :len(betas)], betas)
-    J = J_reg @ V
-    height = V[:, 1].max() - V[:, 1].min()
-    seg = lambda a, b: np.linalg.norm(J[_J[a]] - J[_J[b]])
-    return {
-        "height_m": height,
-        "leg/h":      (seg("L_hip", "L_knee") + seg("L_knee", "L_ankle")) / height,
-        "arm/h":      (seg("L_shoulder", "L_elbow") + seg("L_elbow", "L_wrist")) / height,
-        "shoulder/h": seg("L_shoulder", "R_shoulder") / height,
-        "hip/h":      seg("L_hip", "R_hip") / height,
-        "head/h":     (V[:, 1].max() - J[_J["neck"]][1]) / height,
-    }
+    return float(V[:, 1].max() - V[:, 1].min())
 
 
-def proportion_bands(model, real_betas, margin):
-    """[lo, hi] per metric = real population range widened by `margin` of its width
-    (height band widened in meters). Every real body passes its own bands by
-    construction; synthetics must look proportion-plausible to be admitted."""
-    rows = [proportions(model, b) for b in real_betas]
-    bands = {}
-    for k in rows[0]:
-        vals = np.array([r[k] for r in rows])
-        lo, hi = vals.min(), vals.max()
-        pad = (hi - lo) * margin if k != "height_m" else 0.05 + (hi - lo) * margin
-        bands[k] = (lo - pad, hi + pad)
-    return bands
+def sample_prior_lhs(n, n_betas, clip, seed):
+    """n bodies spread evenly over the unit-variance shape prior.
 
-
-def within_bands(model, betas, bands):
-    pr = proportions(model, betas)
-    return all(bands[k][0] <= pr[k] <= bands[k][1] for k in bands)
-
-
-def neutral_height(models_dir, betas):
-    z = np.load(models_dir / "SMPLX_NEUTRAL.npz", allow_pickle=True)
-    sd = z["shapedirs"][:, :, :len(betas)].astype(np.float64)
-    V = z["v_template"].astype(np.float64) + np.einsum("vni,i->vn", sd, betas)
-    return float(V[:, 1].max() - V[:, 1].min())   # SMPL-X up = +y
+    LatinHypercube gives u in (0,1)^(n x n_betas) with exactly one point per
+    1/n slice on every axis; ndtri maps each slice position to the normal
+    quantile, i.e. to betas in population-std units. Nothing else goes in."""
+    u = qmc.LatinHypercube(d=n_betas, optimization="random-cd", seed=seed).random(n)
+    return np.clip(ndtri(u), -clip, clip)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--betas", type=Path, default=Path("scripts/omomo_betas_neutral.npz"))
+    ap.add_argument("--betas", type=Path, default=Path("scripts/omomo_betas_neutral.npz"),
+                    help="real subjects' neutral betas -- copied into --combined-out, "
+                         "never read for sampling")
     ap.add_argument("--models-dir", type=Path,
-                    default=Path.home() / "Downloads" / "models" / "smplx")
-    ap.add_argument("--n", type=int, default=40)
-    ap.add_argument("--frac-extrap", type=float, default=0.3,
-                    help="fraction of bodies that are extrapolated past the hull")
-    ap.add_argument("--extrap-scale", type=float, nargs=2, default=[1.15, 1.45],
-                    help="push factor range (1.0 = on the subject, >1 = beyond it)")
-    ap.add_argument("--frac-extrap-dir", type=float, default=0.0,
-                    help="fraction of bodies from RANDOM-DIRECTION extrapolation: "
-                         "centroid + random unit dir * radius. Opens the whole "
-                         "out-of-hull shell (ray extrap only covers 13 lines); "
-                         "realism is enforced by the proportion bands")
-    ap.add_argument("--dir-radius", type=float, nargs=2, default=None,
-                    help="radius range for --frac-extrap-dir (default: [1.0, 1.6] x "
-                         "the reals' max distance from their centroid)")
-    ap.add_argument("--proportion-margin", type=float, default=0.3,
-                    help="widen each real-population proportion band by this fraction "
-                         "of its width; bodies outside ANY band are rejected")
-    # sub13 added 2026-07-21: the FIRST synthetic set (sub100-139) was generated
-    # with only {sub4,sub10,sub16} held out, so sub121 landed 0.34 from sub13 and
-    # contaminated it as a held-out test (see project_synthetic_sub13_leak). Any
-    # regeneration now protects the full held-out set so this can't recur.
-    ap.add_argument("--held-out", nargs="+", default=["sub4", "sub10", "sub13", "sub16"])
-    ap.add_argument("--min-heldout-dist", type=float, default=2.0,
-                    help="reject synthetic bodies closer than this (L2 in betas) to any held-out subject")
-    ap.add_argument("--start-id", type=int, default=100,
-                    help="synthetic bodies are named sub<start-id>.. so the env's "
-                         "int(sub[3:]) machinery + smplx_omomo_sub<N>.xml loading just work")
-    ap.add_argument("--min-pairwise-dist", type=float, default=0.0,
-                    help="reject synthetic bodies closer than this (L2 betas) to ANY "
-                         "other training body: real basis, --existing-syn, or an "
-                         "already-accepted new body. 0 = off (legacy behavior)")
-    ap.add_argument("--existing-syn", type=Path, default=None,
-                    help="npz of already-in-use synthetic bodies: they join the "
-                         "pairwise-spacing avoid set and the new ids start after them")
-    ap.add_argument("--max-tries", type=int, default=500000,
-                    help="total sampling attempts before FAILING LOUDLY (a stall "
-                         "means the spacing/floor constraints don't fit this many "
-                         "bodies -- relax deliberately, never silently)")
-    ap.add_argument("--heights-out", type=Path, default=None,
-                    help="heights json path (default: synthetic_heights.json beside --out)")
-    ap.add_argument("--merge-heights", type=Path, default=None,
-                    help="existing heights json to merge into --heights-out (so one "
-                         "file covers old + new synthetics for subjectHeightsFile)")
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", type=Path, default=Path("scripts/synthetic_bodies_neutral.npz"))
+                    default=Path.home() / "Downloads" / "models" / "smplx",
+                    help="dir holding SMPLX_NEUTRAL.npz (only used to report heights)")
+    ap.add_argument("--n", type=int, default=30, help="number of bodies")
+    ap.add_argument("--n-betas", type=int, default=16,
+                    help="shape components per body (the env conditions on 16)")
+    ap.add_argument("--clip", type=float, default=4.0,
+                    help="clip every beta to +/- this many population std devs "
+                         "(4 keeps 99.994%% of people per axis)")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="THE input: the set is a deterministic function of the seed")
+    ap.add_argument("--start-id", type=int, default=600,
+                    help="bodies are named sub<start-id>.. (see module docstring)")
+    # "gen4" = this generation of synthetic bodies (the prior-sampled set), to keep
+    # it apart from the gen2/g3 experiments and the retired sub100-239 sets.
+    ap.add_argument("--out", type=Path, default=Path("scripts/synthetic_bodies_gen4.npz"))
     ap.add_argument("--combined-out", type=Path,
-                    default=Path("scripts/omomo_betas_neutral_aug.npz"),
+                    default=Path("scripts/omomo_betas_neutral_aug_gen4.npz"),
                     help="real neutral betas + synthetic, in one file for the env's betas_file")
+    ap.add_argument("--heights-out", type=Path, default=None,
+                    help="heights json (default: synthetic_heights_gen4.json beside --out)")
     args = ap.parse_args()
     args.models_dir = args.models_dir.expanduser()
 
-    src = np.load(args.betas, allow_pickle=True)
-    held = set(args.held_out)
-    basis_names = [k for k in src.files if k != "_genders" and k not in held]
-    B = np.stack([src[s].astype(np.float64) for s in basis_names])   # (M,16) blend basis
-    H = np.stack([src[s].astype(np.float64) for s in args.held_out]) # held-out, to avoid
-    centroid = B.mean(0)
-    rng = np.random.default_rng(args.seed)
+    # ---- sample: seed in, bodies out. No person's betas are read here. ----
+    S = sample_prior_lhs(args.n, args.n_betas, args.clip, args.seed)
+    names = [f"sub{args.start_id + i}" for i in range(args.n)]
+    print(f"[prior] {args.n} bodies x {args.n_betas} betas, Latin hypercube over N(0,1) "
+          f"per axis, clipped at +/-{args.clip}, seed {args.seed}; "
+          f"no real subject's betas were read")
 
-    model = load_model(args.models_dir)
-    bands = proportion_bands(model, B, args.proportion_margin)
-    print("[proportions] acceptance bands (real range +/- margin):")
-    for k, (lo, hi) in bands.items():
-        print(f"    {k:11s} {lo:.3f} .. {hi:.3f}")
-    radii = np.linalg.norm(B - centroid, axis=1)
-    dir_radius = args.dir_radius or [radii.max() * 1.0, radii.max() * 1.6]
-
-    # Pairwise-spacing avoid set: reals (basis) + existing synthetics + accepted new.
-    existing = {}
-    if args.existing_syn is not None:
-        ez = np.load(args.existing_syn, allow_pickle=True)
-        existing = {k: ez[k].astype(np.float64) for k in ez.files if not k.startswith("_")}
-        print(f"[spacing] existing synthetics in avoid set: {len(existing)} from {args.existing_syn}")
-    avoid = [b for b in B] + list(existing.values())
-
-    n_extrap = int(round(args.n * args.frac_extrap))
-    n_dir = int(round(args.n * args.frac_extrap_dir))
-    n_inhull = args.n - n_extrap - n_dir
-    assert n_inhull >= 0, "frac_extrap + frac_extrap_dir must be <= 1"
-
-    def far_from_heldout(b):
-        return np.linalg.norm(H - b, axis=1).min() >= args.min_heldout_dist
-
-    def far_from_roster(b):
-        if args.min_pairwise_dist <= 0:
-            return True
-        A = np.stack(avoid)
-        return np.linalg.norm(A - b, axis=1).min() >= args.min_pairwise_dist
-
-    def sample_inhull():
-        k = rng.integers(2, 4)                              # blend 2-3 real subjects
-        idx = rng.choice(len(B), size=k, replace=False)
-        w = rng.dirichlet(np.ones(k))
-        return w @ B[idx]
-
-    def sample_extrap():
-        i = rng.integers(len(B))
-        s = rng.uniform(*args.extrap_scale)
-        return centroid + s * (B[i] - centroid)            # push past subject i
-
-    def sample_extrap_dir():
-        d = rng.standard_normal(B.shape[1])
-        d /= np.linalg.norm(d)
-        return centroid + rng.uniform(*dir_radius) * d     # anywhere on the shell
-
-    out, kinds, tries = {}, [], 0
-    for kind, sampler, count in [("inhull", sample_inhull, n_inhull),
-                                 ("extrap", sample_extrap, n_extrap),
-                                 ("extrap_dir", sample_extrap_dir, n_dir)]:
-        made = 0
-        while made < count:
-            tries += 1
-            if tries > args.max_tries:
-                import sys
-                sys.exit(f"FATAL: only placed {len(out)}/{args.n} bodies in {args.max_tries} "
-                         f"tries -- min-pairwise-dist {args.min_pairwise_dist} does not fit "
-                         f"this many bodies. Relax the spacing DELIBERATELY or lower --n.")
-            b = sampler()
-            if not far_from_heldout(b):
-                continue                                    # too close to a test body -> resample
-            if not far_from_roster(b):
-                continue                                    # too close to another training body
-            if not within_bands(model, b, bands):
-                continue                                    # implausible human proportions
-            name = f"sub{args.start_id + len(out)}"          # env-compatible naming
-            out[name] = b.astype(np.float32)
-            avoid.append(b.astype(np.float64))
-            kinds.append(kind)
-            made += 1
-    if args.min_pairwise_dist > 0:
-        print(f"[spacing] placed {len(out)} bodies with pairwise >= {args.min_pairwise_dist} "
-              f"in {tries} tries")
-
-    out["_genders"] = np.array([f"{k}:neutral" for k in out if not k.startswith("_")], dtype=object)
-    out["_kinds"] = np.array(kinds, dtype=object)
+    out = {n: S[i].astype(np.float32) for i, n in enumerate(names)}
+    out["_genders"] = np.array([f"{n}:neutral" for n in names], dtype=object)
+    out["_kinds"] = np.array(["prior"] * args.n, dtype=object)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.out, **out)
 
-    # combined file the env reads: real neutral betas + synthetic, all gender=neutral
-    combined = {k: src[k] for k in src.files if k != "_genders"}
-    combined.update({k: v.astype(np.float32) for k, v in existing.items()})
-    combined.update({k: out[k] for k in out if not k.startswith("_")})
+    # ---- combined file the env reads: the real subjects, copied untouched, + ours ----
+    src = np.load(args.betas, allow_pickle=True)
+    real_names = [k for k in src.files if k != "_genders"]
+    clash = sorted(set(real_names) & set(names))
+    if clash:
+        raise SystemExit(f"ERROR: synthetic ids {clash} already exist in {args.betas}; "
+                         f"pick another --start-id")
+    combined = {k: src[k] for k in real_names}
+    combined.update({n: out[n] for n in names})
     combined["_genders"] = np.array([f"{k}:neutral" for k in combined], dtype=object)
     np.savez(args.combined_out, **combined)
-    print(f"wrote combined real+synthetic betas -> {args.combined_out} "
-          f"({len(combined) - 1} bodies)")
+    print(f"wrote {args.out} ({args.n} synthetic) and {args.combined_out} "
+          f"({len(real_names)} real + {args.n} synthetic)")
 
-    # report
-    names = [k for k in out if not k.startswith("_")]
-    heights = {n: neutral_height(args.models_dir, out[n].astype(np.float64)) for n in names}
-    d_held = {n: float(np.linalg.norm(H - out[n], axis=1).min()) for n in names}
-    d_basis = {n: float(np.linalg.norm(B - out[n], axis=1).min()) for n in names}
-    print(f"generated {len(names)} bodies ({n_inhull} inhull + {n_extrap} extrap) -> {args.out}")
-    print(f"  height:   {min(heights.values())*100:.0f}-{max(heights.values())*100:.0f} cm "
-          f"(real basis range for sanity)")
-    print(f"  nearest real subject (L2 betas):  min {min(d_basis.values()):.2f}  max {max(d_basis.values()):.2f}")
-    print(f"  nearest HELD-OUT subject (L2):     min {min(d_held.values()):.2f}  "
-          f"(must be >= {args.min_heldout_dist}; closer ones were rejected)")
-    tall = [n for n, h in heights.items() if not (1.40 <= h <= 2.10)]
-    print(f"  bodies outside 140-210cm (sanity flag): {tall if tall else 'none'}")
+    # ---- report (sanity only, nothing is filtered) ----
+    model = load_model(args.models_dir)
+    heights = {n: neutral_height(model, S[i]) for i, n in enumerate(names)}
+    print(f"  height: {min(heights.values())*100:.0f}-{max(heights.values())*100:.0f} cm")
+    print(f"  per-axis min..max: {np.round(S.min(0), 2).tolist()} .. "
+          f"{np.round(S.max(0), 2).tolist()}")
+    print(f"  |beta| max: {np.abs(S).max():.2f}   mean ||beta||^2: {(S**2).sum(1).mean():.1f} "
+          f"(a typical person in the prior scores ~{args.n_betas})")
+    odd = [n for n, h in heights.items() if not (1.40 <= h <= 2.10)]
+    print(f"  bodies outside 140-210cm (flag only, kept): {odd if odd else 'none'}")
 
-    # heights file for bodyNormalizedReward (synthetic bodies aren't in SUBJECT_HEIGHTS).
-    # Approx = neutral mesh extent; measure_subject_bodies.py on the MJCFs is the exact version.
-    import json
-    hpath = args.heights_out or (args.out.parent / "synthetic_heights.json")
-    hmap = {}
-    if args.merge_heights is not None:
-        hmap.update(json.load(open(args.merge_heights)))
-    hmap.update({str(args.start_id + i): round(heights[n], 4) for i, n in enumerate(names)})
-    json.dump(hmap, open(hpath, "w"), indent=2)
-    print(f"  wrote heights -> {hpath} (for --subject-heights-file under body-norm)")
+    hpath = args.heights_out or (args.out.parent / "synthetic_heights_gen4.json")
+    json.dump({str(args.start_id + i): round(heights[n], 4) for i, n in enumerate(names)},
+              open(hpath, "w"), indent=2)
+    print(f"  wrote heights -> {hpath} (subjectHeightsFile for bodyNormalizedReward)")
 
 
 if __name__ == "__main__":
