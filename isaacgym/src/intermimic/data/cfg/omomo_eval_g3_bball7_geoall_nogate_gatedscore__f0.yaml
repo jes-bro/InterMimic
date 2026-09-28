@@ -59,7 +59,7 @@ env:
   controlFrequencyInv: 2 # 30 Hz
   stateInit: "Start"
   enableEvaluation: True
-  rolloutLength: 300                       # as the single-clip bball eval: start pinned to 0
+  rolloutLength: 1000                     # uniform across every eval cfg; > every clip in any arm (longest: cpr 691)
   physicalBufferSize: 1
   hybridInitProb: 0.1
   dataFPS: 30
