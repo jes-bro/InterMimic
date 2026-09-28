@@ -45,7 +45,14 @@ CLIP="${CLIP:-}"               # empty = all clips; set e.g. sub2_largetable_005
 FRAMES="${FRAMES:-300}"
 # ARM=<arm> replays through that arm's own environment (its motion dir, object
 # set and object physics); otherwise the v1 config, correct only for v1-era OMOMO.
-if [ -n "${ARM:-}" ]; then
+# REPLAY_BASE_CFG=<yaml> overrides the base outright -- for the replay-only
+# diagnostic configs (omomo_replay_v1_nodrive.yaml, omomo_replay_v1_stiffsolver.yaml)
+# that isolate why a body misbehaves under identical written state.
+if [ -n "${REPLAY_BASE_CFG:-}" ]; then
+    BASE="$REPLAY_BASE_CFG"
+    [ -f "$BASE" ] || { echo "[replayxb] ERROR: REPLAY_BASE_CFG not found: $BASE" >&2; exit 2; }
+    echo "[replayxb] base cfg override: $BASE"
+elif [ -n "${ARM:-}" ]; then
     BASE=$(python3 scripts/check_eval_cfg.py --arm "$ARM") || exit 2
 else
     BASE=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml

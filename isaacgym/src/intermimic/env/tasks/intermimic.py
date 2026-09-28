@@ -2550,7 +2550,16 @@ class InterMimic(Humanoid_SMPLX):
         self._humanoid_root_states[:, 10:13] = torch.zeros_like(self._humanoid_root_states[:, 10:13])
         
         self._dof_pos[env_ids] = self.extract_data_component('dof_pos', True, self.data_id[env_ids], t)
-        self._dof_vel[env_ids] = self.extract_data_component('dof_vel', True, self.data_id[env_ids], t)
+        # REPLAY_ZERO_DOF_VEL=1: write zero joint velocities instead of the reference's
+        # finite differences. Diagnostic only (default off = unchanged behaviour): tells
+        # whether the velocity write is what destabilises a body whose written POSE is
+        # identical to a body that replays cleanly (the sub4 investigation).
+        if os.environ.get('REPLAY_ZERO_DOF_VEL', '0') == '1':
+            self._dof_vel[env_ids] = 0.0
+            if t == 0:
+                print('[replay] REPLAY_ZERO_DOF_VEL=1: joint velocities written as zero', flush=True)
+        else:
+            self._dof_vel[env_ids] = self.extract_data_component('dof_vel', True, self.data_id[env_ids], t)
 
 
         env_ids_int32 = self._humanoid_actor_ids[env_ids]
