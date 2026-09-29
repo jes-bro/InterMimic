@@ -2560,6 +2560,24 @@ class InterMimic(Humanoid_SMPLX):
                 print('[replay] REPLAY_ZERO_DOF_VEL=1: joint velocities written as zero', flush=True)
         else:
             self._dof_vel[env_ids] = self.extract_data_component('dof_vel', True, self.data_id[env_ids], t)
+        # REPLAY_CLAMP_DOF="<dof_name>:<lo>:<hi>[,...]": clamp the WRITTEN position of
+        # named dofs before the write. Diagnostic only (default off): tests whether a
+        # specific written joint value is the trigger of a body's blow-up (sub4 breaks
+        # exactly when L_Knee_z is written above ~-0.083 rad).
+        _clamp = os.environ.get('REPLAY_CLAMP_DOF')
+        if _clamp:
+            if not hasattr(self, '_replay_clamp'):
+                dnames = list(self.gym.get_actor_dof_names(self.envs[0], self.humanoid_handles[0]))
+                spec = []
+                for item in _clamp.split(','):
+                    n, lo, hi = item.split(':')
+                    if n not in dnames:
+                        raise ValueError(f"[replay] REPLAY_CLAMP_DOF: unknown dof {n!r}; first ten: {dnames[:10]}")
+                    spec.append((dnames.index(n), float(lo), float(hi)))
+                self._replay_clamp = spec
+                print(f"[replay] REPLAY_CLAMP_DOF active: {_clamp}", flush=True)
+            for i, lo, hi in self._replay_clamp:
+                self._dof_pos[env_ids, i] = self._dof_pos[env_ids, i].clamp(lo, hi)
 
 
         # REPLAY_TRACE=1: trace env 0's joint state through every stage of this step
