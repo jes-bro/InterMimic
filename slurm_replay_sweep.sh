@@ -36,7 +36,7 @@ BODIES="${BODIES:-sub1 sub2 sub3 sub4 sub5 sub6 sub7 sub8 sub9 sub10 sub11 sub12
 CLIP="${CLIP:-sub2_largetable_005}"
 SOURCE="${SOURCE:-sub2}"
 ASSET="${ASSET:-stock}"           # stock | inertial
-BASE=isaacgym/src/intermimic/data/cfg/omomo_eval_v1_multibody_mlp.yaml
+BASE="${REPLAY_BASE_CFG:-isaacgym/src/intermimic/data/cfg/omomo_replay_v1_allbodies.yaml}"   # betas for all 47 bodies
 TRAIN=isaacgym/src/intermimic/data/cfg/train/rlg/omomo_multibody.yaml
 
 SRC_CLIP="$(pwd)/InterAct/OMOMO_new/${CLIP}.pt"
