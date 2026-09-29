@@ -96,9 +96,25 @@ def body_inertial(body):
     for m, c, Ig in parts:
         d = c - com; I += Ig + m * (float(d @ d) * np.eye(3) - np.outer(d, d))   # parallel axis
     vals, vecs = np.linalg.eigh(I)                          # ascending, orthonormal columns
-    if np.linalg.det(vecs) < 0:
-        vecs[:, 2] *= -1                                    # right-handed frame
-    return M, com, vals, mat_to_quat_wxyz(vecs)
+    # Choose THE principal frame nearest the body frame. Eigenvectors are only
+    # defined up to sign (and, for a capsule's equal transverse moments, up to
+    # rotation within that pair), and a frame ~180 deg from the body frame has a
+    # sign-ambiguous quaternion -- the very thing that wraps the joint angles.
+    # Greedy: assign to body axis x, y, z the eigenvector most aligned with it,
+    # sign-flipped to point along it; fix handedness on the least-determined axis.
+    cols, moms, used = [], [], set()
+    for ax in range(3):
+        best = max((j for j in range(3) if j not in used), key=lambda j: abs(vecs[ax, j]))
+        v = vecs[:, best] * (1.0 if vecs[ax, best] >= 0 else -1.0)
+        cols.append(v); moms.append(vals[best]); used.add(best)
+    R = np.stack(cols, axis=1)
+    if np.linalg.det(R) < 0:
+        # flipping a column that belongs to a degenerate pair costs nothing physically;
+        # otherwise flip the one least aligned with its body axis
+        pair = [k for k in range(3) if any(abs(moms[k] - moms[m]) < 1e-9 * max(1.0, moms[k]) for m in range(3) if m != k)]
+        k = pair[0] if pair else int(np.argmin([abs(R[ax, ax]) for ax in range(3)]))
+        R[:, k] *= -1
+    return M, com, np.array(moms), mat_to_quat_wxyz(R)
 
 
 def main():

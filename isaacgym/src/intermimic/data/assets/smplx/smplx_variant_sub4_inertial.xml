@@ -28,12 +28,12 @@
       <inertial pos="0.000000 0.000000 0.000000" quat="1.00000000 0.00000000 0.00000000 0.00000000" mass="4.698241" diaginertia="0.020287397 0.020287397 0.020287397" /><freejoint name="Pelvis" />
       <geom type="sphere" contype="1" conaffinity="1" density="1000" size="0.1039" pos="0.0000 0.0000 0.0000" name="Pelvis" />
       <body name="L_Hip" pos="-0.0236 0.0529 -0.0971">
-        <inertial pos="0.001800 0.030650 -0.182250" quat="0.35989115 0.61273035 0.45182802 -0.53934342" mass="6.451034" diaginertia="0.010289550 0.054423217 0.054423217" /><joint name="L_Hip_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
+        <inertial pos="0.001800 0.030650 -0.182250" quat="0.98189647 0.08266190 0.00927497 -0.17017730" mass="6.451034" diaginertia="0.054423217 0.054423217 0.010289550" /><joint name="L_Hip_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
         <joint name="L_Hip_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
         <joint name="L_Hip_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
         <geom type="capsule" contype="1" conaffinity="1" density="2040.816327" fromto="0.0007 0.0123 -0.0729 0.0029 0.0490 -0.2916" size="0.058" />
         <body name="L_Knee" pos="0.0037 0.0613 -0.3645">
-          <inertial pos="-0.018500 -0.025050 -0.200000" quat="0.02383235 0.73832949 0.06225633 0.67113764" mass="3.710167" diaginertia="0.005351362 0.034208075 0.034208075" /><joint name="L_Knee_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
+          <inertial pos="-0.018500 -0.025050 -0.200000" quat="0.99664377 -0.06087389 0.04751182 0.02716985" mass="3.710167" diaginertia="0.034208075 0.034208075 0.005351362" /><joint name="L_Knee_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
           <joint name="L_Knee_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
           <joint name="L_Knee_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
           <geom type="capsule" contype="1" conaffinity="1" density="1234.567901" fromto="-0.0074 -0.0100 -0.0800 -0.0296 -0.0401 -0.3200" size="0.055" />
@@ -43,7 +43,7 @@
             <joint name="L_Ankle_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
             <geom type="box" contype="1" conaffinity="1" density="1000" pos="0.0709 0.0228 -0.0298" size="0.1004 0.0552 0.0216" quat="1.0000 0.0000 0.0000 0.0000" />
             <body name="L_Toe" pos="0.1418 0.0456 -0.0596">
-              <inertial pos="0.071900 -0.022800 0.030400" quat="0.50000000 0.50000000 0.50000000 0.50000000" mass="0.206927" diaginertia="0.000067073 0.000228602 0.000228906" /><joint name="L_Toe_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+              <inertial pos="0.071900 -0.022800 0.030400" quat="1.00000000 0.00000000 0.00000000 0.00000000" mass="0.206927" diaginertia="0.000228906 0.000067073 0.000228602" /><joint name="L_Toe_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="L_Toe_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="L_Toe_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <geom type="box" contype="1" conaffinity="1" density="1000" pos="0.0719 -0.0228 0.0304" size="0.022 0.0532 0.0221" quat="1.0000 0.0000 0.0000 0.0000" />
@@ -52,12 +52,12 @@
         </body>
       </body>
       <body name="R_Hip" pos="-0.0168 -0.0552 -0.1087">
-        <inertial pos="-0.002200 -0.022400 -0.173700" quat="0.53420498 0.46990597 -0.46412728 0.52763556" mass="6.151659" diaginertia="0.009724372 0.048267573 0.048267573" /><joint name="R_Hip_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
+        <inertial pos="-0.002200 -0.022400 -0.173700" quat="0.99793690 -0.06390365 0.00617405 -0.00039536" mass="6.151659" diaginertia="0.048267573 0.048267573 0.009724372" /><joint name="R_Hip_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
         <joint name="R_Hip_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
         <joint name="R_Hip_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
         <geom type="capsule" contype="1" conaffinity="1" density="2040.816327" fromto="-0.0009 -0.0090 -0.0695 -0.0035 -0.0358 -0.2779" size="0.0578" />
         <body name="R_Knee" pos="-0.0043 -0.0448 -0.3474">
-          <inertial pos="-0.017600 0.010350 -0.206400" quat="0.03151980 0.73593992 -0.06297143 0.67337474" mass="3.718719" diaginertia="0.005292110 0.035307856 0.035307856" /><joint name="R_Knee_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
+          <inertial pos="-0.017600 0.010350 -0.206400" quat="0.99653595 0.02223966 0.04424026 -0.06681539" mass="3.718719" diaginertia="0.035307856 0.035307856 0.005292110" /><joint name="R_Knee_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
           <joint name="R_Knee_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
           <joint name="R_Knee_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
           <geom type="capsule" contype="1" conaffinity="1" density="1234.567901" fromto="-0.0070 0.0041 -0.0826 -0.0282 0.0166 -0.3302" size="0.0546" />
@@ -67,7 +67,7 @@
             <joint name="R_Ankle_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="800" damping="80" armature="0.02" range="-180.0000 180.0000" />
             <geom type="box" contype="1" conaffinity="1" density="1000" pos="0.0743 -0.0177 -0.0293" size="0.1004 0.0552 0.0258" quat="1.0000 0.0000 0.0000 0.0000" />
             <body name="R_Toe" pos="0.1487 -0.0354 -0.0587">
-              <inertial pos="0.075300 0.017700 0.025600" quat="0.50000000 0.50000000 0.50000000 0.50000000" mass="0.201283" diaginertia="0.000063496 0.000220620 0.000222663" /><joint name="R_Toe_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+              <inertial pos="0.075300 0.017700 0.025600" quat="1.00000000 0.00000000 0.00000000 0.00000000" mass="0.201283" diaginertia="0.000222663 0.000063496 0.000220620" /><joint name="R_Toe_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="R_Toe_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="R_Toe_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <geom type="box" contype="1" conaffinity="1" density="1000" pos="0.0753 0.0177 0.0256" size="0.0214 0.0532 0.0221" quat="1.0000 0.0000 0.0000 0.0000" />
@@ -76,22 +76,22 @@
         </body>
       </body>
       <body name="Torso" pos="-0.0378 -0.0024 0.1175">
-        <inertial pos="0.000450 0.006050 0.083900" quat="0.52046679 0.48174847 -0.47889795 0.51738717" mass="2.841246" diaginertia="0.007137412 0.007922013 0.007922013" /><joint name="Torso_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
+        <inertial pos="0.000450 0.006050 0.083900" quat="0.99925019 -0.03860376 0.00296507 -0.00011455" mass="2.841246" diaginertia="0.007922013 0.007922013 0.007137412" /><joint name="Torso_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
         <joint name="Torso_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
         <joint name="Torso_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
         <geom type="capsule" contype="1" conaffinity="1" density="1234.567901" fromto="0.0004 0.0054 0.0755 0.0005 0.0067 0.0923" size="0.0779" />
         <body name="Spine" pos="0.0009 0.0121 0.1679">
-          <inertial pos="0.011100 -0.004950 0.031650" quat="0.33211532 0.47574897 0.55597254 -0.59519481" mass="4.371596" diaginertia="0.015285988 0.015820141 0.015820141" /><joint name="Spine_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
+          <inertial pos="0.011100 -0.004950 0.031650" quat="0.97951582 0.05220569 0.17165153 -0.09142796" mass="4.371596" diaginertia="0.015820141 0.015820141 0.015285988" /><joint name="Spine_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
           <joint name="Spine_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
           <joint name="Spine_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
           <geom type="capsule" contype="1" conaffinity="1" density="1234.567901" fromto="0.0100 -0.0045 0.0285 0.0122 -0.0054 0.0348" size="0.0929" />
           <body name="Chest" pos="0.0223 -0.0099 0.0632">
-            <inertial pos="-0.006000 -0.002200 0.056000" quat="0.51520262 -0.42583242 -0.55603455 -0.49402287" mass="7.139163" diaginertia="0.034287671 0.036023672 0.036023672" /><joint name="Chest_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
+            <inertial pos="-0.006000 -0.002200 0.056000" quat="0.99554623 0.01367926 -0.05451118 0.07569094" mass="7.139163" diaginertia="0.036023672 0.036023672 0.034287671" /><joint name="Chest_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
             <joint name="Chest_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
             <joint name="Chest_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="1000" damping="100" armature="0.02" range="-180.0000 180.0000" />
             <geom type="capsule" contype="1" conaffinity="1" density="1234.567901" fromto="-0.0054 -0.0020 0.0504 -0.0066 -0.0024 0.0616" size="0.1086" />
             <body name="Neck" pos="-0.024 -0.0093 0.1747">
-              <inertial pos="0.010200 0.011900 0.080550" quat="0.56726254 0.49004587 -0.43267903 0.50085638" mass="1.073527" diaginertia="0.001057524 0.002945723 0.002945723" /><joint name="Neck_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+              <inertial pos="0.010200 0.011900 0.080550" quat="0.99542191 -0.07269701 0.06188650 -0.00451965" mass="1.073527" diaginertia="0.002945723 0.002945723 0.001057524" /><joint name="Neck_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="Neck_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="Neck_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0041 0.0048 0.0322 0.0163 0.0190 0.1289" size="0.0462" />
@@ -103,37 +103,37 @@
               </body>
             </body>
             <body name="L_Thorax" pos="-0.0042 0.0393 0.08">
-              <inertial pos="-0.009950 0.064550 0.032150" quat="0.32570564 0.57078845 0.42009579 0.62580821" mass="1.140311" diaginertia="0.001241864 0.002975051 0.002975051" /><joint name="L_Thorax_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+              <inertial pos="-0.009950 0.064550 0.032150" quat="0.97119904 0.22539761 0.01968519 0.07470495" mass="1.140311" diaginertia="0.002975051 0.001241864 0.002975051" /><joint name="L_Thorax_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="L_Thorax_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="L_Thorax_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0040 0.0258 0.0129 -0.0159 0.1033 0.0514" size="0.0488" />
               <body name="L_Shoulder" pos="-0.0199 0.1291 0.0643">
-                <inertial pos="-0.021950 0.123550 -0.039050" quat="0.28367002 0.57980179 0.75535046 0.11316754" mass="2.196032" diaginertia="0.003110683 0.011688608 0.011688608" /><joint name="L_Shoulder_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+                <inertial pos="-0.021950 0.123550 -0.039050" quat="0.94409521 -0.12056346 -0.28060653 0.12413166" mass="2.196032" diaginertia="0.011688608 0.003110683 0.011688608" /><joint name="L_Shoulder_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                 <joint name="L_Shoulder_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                 <joint name="L_Shoulder_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                 <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0088 0.0494 -0.0156 -0.0351 0.1977 -0.0625" size="0.055" />
                 <body name="L_Elbow" pos="-0.0438 0.2472 -0.0781">
-                  <inertial pos="0.000000 0.137500 0.013450" quat="0.47510143 0.52371618 -0.47510143 -0.52371618" mass="1.344183" diaginertia="0.001216729 0.006371501 0.006371501" /><joint name="L_Elbow_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+                  <inertial pos="0.000000 0.137500 0.013450" quat="0.99881760 0.04861475 0.00000000 0.00000000" mass="1.344183" diaginertia="0.006371501 0.001216729 0.006371501" /><joint name="L_Elbow_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                   <joint name="L_Elbow_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                   <joint name="L_Elbow_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                   <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0000 0.0550 0.0054 -0.0000 0.2200 0.0215" size="0.0437" />
                   <body name="L_Wrist" pos="0 0.275 0.0269">
-                    <inertial pos="-0.003100 0.048300 -0.005900" quat="0.00000000 0.70710678 0.70710678 0.00000000" mass="0.160616" diaginertia="0.000122319 0.000133124 0.000247338" /><joint name="L_Wrist_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
+                    <inertial pos="-0.003100 0.048300 -0.005900" quat="1.00000000 0.00000000 0.00000000 0.00000000" mass="0.160616" diaginertia="0.000133124 0.000122319 0.000247338" /><joint name="L_Wrist_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
                     <joint name="L_Wrist_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
                     <joint name="L_Wrist_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
                     <geom type="box" contype="1" conaffinity="1" density="1000" pos="-0.0031 0.0483 -0.0059" size="0.047 0.0491 0.0087" quat="1.0000 0.0000 0.0000 0.0000" />
                     <body name="L_Index1" pos="0.0235 0.1137 -0.0089">
-                      <inertial pos="0.000950 0.016600 -0.006450" quat="0.41958339 -0.54618662 0.37785945 -0.61875051" mass="0.011729" diaginertia="0.000000574 0.000001565 0.000001565" /><joint name="L_Index1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="0.000950 0.016600 -0.006450" quat="0.98118998 -0.18374714 -0.05714392 -0.01541998" mass="0.011729" diaginertia="0.000001565 0.000000574 0.000001565" /><joint name="L_Index1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Index1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Index1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0004 0.0066 -0.0026 0.0015 0.0266 -0.0103" size="0.0103" />
                       <body name="L_Index2" pos="0.0019 0.0332 -0.0129">
-                        <inertial pos="-0.001600 0.003500 -0.011950" quat="0.64746972 0.11951184 0.74866172 0.07749524" mass="0.005486" diaginertia="0.000000169 0.000000413 0.000000413" /><joint name="L_Index2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="-0.001600 0.003500 -0.011950" quat="0.98721401 0.13930504 0.07155355 -0.02971022" mass="0.005486" diaginertia="0.000000413 0.000000413 0.000000169" /><joint name="L_Index2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Index2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Index2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0006 0.0014 -0.0048 -0.0026 0.0056 -0.0191" size="0.0082" />
                         <body name="L_Index3" pos="-0.0032 0.007 -0.0238">
-                          <inertial pos="-0.000600 0.004500 -0.010950" quat="0.67380369 0.13342974 0.71291972 0.14117567" mass="0.004275" diaginertia="0.000000110 0.000000277 0.000000277" /><joint name="L_Index3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="-0.000600 0.004500 -0.010950" quat="0.98056152 0.19417535 0.02765921 0.00547720" mass="0.004275" diaginertia="0.000000277 0.000000277 0.000000110" /><joint name="L_Index3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Index3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Index3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0002 0.0018 -0.0044 -0.0010 0.0072 -0.0175" size="0.0075" />
@@ -141,17 +141,17 @@
                       </body>
                     </body>
                     <body name="L_Middle1" pos="-0.0035 0.1224 -0.0057">
-                      <inertial pos="-0.002650 0.014500 -0.008550" quat="0.59803967 0.25802568 0.61357885 0.44642165" mass="0.012210" diaginertia="0.000000630 0.000001606 0.000001606" /><joint name="L_Middle1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="-0.002650 0.014500 -0.008550" quat="0.95803293 -0.25358560 -0.08642840 0.10196757" mass="0.012210" diaginertia="0.000001606 0.000000630 0.000001606" /><joint name="L_Middle1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Middle1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Middle1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0011 0.0058 -0.0034 -0.0042 0.0232 -0.0137" size="0.0106" />
                       <body name="L_Middle2" pos="-0.0053 0.029 -0.0171">
-                        <inertial pos="-0.001100 0.002500 -0.012950" quat="0.00653404 0.73764656 -0.13416060 0.66169162" mass="0.005331" diaginertia="0.000000157 0.000000409 0.000000409" /><joint name="L_Middle2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="-0.001100 0.002500 -0.012950" quat="0.98948151 0.09024560 0.05370825 -0.09948613" mass="0.005331" diaginertia="0.000000409 0.000000409 0.000000157" /><joint name="L_Middle2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Middle2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Middle2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0004 0.0010 -0.0052 -0.0018 0.0040 -0.0207" size="0.008" />
                         <body name="L_Middle3" pos="-0.0022 0.0049 -0.0259">
-                          <inertial pos="-0.000100 0.003500 -0.011950" quat="0.41847805 0.56406305 0.56804433 -0.42899258" mass="0.004125" diaginertia="0.000000101 0.000000271 0.000000271" /><joint name="L_Middle3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="-0.000100 0.003500 -0.011950" quat="0.98978901 0.14231837 0.00724790 -0.00326663" mass="0.004125" diaginertia="0.000000271 0.000000271 0.000000101" /><joint name="L_Middle3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Middle3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Middle3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0000 0.0014 -0.0048 -0.0002 0.0056 -0.0191" size="0.0073" />
@@ -159,17 +159,17 @@
                       </body>
                     </body>
                     <body name="L_Pinky1" pos="-0.0504 0.0936 -0.0148">
-                      <inertial pos="-0.002450 0.006800 -0.008350" quat="0.03506677 -0.77945902 0.37201435 -0.50281138" mass="0.004679" diaginertia="0.000000133 0.000000304 0.000000304" /><joint name="L_Pinky1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="-0.002450 0.006800 -0.008350" quat="0.90670210 0.28784982 0.19561942 -0.23825791" mass="0.004679" diaginertia="0.000000304 0.000000304 0.000000133" /><joint name="L_Pinky1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Pinky1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Pinky1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0010 0.0027 -0.0033 -0.0039 0.0109 -0.0134" size="0.0079" />
                       <body name="L_Pinky2" pos="-0.0049 0.0136 -0.0167">
-                        <inertial pos="0.000500 0.002000 -0.010450" quat="0.72159328 0.05335254 0.68562842 0.07981422" mass="0.003398" diaginertia="0.000000076 0.000000185 0.000000185" /><joint name="L_Pinky2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="0.000500 0.002000 -0.010450" quat="0.99505601 0.09416312 -0.02543099 0.01871124" mass="0.003398" diaginertia="0.000000185 0.000000185 0.000000076" /><joint name="L_Pinky2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Pinky2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Pinky2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0002 0.0008 -0.0042 0.0008 0.0032 -0.0167" size="0.007" />
                         <body name="L_Pinky3" pos="0.001 0.0039 -0.0209">
-                          <inertial pos="0.001500 0.003000 -0.009450" quat="0.61220077 -0.44748059 0.38468856 0.52629464" mass="0.001917" diaginertia="0.000000028 0.000000078 0.000000078" /><joint name="L_Pinky3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="0.001500 0.003000 -0.009450" quat="0.98533228 0.15316313 -0.07434908 -0.01155705" mass="0.001917" diaginertia="0.000000078 0.000000078 0.000000028" /><joint name="L_Pinky3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Pinky3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Pinky3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0006 0.0012 -0.0038 0.0024 0.0048 -0.0151" size="0.0056" />
@@ -177,17 +177,17 @@
                       </body>
                     </body>
                     <body name="L_Ring1" pos="-0.0311 0.1088 -0.0086">
-                      <inertial pos="-0.000750 0.012950 -0.009250" quat="0.63327056 0.27457374 0.62054788 0.37215318" mass="0.007702" diaginertia="0.000000282 0.000000789 0.000000789" /><joint name="L_Ring1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="-0.000750 0.012950 -0.009250" quat="0.95027268 -0.30354576 -0.05515106 0.04242839" mass="0.007702" diaginertia="0.000000789 0.000000282 0.000000789" /><joint name="L_Ring1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Ring1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Ring1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0003 0.0052 -0.0037 -0.0012 0.0207 -0.0148" size="0.0089" />
                       <body name="L_Ring2" pos="-0.0015 0.0259 -0.0184">
-                        <inertial pos="0.000800 0.002000 -0.012950" quat="0.55370986 -0.47457243 0.44527897 0.51953156" mass="0.005466" diaginertia="0.000000165 0.000000422 0.000000422" /><joint name="L_Ring2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="0.000800 0.002000 -0.012950" quat="0.99654641 0.07669501 -0.03173588 -0.00244242" mass="0.005466" diaginertia="0.000000422 0.000000422 0.000000165" /><joint name="L_Ring2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Ring2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Ring2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0003 0.0008 -0.0052 0.0013 0.0032 -0.0207" size="0.0081" />
                         <body name="L_Ring3" pos="0.0016 0.004 -0.0259">
-                          <inertial pos="0.001800 0.003000 -0.011950" quat="0.59743459 -0.46567252 0.40135226 0.51491491" mass="0.003362" diaginertia="0.000000070 0.000000202 0.000000202" /><joint name="L_Ring3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="0.001800 0.003000 -0.011950" quat="0.98968715 0.12266236 -0.07341997 -0.00909971" mass="0.003362" diaginertia="0.000000202 0.000000202 0.000000070" /><joint name="L_Ring3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Ring3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Ring3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0007 0.0012 -0.0048 0.0029 0.0048 -0.0191" size="0.0067" />
@@ -195,17 +195,17 @@
                       </body>
                     </body>
                     <body name="L_Thumb1" pos="0.0307 0.0445 -0.0209">
-                      <inertial pos="0.007300 0.011950 -0.010200" quat="0.79172397 -0.29183946 0.18561083 0.50353898" mass="0.023848" diaginertia="0.000002086 0.000004359 0.000004359" /><joint name="L_Thumb1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="0.007300 0.011950 -0.010200" quat="0.91588921 -0.33760834 -0.07511499 -0.20377756" mass="0.023848" diaginertia="0.000004359 0.000002086 0.000004359" /><joint name="L_Thumb1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Thumb1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="L_Thumb1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0029 0.0048 -0.0041 0.0117 0.0191 -0.0163" size="0.0139" />
                       <body name="L_Thumb2" pos="0.0146 0.0239 -0.0203">
-                        <inertial pos="0.004250 0.013100 -0.004750" quat="0.79127840 -0.13836625 0.10259153 0.58669264" mass="0.011185" diaginertia="0.000000572 0.000001290 0.000001290" /><joint name="L_Thumb2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="0.004250 0.013100 -0.004750" quat="0.97437267 -0.17038288 -0.02529655 -0.14466398" mass="0.011185" diaginertia="0.000001290 0.000000572 0.000001290" /><joint name="L_Thumb2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Thumb2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="L_Thumb2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0017 0.0052 -0.0019 0.0068 0.0210 -0.0076" size="0.0106" />
                         <body name="L_Thumb3" pos="0.0085 0.0262 -0.0095">
-                          <inertial pos="0.005250 0.014100 -0.003750" quat="0.81086324 -0.10550329 0.07427276 0.57083573" mass="0.009579" diaginertia="0.000000422 0.000001065 0.000001065" /><joint name="L_Thumb3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="0.005250 0.014100 -0.003750" quat="0.97700871 -0.12712086 -0.02208332 -0.16972508" mass="0.009579" diaginertia="0.000001065 0.000000422 0.000001065" /><joint name="L_Thumb3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Thumb3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="L_Thumb3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0021 0.0056 -0.0015 0.0084 0.0226 -0.0060" size="0.0098" />
@@ -217,37 +217,37 @@
               </body>
             </body>
             <body name="R_Thorax" pos="-0.008 -0.043 0.081">
-              <inertial pos="-0.007500 -0.059950 0.030500" quat="0.72471495 -0.17384105 0.15552692 0.64836634" mass="1.660886" diaginertia="0.002504150 0.005016317 0.005016317" /><joint name="R_Thorax_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+              <inertial pos="-0.007500 -0.059950 0.030500" quat="0.97091509 -0.23289832 -0.01295004 -0.05398662" mass="1.660886" diaginertia="0.005016317 0.002504150 0.005016317" /><joint name="R_Thorax_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="R_Thorax_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <joint name="R_Thorax_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
               <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0030 -0.0240 0.0122 -0.0120 -0.0959 0.0488" size="0.0578" />
               <body name="R_Shoulder" pos="-0.015 -0.1199 0.0609">
-                <inertial pos="-0.016250 -0.131950 -0.022550" quat="0.74582118 0.06337902 -0.05614916 0.66074287" mass="2.169221" diaginertia="0.003000226 0.011761713 0.011761713" /><joint name="R_Shoulder_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+                <inertial pos="-0.016250 -0.131950 -0.022550" quat="0.99459098 0.08451919 0.00511228 -0.06015945" mass="2.169221" diaginertia="0.011761713 0.003000226 0.011761713" /><joint name="R_Shoulder_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                 <joint name="R_Shoulder_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                 <joint name="R_Shoulder_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                 <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0065 -0.0528 -0.0090 -0.0260 -0.2111 -0.0361" size="0.0543" />
                 <body name="R_Elbow" pos="-0.0325 -0.2639 -0.0451">
-                  <inertial pos="-0.005600 -0.133300 -0.000050" quat="0.72196314 0.00022561 -0.00021623 0.69193144" mass="1.379377" diaginertia="0.001303307 0.006352572 0.006352572" /><joint name="R_Elbow_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
+                  <inertial pos="-0.005600 -0.133300 -0.000050" quat="0.99977445 0.00031243 0.00000664 -0.02123562" mass="1.379377" diaginertia="0.006352572 0.001303307 0.006352572" /><joint name="R_Elbow_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                   <joint name="R_Elbow_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                   <joint name="R_Elbow_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="500" damping="50" armature="0.02" range="-180.0000 180.0000" />
                   <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0022 -0.0533 -0.0000 -0.0090 -0.2133 -0.0001" size="0.0447" />
                   <body name="R_Wrist" pos="-0.0112 -0.2667 -0.0001">
-                    <inertial pos="-0.003700 -0.048000 -0.007700" quat="0.00000000 0.70710678 0.70710678 0.00000000" mass="0.167094" diaginertia="0.000127350 0.000146357 0.000265081" /><joint name="R_Wrist_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
+                    <inertial pos="-0.003700 -0.048000 -0.007700" quat="1.00000000 0.00000000 0.00000000 0.00000000" mass="0.167094" diaginertia="0.000146357 0.000127350 0.000265081" /><joint name="R_Wrist_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
                     <joint name="R_Wrist_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
                     <joint name="R_Wrist_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="300" damping="30" armature="0.02" range="-180.0000 180.0000" />
                     <geom type="box" contype="1" conaffinity="1" density="1000" pos="-0.0037 -0.0480 -0.0077" size="0.047 0.0505 0.0088" quat="1.0000 0.0000 0.0000 0.0000" />
                     <body name="R_Index1" pos="0.0223 -0.1131 -0.0126">
-                      <inertial pos="0.000950 -0.016600 -0.006450" quat="0.41958339 0.54618662 0.37785945 0.61875051" mass="0.011729" diaginertia="0.000000574 0.000001565 0.000001565" /><joint name="R_Index1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="0.000950 -0.016600 -0.006450" quat="0.98118998 0.18374714 -0.05714392 0.01541998" mass="0.011729" diaginertia="0.000001565 0.000000574 0.000001565" /><joint name="R_Index1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Index1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Index1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0004 -0.0066 -0.0026 0.0015 -0.0266 -0.0103" size="0.0103" />
                       <body name="R_Index2" pos="0.0019 -0.0332 -0.0129">
-                        <inertial pos="-0.001600 -0.003500 -0.011950" quat="0.07749524 0.74866172 0.11951184 0.64746972" mass="0.005486" diaginertia="0.000000169 0.000000413 0.000000413" /><joint name="R_Index2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="-0.001600 -0.003500 -0.011950" quat="0.98721401 -0.13930504 0.07155355 0.02971022" mass="0.005486" diaginertia="0.000000413 0.000000413 0.000000169" /><joint name="R_Index2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Index2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Index2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0006 -0.0014 -0.0048 -0.0026 -0.0056 -0.0191" size="0.0082" />
                         <body name="R_Index3" pos="-0.0032 -0.007 -0.0238">
-                          <inertial pos="-0.000600 -0.002500 -0.010950" quat="0.06959090 0.72447799 0.08846673 0.68004587" mass="0.004282" diaginertia="0.000000113 0.000000269 0.000000269" /><joint name="R_Index3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="-0.000600 -0.002500 -0.010950" quat="0.99314835 -0.11176362 0.03141826 0.01334723" mass="0.004282" diaginertia="0.000000269 0.000000269 0.000000113" /><joint name="R_Index3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Index3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Index3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0002 -0.0010 -0.0044 -0.0010 -0.0040 -0.0175" size="0.0076" />
@@ -255,17 +255,17 @@
                       </body>
                     </body>
                     <body name="R_Middle1" pos="-0.0047 -0.1217 -0.0094">
-                      <inertial pos="-0.002650 -0.014500 -0.008550" quat="0.59803967 -0.25802568 0.61357885 -0.44642165" mass="0.012210" diaginertia="0.000000630 0.000001606 0.000001606" /><joint name="R_Middle1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="-0.002650 -0.014500 -0.008550" quat="0.95803293 0.25358560 -0.08642840 -0.10196757" mass="0.012210" diaginertia="0.000001606 0.000000630 0.000001606" /><joint name="R_Middle1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Middle1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Middle1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0011 -0.0058 -0.0034 -0.0042 -0.0232 -0.0137" size="0.0106" />
                       <body name="R_Middle2" pos="-0.0053 -0.029 -0.0171">
-                        <inertial pos="-0.001100 -0.002450 -0.012950" quat="0.53029221 -0.51284234 -0.56333248 -0.37207449" mass="0.005328" diaginertia="0.000000157 0.000000409 0.000000409" /><joint name="R_Middle2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="-0.001100 -0.002450 -0.012950" quat="0.98927076 -0.08690406 0.05386379 0.10435393" mass="0.005328" diaginertia="0.000000409 0.000000409 0.000000157" /><joint name="R_Middle2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Middle2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Middle2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0004 -0.0010 -0.0052 -0.0018 -0.0039 -0.0207" size="0.008" />
                         <body name="R_Middle3" pos="-0.0022 -0.0049 -0.0259">
-                          <inertial pos="-0.000100 -0.001450 -0.011950" quat="0.04209939 0.71075388 0.04151876 0.70095132" mass="0.004175" diaginertia="0.000000105 0.000000270 0.000000270" /><joint name="R_Middle3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="-0.000100 -0.001450 -0.011950" quat="0.99822632 -0.05912696 0.00693146 -0.00041056" mass="0.004175" diaginertia="0.000000270 0.000000270 0.000000105" /><joint name="R_Middle3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Middle3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Middle3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0000 -0.0006 -0.0048 -0.0002 -0.0023 -0.0191" size="0.0074" />
@@ -273,17 +273,17 @@
                       </body>
                     </body>
                     <body name="R_Pinky1" pos="-0.0516 -0.0929 -0.0186">
-                      <inertial pos="-0.002450 -0.006800 -0.008300" quat="0.70562704 0.33391193 -0.26732570 0.56491616" mass="0.004664" diaginertia="0.000000133 0.000000302 0.000000302" /><joint name="R_Pinky1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="-0.002450 -0.006800 -0.008300" quat="0.93589042 -0.33465279 0.10364856 -0.03706233" mass="0.004664" diaginertia="0.000000302 0.000000302 0.000000133" /><joint name="R_Pinky1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Pinky1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Pinky1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0010 -0.0027 -0.0033 -0.0039 -0.0109 -0.0133" size="0.0079" />
                       <body name="R_Pinky2" pos="-0.0049 -0.0136 -0.0167">
-                        <inertial pos="0.000500 -0.002000 -0.010450" quat="0.07981422 0.68562842 0.05335254 0.72159328" mass="0.003398" diaginertia="0.000000076 0.000000185 0.000000185" /><joint name="R_Pinky2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="0.000500 -0.002000 -0.010450" quat="0.99505601 -0.09416312 -0.02543099 -0.01871124" mass="0.003398" diaginertia="0.000000185 0.000000185 0.000000076" /><joint name="R_Pinky2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Pinky2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Pinky2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0002 -0.0008 -0.0042 0.0008 -0.0032 -0.0167" size="0.007" />
                         <body name="R_Pinky3" pos="0.001 -0.0039 -0.0209">
-                          <inertial pos="0.001500 -0.001000 -0.009450" quat="0.48286354 0.43430106 -0.50850971 0.56537002" mass="0.001950" diaginertia="0.000000029 0.000000077 0.000000077" /><joint name="R_Pinky3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="0.001500 -0.001000 -0.009450" quat="0.99552217 -0.05271139 -0.07835756 0.00414891" mass="0.001950" diaginertia="0.000000077 0.000000077 0.000000029" /><joint name="R_Pinky3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Pinky3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Pinky3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0006 -0.0004 -0.0038 0.0024 -0.0016 -0.0151" size="0.0057" />
@@ -291,17 +291,17 @@
                       </body>
                     </body>
                     <body name="R_Ring1" pos="-0.0323 -0.1081 -0.0123">
-                      <inertial pos="-0.000750 -0.012950 -0.009250" quat="0.63327056 -0.27457374 0.62054788 -0.37215318" mass="0.007702" diaginertia="0.000000282 0.000000789 0.000000789" /><joint name="R_Ring1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="-0.000750 -0.012950 -0.009250" quat="0.95027268 0.30354576 -0.05515106 -0.04242839" mass="0.007702" diaginertia="0.000000789 0.000000282 0.000000789" /><joint name="R_Ring1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Ring1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Ring1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="-0.0003 -0.0052 -0.0037 -0.0012 -0.0207 -0.0148" size="0.0089" />
                       <body name="R_Ring2" pos="-0.0015 -0.0259 -0.0184">
-                        <inertial pos="0.000800 -0.002000 -0.012950" quat="0.43404973 -0.52894918 -0.54341866 -0.48632269" mass="0.005630" diaginertia="0.000000174 0.000000441 0.000000441" /><joint name="R_Ring2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="0.000800 -0.002000 -0.012950" quat="0.99637013 -0.07599771 -0.03337122 -0.01890174" mass="0.005630" diaginertia="0.000000441 0.000000441 0.000000174" /><joint name="R_Ring2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Ring2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Ring2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0003 -0.0008 -0.0052 0.0013 -0.0032 -0.0207" size="0.0082" />
                         <body name="R_Ring3" pos="0.0016 -0.004 -0.0259">
-                          <inertial pos="0.001800 -0.001000 -0.011950" quat="0.05782171 0.64875898 -0.00392434 0.75878391" mass="0.003426" diaginertia="0.000000073 0.000000204 0.000000204" /><joint name="R_Ring3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="0.001800 -0.001000 -0.011950" quat="0.99528313 -0.03811120 -0.07779937 -0.04366105" mass="0.003426" diaginertia="0.000000204 0.000000204 0.000000073" /><joint name="R_Ring3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Ring3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Ring3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0007 -0.0004 -0.0048 0.0029 -0.0016 -0.0191" size="0.0068" />
@@ -309,17 +309,17 @@
                       </body>
                     </body>
                     <body name="R_Thumb1" pos="0.0294 -0.0439 -0.0246">
-                      <inertial pos="0.007300 -0.011950 -0.010200" quat="0.44095229 0.30588227 -0.08410719 0.83959698" mass="0.023426" diaginertia="0.000002021 0.000004243 0.000004243" /><joint name="R_Thumb1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                      <inertial pos="0.007300 -0.011950 -0.010200" quat="0.90548507 0.27576419 0.15681866 0.28188437" mass="0.023426" diaginertia="0.000004243 0.000002021 0.000004243" /><joint name="R_Thumb1_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Thumb1_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <joint name="R_Thumb1_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                       <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0029 -0.0048 -0.0041 0.0117 -0.0191 -0.0163" size="0.0138" />
                       <body name="R_Thumb2" pos="0.0146 -0.0239 -0.0203">
-                        <inertial pos="0.004250 -0.013100 -0.004750" quat="0.58669264 0.10259153 -0.13836625 0.79127840" mass="0.011185" diaginertia="0.000000572 0.000001290 0.000001290" /><joint name="R_Thumb2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                        <inertial pos="0.004250 -0.013100 -0.004750" quat="0.97437267 0.17038288 -0.02529655 0.14466398" mass="0.011185" diaginertia="0.000001290 0.000000572 0.000001290" /><joint name="R_Thumb2_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Thumb2_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <joint name="R_Thumb2_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                         <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0017 -0.0052 -0.0019 0.0068 -0.0210 -0.0076" size="0.0106" />
                         <body name="R_Thumb3" pos="0.0085 -0.0262 -0.0095">
-                          <inertial pos="0.005250 -0.012100 -0.003750" quat="0.55002327 0.08284104 -0.12376864 0.82176219" mass="0.009847" diaginertia="0.000000466 0.000001033 0.000001033" /><joint name="R_Thumb3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
+                          <inertial pos="0.005250 -0.012100 -0.003750" quat="0.96999880 0.14609510 -0.02894018 0.19214843" mass="0.009847" diaginertia="0.000001033 0.000000466 0.000001033" /><joint name="R_Thumb3_x" type="hinge" pos="0 0 0" axis="1 0 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Thumb3_y" type="hinge" pos="0 0 0" axis="0 1 0" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <joint name="R_Thumb3_z" type="hinge" pos="0 0 0" axis="0 0 1" stiffness="100" damping="10" armature="0.02" range="-180.0000 180.0000" />
                           <geom type="capsule" contype="1" conaffinity="1" density="1000" fromto="0.0021 -0.0048 -0.0015 0.0084 -0.0194 -0.0060" size="0.0102" />
