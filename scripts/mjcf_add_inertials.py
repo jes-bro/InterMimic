@@ -121,9 +121,27 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--subject", help="e.g. sub4 -> reads smplx_omomo_sub4.xml from the assets dir")
     ap.add_argument("--in", dest="inp", type=Path, help="any MJCF path (alternative to --subject)")
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--out", type=Path, help="output path (single-file mode)")
+    ap.add_argument("--all", action="store_true",
+                    help="batch: every smplx_omomo_sub*.xml in the assets dir -> "
+                         "smplx_omomo_sub*_inertial.xml beside it (stock files untouched)")
+    ap.add_argument("--assets-dir", type=Path, default=ASSETS)
     a = ap.parse_args()
-    src = a.inp or (ASSETS / f"smplx_omomo_{a.subject}.xml")
+    if a.all:
+        srcs = [p for p in sorted(a.assets_dir.glob("smplx_omomo_sub*.xml")) if not p.stem.endswith("_inertial")]
+        if not srcs:
+            raise SystemExit(f"ERROR: no smplx_omomo_sub*.xml under {a.assets_dir}")
+        for p in srcs:
+            convert(p, p.with_name(p.stem + "_inertial.xml"))
+        print(f"batch: {len(srcs)} files converted under {a.assets_dir}")
+        return
+    if not a.out:
+        raise SystemExit("ERROR: --out is required unless --all")
+    convert(a.inp or (a.assets_dir / f"smplx_omomo_{a.subject}.xml"), a.out)
+
+
+def convert(src, out):
+    """Read one MJCF, write a copy with an explicit <inertial> in every body."""
     tree = ET.parse(src); root = tree.getroot()
     n, total = 0, 0.0
     for body in root.iter("body"):
@@ -140,9 +158,9 @@ def main():
         el.set("diaginertia", " ".join(f"{max(v, 1e-9):.9f}" for v in vals))
         body.insert(0, el)                                  # first child, before geoms/joints
         n += 1; total += M
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    tree.write(a.out, encoding="unicode", xml_declaration=False)
-    print(f"wrote {a.out}: explicit inertials on {n} bodies, total mass {total:.2f} kg (from {src.name})")
+    out = Path(out); out.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(out, encoding="unicode", xml_declaration=False)
+    print(f"wrote {out}: explicit inertials on {n} bodies, total mass {total:.2f} kg (from {Path(src).name})")
 
 
 if __name__ == "__main__":

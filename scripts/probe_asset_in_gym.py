@@ -80,6 +80,48 @@ def load(gym, sim, subject, env_index):
                 n_shapes=gym.get_asset_rigid_shape_count(asset))
 
 
+def compare_formulas(subject, S):
+    """PhysX's mass / com / inertia (full precision, as read back from the actor) vs the
+    textbook formulas in scripts/mjcf_add_inertials.py, every body. PhysX reports
+    the inertia diagonal in the body frame; the off-diagonal terms it holds are
+    printed too so the tensor comparison is complete."""
+    import xml.etree.ElementTree as ET
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mjcf_add_inertials as mi
+    root = ET.parse(os.path.join(ASSET_ROOT, f"smplx_omomo_{subject}.xml")).getroot()
+    mine = {}
+    for b in root.iter("body"):
+        parts = [mi.geom_mass_com_inertia(g) for g in b.findall("geom")]
+        if not parts:
+            continue
+        M = sum(m for m, _, _ in parts); com = sum(m * c for m, c, _ in parts) / M
+        I = np.zeros((3, 3))
+        for m, c, Ig in parts:
+            d = c - com; I += Ig + m * (float(d @ d) * np.eye(3) - np.outer(d, d))
+        mine[b.get("name")] = (M, com, I)
+    print("=" * 100)
+    print(f"FORMULA CHECK {subject}: PhysX (full precision) vs mjcf_add_inertials formulas, per body")
+    print(f"{'body':12s} {'mass physx':>12s} {'mass mine':>12s} {'|dcom| m':>9s} {'max|dI|':>10s} {'max rel dI':>10s}   physx diag / mine diag")
+    worst = (0.0, "")
+    for p in S["bodies"]:
+        n = p["name"]
+        if n not in mine:
+            continue
+        M, com, I = mine[n]
+        Ip = np.array([[p["inertia"][0], p["offdiag"][0], p["offdiag"][1]],
+                       [p["offdiag"][0], p["inertia"][1], p["offdiag"][2]],
+                       [p["offdiag"][1], p["offdiag"][2], p["inertia"][2]]])
+        dI = np.abs(Ip - I); scale = max(np.abs(Ip).max(), 1e-12)
+        rel = dI.max() / scale
+        dcom = float(np.linalg.norm(np.array(p["com"]) - com))
+        if rel > worst[0]:
+            worst = (rel, n)
+        print(f"{n:12s} {p['mass']:12.7f} {M:12.7f} {dcom:9.5f} {dI.max():10.3e} {100*rel:9.3f}%   "
+              f"{p['inertia'][0]:.7f}/{p['inertia'][1]:.7f}/{p['inertia'][2]:.7f}  vs  {I[0,0]:.7f}/{I[1,1]:.7f}/{I[2,2]:.7f}")
+    print(f"=> {subject}: largest relative inertia difference {100*worst[0]:.3f}% ({worst[1]}); "
+          f"total mass physx {sum(p['mass'] for p in S['bodies']):.6f} vs mine {sum(v[0] for v in mine.values()):.6f}")
+
+
 def finite_positive(v):
     return all(math.isfinite(x) for x in v) and all(x > 0 for x in v)
 
@@ -158,6 +200,10 @@ def main():
     ap.add_argument("--control", default="sub2")
     ap.add_argument("--extra", nargs="*", default=[],
                     help="more subjects to compare against the control")
+    ap.add_argument("--compare-formulas", action="store_true",
+                    help="for every body of every subject, print PhysX's mass / com / full inertia "
+                         "tensor at FULL precision next to scripts/mjcf_add_inertials.py's formula, "
+                         "with the largest absolute and relative difference per body")
     a = ap.parse_args()
 
     from isaacgym import gymapi   # after argparse so --help works without Isaac Gym
@@ -172,8 +218,12 @@ def main():
 
     C = load(gym, sim, a.control, 0)
     verdict = {}
+    if a.compare_formulas:
+        compare_formulas(a.control, C)
     for k, s in enumerate([a.suspect] + list(a.extra), start=1):
         S = load(gym, sim, s, k)
+        if a.compare_formulas:
+            compare_formulas(s, S)
         print("=" * 100)
         print(f"ENGINE VIEW  {s} (suspect) vs {a.control} (control)")
         print("=" * 100)
