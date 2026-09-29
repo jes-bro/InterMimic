@@ -26,8 +26,12 @@ def main():
     print(f"{'trace':40s} {'frames':>6s} {'max|v|':>7s} {'v>'+str(int(a.vel)):>6s} {'off>0.2':>7s} {'wound':>6s}  worst dof")
     flagged = []
     for f in a.traces:
-        d = np.load(f, allow_pickle=True)
-        names = [str(n) for n in d["dof_names"]]
+        try:
+            d = np.load(f, allow_pickle=True)
+            names = [str(n) for n in d["dof_names"]]
+        except Exception as e:          # truncated / mid-write copy: report, don't abort the table
+            print(f"{os.path.basename(f):40s} UNREADABLE ({type(e).__name__}) -- job died mid-write or file copied before it finished")
+            continue
         W, M, VM = d["written"], d["after_sim"], d["vafter_sim"]
         dev = np.abs(M - W)
         n_v = int((np.abs(VM).max(1) > a.vel).sum()); n_off = int((dev.max(1) > 0.2).sum()); n_w = int((dev > 3).sum())
