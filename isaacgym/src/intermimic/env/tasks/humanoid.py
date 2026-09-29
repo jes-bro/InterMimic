@@ -349,9 +349,27 @@ class Humanoid_SMPLX(BaseTask):
         for j in range(self.num_bodies):
             self.gym.set_rigid_body_color(env_ptr, humanoid_handle, j, gymapi.MESH_VISUAL, gymapi.Vec3(0.75, 0.54, 0.3))
 
+        dof_prop = self.gym.get_asset_dof_properties(humanoid_asset)
         if (self._pd_control):
-            dof_prop = self.gym.get_asset_dof_properties(humanoid_asset)
             dof_prop["driveMode"] = gymapi.DOF_MODE_POS
+        # DIAGNOSTIC overrides (default off = unchanged behaviour), for the sub4
+        # investigation: the sim winds one of a 3-hinge joint's angles by 2*pi and
+        # the +/-pi limit then slams it back at 40-60 rad/s. REPLAY_NO_DOF_LIMITS=1
+        # removes the limits (explosion should vanish, wound readout remains);
+        # REPLAY_ARMATURE=<v> sets every dof's armature (a massless dummy link
+        # between hinges stops spinning freely once it carries enough armature).
+        _no_limits = os.environ.get('REPLAY_NO_DOF_LIMITS', '0') == '1'
+        _armature = os.environ.get('REPLAY_ARMATURE')
+        if _no_limits:
+            dof_prop["hasLimits"] = False
+            dof_prop["lower"] = -1e6
+            dof_prop["upper"] = 1e6
+        if _armature is not None:
+            dof_prop["armature"] = float(_armature)
+        if env_id == 0 and (_no_limits or _armature is not None):
+            print(f"[humanoid] DIAGNOSTIC dof overrides: no_limits={_no_limits} armature={_armature} "
+                  f"(was {float(self.gym.get_asset_dof_properties(humanoid_asset)['armature'][0]):.4f})", flush=True)
+        if self._pd_control or _no_limits or _armature is not None:
             self.gym.set_actor_dof_properties(env_ptr, humanoid_handle, dof_prop)
 
         self.humanoid_handles.append(humanoid_handle)
