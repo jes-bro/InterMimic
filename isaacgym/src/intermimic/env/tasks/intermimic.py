@@ -2562,6 +2562,34 @@ class InterMimic(Humanoid_SMPLX):
             self._dof_vel[env_ids] = self.extract_data_component('dof_vel', True, self.data_id[env_ids], t)
 
 
+        # REPLAY_TRACE=1: trace env 0's joint state through every stage of this step
+        # (written -> read back after the write -> after the physics step) so the
+        # stage at which a joint departs from the reference can be isolated.
+        # Diagnostic only; default off = unchanged behaviour.
+        _trace = os.environ.get('REPLAY_TRACE', '0') == '1'
+        if _trace:
+            if not hasattr(self, '_replay_trace'):
+                dnames = list(self.gym.get_actor_dof_names(self.envs[0], self.humanoid_handles[0]))
+                want = os.environ.get('REPLAY_TRACE_DOFS',
+                                      'L_Hip_x,L_Hip_y,L_Hip_z,L_Knee_x,L_Knee_y,L_Knee_z').split(',')
+                missing = [w for w in want if w not in dnames]
+                if missing:
+                    raise ValueError(f"[replay-trace] dofs {missing} not in actor dofs; first ten: {dnames[:10]}")
+                idx = [dnames.index(w) for w in want]
+                props = self.gym.get_actor_dof_properties(self.envs[0], self.humanoid_handles[0])
+                print(f"[replay-trace] actor 0 dof limits for traced dofs: " +
+                      ", ".join(f"{w} [{props['lower'][i]:+.3f},{props['upper'][i]:+.3f}] "
+                                f"limited={bool(props['hasLimits'][i])} drive={int(props['driveMode'][i])} "
+                                f"k={props['stiffness'][i]:.0f} d={props['damping'][i]:.0f}"
+                                for w, i in zip(want, idx)), flush=True)
+                self._replay_trace = dict(names=want, idx=idx, all_names=dnames, t=[], written=[],
+                                          after_set=[], after_sim=[], vwritten=[], vafter_set=[], vafter_sim=[],
+                                          out=os.environ.get('REPLAY_TRACE_OUT', 'renders/replay_trace.npz'))
+            tr = self._replay_trace
+            tr['t'].append(int(t[0]))
+            tr['written'].append(self._dof_pos[0].detach().cpu().numpy().copy())
+            tr['vwritten'].append(self._dof_vel[0].detach().cpu().numpy().copy())
+
         env_ids_int32 = self._humanoid_actor_ids[env_ids]
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self._root_states),
@@ -2569,12 +2597,15 @@ class InterMimic(Humanoid_SMPLX):
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self._dof_state),
                                               gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-        
+
         env_ids_int32 = self._tar_actor_ids[env_ids]
         self.gym.set_actor_root_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._root_states),
                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
         self._refresh_sim_tensors()
+        if _trace:
+            tr['after_set'].append(self._dof_pos[0].detach().cpu().numpy().copy())
+            tr['vafter_set'].append(self._dof_vel[0].detach().cpu().numpy().copy())
         obj_contact = self.extract_data_component('contact_obj', True, self.data_id[env_ids], t)
         obj_contact = torch.any(obj_contact > 0.1, dim=-1)
         human_contact = self.extract_data_component('contact_human', True, self.data_id[env_ids], t)
@@ -2603,6 +2634,24 @@ class InterMimic(Humanoid_SMPLX):
                                                     gymapi.Vec3(0., 0., 1.))
         self.render(t=t)
         self.gym.simulate(self.sim)
+        if _trace:
+            # read the engine state back after the physics step (refresh is harmless here)
+            self._refresh_sim_tensors()
+            tr['after_sim'].append(self._dof_pos[0].detach().cpu().numpy().copy())
+            tr['vafter_sim'].append(self._dof_vel[0].detach().cpu().numpy().copy())
+            w, s, m = tr['written'][-1], tr['after_set'][-1], tr['after_sim'][-1]
+            d_set, d_sim = np.abs(s - w), np.abs(m - w)
+            j1, j2 = int(d_set.argmax()), int(d_sim.argmax())
+            cols = " ".join(f"{n}:{w[i]:+.3f}/{s[i]:+.3f}/{m[i]:+.3f}" for n, i in zip(tr['names'], tr['idx']))
+            print(f"[replay-trace] t={int(t[0]):3d} written/after_set/after_sim  {cols}  | "
+                  f"worst after_set-written {d_set[j1]:.4f} ({tr['all_names'][j1]}), "
+                  f"worst after_sim-written {d_sim[j2]:.3f} ({tr['all_names'][j2]})", flush=True)
+            os.makedirs(os.path.dirname(tr['out']) or '.', exist_ok=True)
+            np.savez_compressed(tr['out'], t=np.array(tr['t']), dof_names=np.array(tr['all_names']),
+                                traced=np.array(tr['names']),
+                                written=np.array(tr['written']), after_set=np.array(tr['after_set']),
+                                after_sim=np.array(tr['after_sim']), vwritten=np.array(tr['vwritten']),
+                                vafter_set=np.array(tr['vafter_set']), vafter_sim=np.array(tr['vafter_sim']))
         # --- capture frame ---
         # Skipped while render_all_clips is driving (it captures per-clip to mp4
         # itself); otherwise this dumps the env-0 replay to replay_frames/*.png.
