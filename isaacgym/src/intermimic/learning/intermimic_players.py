@@ -280,7 +280,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                 # replaying. Dumping was previously not a reason to stop, so a
                 # DUMP_TRAJ run with no RECORD_VIDEO replayed games_num *
                 # n_game_life * 10 times and never reached the save.
-                if _record_path is not None or _dump_path is not None:
+                # REPLAY_TRACE=1 likewise: the trace is complete after one pass and
+                # its file is rewritten every frame, so replaying forever left a
+                # sweep stuck on its first body for hours (2026-09-29).
+                if (_record_path is not None or _dump_path is not None
+                        or os.environ.get('REPLAY_TRACE', '0') == '1'):
                     import sys
                     sys.exit(0)
             else:

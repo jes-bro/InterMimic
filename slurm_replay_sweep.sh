@@ -56,7 +56,9 @@ for BODY in $BODIES; do
         unset REPLAY_ASSET_FILE
     fi
     echo "[sweep] === $BODY ($ASSET) -> $OUT  $(date +%H:%M:%S)"
-    if REPLAY_TRACE=1 REPLAY_TRACE_OUT="$OUT" \
+    # DUMP_TRAJ makes the player stop after ONE pass over the clip (without a
+    # video or dump request it replays forever); the dump is a useful by-product.
+    if REPLAY_TRACE=1 REPLAY_TRACE_OUT="$OUT" DUMP_TRAJ="renders/sweep/dump_${BODY}_${ASSET}.npz" \
         python -u -m intermimic.run --task InterMimic \
             --cfg_env "$BASE" --cfg_train "$TRAIN" \
             --subject_bodies "$BODY" --data_sub "$SOURCE" --data_objects all --motion_file "$CLIPDIR" \
