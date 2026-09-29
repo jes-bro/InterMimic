@@ -233,6 +233,14 @@ class Humanoid_SMPLX(BaseTask):
         subject_bodies = self.cfg["env"].get("subjectBodies", None)
         if subject_bodies:
             asset_files = [f"smplx/smplx_omomo_{sub}.xml" for sub in subject_bodies]
+            # REPLAY_ASSET_FILE=<path under assetRoot>: load THIS MJCF for every
+            # body instead of the subject's own file. Diagnostic only (default off),
+            # for bisecting which numbers of a per-subject MJCF trip the simulator
+            # (sub4 investigation); the subject name, betas and heights are untouched.
+            _asset_override = os.environ.get('REPLAY_ASSET_FILE')
+            if _asset_override:
+                asset_files = [_asset_override for _ in subject_bodies]
+                print(f"[humanoid] DIAGNOSTIC REPLAY_ASSET_FILE: every body loads {_asset_override}", flush=True)
             self.subject_bodies = list(subject_bodies)
         else:
             asset_files = [self.robot_type]
