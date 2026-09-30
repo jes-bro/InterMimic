@@ -165,7 +165,11 @@ SOURCES="${SOURCES:-$SRC_DEFAULT}"
 # Held-out default is FOLD-AWARE (same __fN filename rule as summarize_evals.py):
 # an __f1 run's test trio is sub5/sub7/sub12 -- the old fold0-only default would
 # have scored fold1 TRAINING bodies as "held-out" and skipped the real test trio.
+# gen4 arms hold out FOUR real bodies: sub4 rejoined the test set once its
+# "sim-crasher" reputation was traced to a PhysX link-frame rollover in the
+# stock MJCF (fixed by the *_inertial files gen4 loads; 2026-09-29).
 case "$texp" in
+  gen4_*) HELDOUT_DEFAULT="sub4 sub10 sub16 sub13" ;;
   *__f1*) HELDOUT_DEFAULT="sub5 sub7 sub12" ;;
   *)      HELDOUT_DEFAULT="sub10 sub16 sub13" ;;
 esac

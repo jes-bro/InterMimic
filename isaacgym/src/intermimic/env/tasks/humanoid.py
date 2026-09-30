@@ -232,7 +232,18 @@ class Humanoid_SMPLX(BaseTask):
         # back to the single canonical humanoid asset (self.robot_type).
         subject_bodies = self.cfg["env"].get("subjectBodies", None)
         if subject_bodies:
-            asset_files = [f"smplx/smplx_omomo_{sub}.xml" for sub in subject_bodies]
+            # humanoidAssetSuffix (env cfg, default ''): load smplx_omomo_<sub><suffix>.xml.
+            # gen4 arms set '_inertial': the same bodies with explicit <inertial>
+            # elements (scripts/mjcf_add_inertials.py). Reason: the stock files leave
+            # ~1 body in 10 with a link frame PhysX places at a joint-angle rollover
+            # point, and the +/-pi joint limit then explodes the limb (sub4, sub11,
+            # sub606/607/619; 47/47 clean with the inertial files, 2026-09-29).
+            # Default '' keeps every existing config and checkpoint on the stock files.
+            _suffix = self.cfg["env"].get("humanoidAssetSuffix", "")
+            asset_files = [f"smplx/smplx_omomo_{sub}{_suffix}.xml" for sub in subject_bodies]
+            if _suffix:
+                print(f"[humanoid] humanoidAssetSuffix={_suffix!r}: loading smplx_omomo_<sub>{_suffix}.xml "
+                      f"for {len(subject_bodies)} bodies", flush=True)
             # REPLAY_ASSET_FILE=<path under assetRoot>: load THIS MJCF for every
             # body instead of the subject's own file. Diagnostic only (default off),
             # for bisecting which numbers of a per-subject MJCF trip the simulator

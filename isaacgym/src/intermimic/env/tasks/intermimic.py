@@ -99,7 +99,7 @@ class InterMimic(Humanoid_SMPLX):
         'contactIndex', 'controlFrequencyInv', 'cpuMotionData', 'dataFPS',
         'dataFramesScale', 'dataObjects', 'dataSub', 'enableDebugVis',
         'enableEarlyTermination', 'enableEvaluation', 'envSpacing', 'episodeLength',
-        'excludeCombos', 'hybridInitProb', 'initRootHeight', 'initVel', 'isFlagrun',
+        'excludeCombos', 'humanoidAssetSuffix', 'hybridInitProb', 'initRootHeight', 'initVel', 'isFlagrun',
         'keyBodies', 'keyIndex', 'localRootObs', 'maskDeadEnvs', 'maxClipsPerObject',
         'moreRigid', 'motion_file', 'motion_file_retarget', 'numActions', 'numDoF',
         'numDoFHand', 'numDoFWrist', 'numEnvs', 'numObs', 'numObsRetarget',
