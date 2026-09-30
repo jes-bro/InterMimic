@@ -15,7 +15,7 @@
 # eval hint holding out sub4 as well, and two guards (every body's *_inertial
 # MJCF and retargeted reference tree must exist). Nothing else differs.
 # Eval when done (hand-write omomo_eval_gen4_omomo_geoall_src9_xf_nvadlr_nopose__f0.yaml first, mirroring
-# humanoidAssetSuffix):  sh scripts/eval_one.sh gen4_omomo_geoall_src9_xf_nvadlr_nopose__f0
+# humanoidAssetSuffix):  HELDOUT="sub4 sub10 sub13 sub16" sh scripts/eval_one.sh gen4_omomo_geoall_src9_xf_nvadlr_nopose__f0
 source ~/.bashrc
 conda deactivate
 conda activate "${INTERMIMIC_ENV:-intermimic-gym2}"   # another machine: INTERMIMIC_ENV=<its env name>

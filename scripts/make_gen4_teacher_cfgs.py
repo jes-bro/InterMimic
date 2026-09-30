@@ -94,7 +94,7 @@ def sh_header(s):
             f"# eval hint holding out sub4 as well, and two guards (every body's *_inertial\n"
             f"# MJCF and retargeted reference tree must exist). Nothing else differs.\n"
             f"# Eval when done (hand-write omomo_eval_{gen4(s)}.yaml first, mirroring\n"
-            f"# humanoidAssetSuffix):  sh scripts/eval_one.sh {gen4(s)}\n")
+            f"# humanoidAssetSuffix):  HELDOUT=\"sub4 sub10 sub13 sub16\" sh scripts/eval_one.sh {gen4(s)}\n")
 
 
 def rewrite_env(text):
