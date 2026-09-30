@@ -58,25 +58,44 @@ def subject_of(fname):
     return fname.split("_", 1)[0]
 
 
-def clip_lengths(motion_dir, sources):
+def object_of(fname):
+    """'sub12_largetable_003.pt' -> 'largetable' (same rule as intermimic.py)."""
+    return fname.rsplit(".", 1)[0].split("_")[-2]
+
+
+def clip_lengths(motion_dir, sources, objects=None):
     """{source: [T per clip]} by opening every clip and reading its frame count.
 
     Reads the tensor header only in effect (torch.load then .shape), so it is
     I/O-bound; 4.4k clips take ~10 s from a warm cache.
+
+    `objects` mirrors the env cfg's optional dataObjects filter: when given,
+    only clips of those objects count (an object-group teacher such as
+    'boxes' loads a fraction of each source). A source with zero clips after
+    the filter is only a warning, exactly like the task (a subject may never
+    have handled that object); zero clips overall is an error.
     """
     want = set(sources)
+    want_obj = set(objects) if objects else None
     out = {s: [] for s in sources}
     files = sorted(f for f in os.listdir(motion_dir) if f.endswith(".pt"))
     for f in files:
         s = subject_of(f)
         if s not in want:
             continue
+        if want_obj is not None and object_of(f) not in want_obj:
+            continue
         t = torch.load(os.path.join(motion_dir, f), map_location="cpu", weights_only=True)
         out[s].append(int(t.shape[0]))
     missing = [s for s in sources if not out[s]]
-    if missing:
+    if missing and len(missing) == len(sources):
         raise SystemExit(f"ERROR: no clips for {missing} under {motion_dir} -- "
-                         f"wrong dir or misspelled subject")
+                         f"wrong dir, misspelled subject, or objects={sorted(want_obj or [])} "
+                         f"match nothing")
+    if missing:
+        print(f"WARNING: {missing} have no clips for objects={sorted(want_obj)} "
+              f"(the task warns and proceeds without them too)")
+        out = {s: ls for s, ls in out.items() if ls}
     return out
 
 
@@ -102,23 +121,30 @@ def main(argv=None):
     g.add_argument("--cfg", help="env yaml to read dataSub/subjectBodies/physicalBufferSize from")
     p.add_argument("--bodies", type=int, help="number of target bodies (len(subjectBodies))")
     p.add_argument("--psi", type=int, help="physicalBufferSize (PSI slots)")
+    p.add_argument("--objects", nargs="+",
+                   help="dataObjects entries, e.g. largebox smallbox (default: every object; "
+                        "with --cfg, read from the cfg's dataObjects when present)")
     a = p.parse_args(argv)
 
+    objects = a.objects
     if a.cfg:
         import yaml
         env = yaml.safe_load(open(a.cfg))["env"]
         sources = list(env["dataSub"])
         n_bodies = len(env["subjectBodies"]) if a.bodies is None else a.bodies
         psi = int(env.get("physicalBufferSize", 1)) if a.psi is None else a.psi
+        if objects is None and env.get("dataObjects"):
+            objects = list(env["dataObjects"])
         print(f"from {os.path.basename(a.cfg)}: {len(sources)} sources, "
-              f"{n_bodies} bodies, psi {psi}")
+              f"{n_bodies} bodies, psi {psi}, objects {objects or 'all'}")
     else:
         sources = a.sources
         if a.bodies is None or a.psi is None:
             p.error("--bodies and --psi are required with --sources")
         n_bodies, psi = a.bodies, a.psi
 
-    lengths = clip_lengths(os.path.expanduser(a.motion_dir), sources)
+    lengths = clip_lengths(os.path.expanduser(a.motion_dir), sources, objects)
+    sources = [s for s in sources if s in lengths]      # sources with clips after the filter
 
     print(f"\n{'source':>7} {'clips':>6} {'sum T':>8} {'max T':>6} {'mean T':>7}")
     for s in sources:
