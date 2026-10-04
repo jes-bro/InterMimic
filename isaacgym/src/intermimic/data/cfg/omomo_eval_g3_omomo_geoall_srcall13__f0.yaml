@@ -9,6 +9,11 @@
 # the flag changes storage layout only, never a value (tests/test_ragged_motion.py).
 evalFor:
   - g3_omomo_geoall_srcall13__f0
+  # The transformer+nvadlr twin's ENV cfg is byte-identical to the MLP arm's
+  # (cfg_diff: 78 keys, 0 differ, 2026-10-03); only its train cfg differs, and
+  # eval_one.sh reads the network from the arm's own train cfg. One eval cfg
+  # serves both; check_eval_cfg.py verifies the mirror against each arm.
+  - g3_omomo_geoall_srcall13_xf_nvadlr__f0
 
 env:
   numEnvs: 1024                            # = InterMimic's own eval scripts
