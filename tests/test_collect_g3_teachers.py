@@ -159,3 +159,45 @@ def test_dry_run_writes_nothing(tree):
     root, cfg_dir, out = tree
     cg.main(["--omomo-sources", "2", "--out", out, "--root", root, "--cfg-dir", cfg_dir, "--dry-run"])
     assert not os.path.exists(out)
+
+
+# --- --pin NAME=EPOCH: take a named snapshot instead of the latest ---------------
+
+def test_parse_pins():
+    assert cg.parse_pins(["bball7=37500", "sub2=9500"]) == {"bball7": 37500, "sub2": 9500}
+    assert cg.parse_pins([]) == {} and cg.parse_pins(None) == {}
+    with pytest.raises(SystemExit, match="NAME=EPOCH"):
+        cg.parse_pins(["bball7:37500"])
+    with pytest.raises(SystemExit, match="given twice"):
+        cg.parse_pins(["bball7=1", "bball7=2"])
+
+
+def test_pin_takes_the_named_snapshot_not_the_latest(tree):
+    root, cfg_dir, _ = tree
+    # sub2's latest is 12000 (and mimic.pth); pin it to the older 9500. bball7 unpinned -> its latest 8000.
+    plan = cg.plan_teachers(root, [2], ["bball7"], cfg_dir, pins={"sub2": 9500})
+    by = {f: (os.path.basename(ck), ep) for f, _, ck, ep in plan}
+    assert by["sub2.pth"] == ("mimic_00009500.pth", 9500)
+    assert by["bball7.pth"] == ("mimic_00008000.pth", 8000)
+
+
+def test_pin_missing_snapshot_is_a_hard_miss_not_a_fallback(tree):
+    root, cfg_dir, _ = tree
+    with pytest.raises(SystemExit, match=r"mimic_00037500\.pth \(pinned\)"):
+        cg.plan_teachers(root, [], ["bball7"], cfg_dir, pins={"bball7": 37500})
+
+
+def test_pin_naming_an_uncollected_teacher_is_an_error(tree):
+    root, cfg_dir, _ = tree
+    with pytest.raises(SystemExit, match="not being collected"):
+        cg.plan_teachers(root, [2], [], cfg_dir, pins={"bball7": 8000})
+
+
+def test_pin_through_main_writes_pinned_epoch_to_manifest(tree):
+    root, cfg_dir, out = tree
+    cg.main(["--omomo-sources", "2", "--activities", "bball7", "--pin", "sub2=9500",
+             "--out", out, "--root", root, "--cfg-dir", cfg_dir])
+    m = {e["file"]: e for e in yaml.safe_load(open(os.path.join(out, "teachers.yaml")))["teachers"]}
+    assert m["sub2.pth"]["epoch"] == 9500 and m["sub2.pth"]["from"].endswith("mimic_00009500.pth")
+    assert open(os.path.join(out, "sub2.pth"), "rb").read() == b"mimic_00009500.pth"
+    assert m["bball7.pth"]["epoch"] == 8000

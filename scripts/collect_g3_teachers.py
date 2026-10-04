@@ -31,9 +31,16 @@ had reached and that must be on record.
   python3 scripts/collect_g3_teachers.py --exp-suffix _xf_nvadlr_nopose \\
       --omomo-sources 1 2 3 5 6 7 8 9 11 12 14 15 17 --out checkpoints/teachers/g3_omomo_xf_nopose
 
+  # the EXACT snapshots a student was distilled from (its training log prints
+  # them: "[distill-g3] teacher bball7.pth: ... epoch 37500, from ..."), so a
+  # resume or a re-eval sees the same teachers and their epoch is not a confound:
+  python3 scripts/collect_g3_teachers.py --activities bball7 soccer15 cpr13 \\
+      --pin bball7=37500 soccer15=32000 cpr13=15500 --out checkpoints/teachers/g3_act
+
 Run from the repo root on the machine that holds the checkpoints (--root to
 point elsewhere). Refuses a partial set: a missing teacher would silently drop
-its sources' clips from the student, or mis-route them.
+its sources' clips from the student, or mis-route them. Refuses a pin that
+names no collected teacher, and a pinned snapshot that does not exist.
 
 The student's teacherPolicyCFG must name a train cfg with the SAME network as
 the collected fleet (InterMimicDistillG3 builds one architecture for all
@@ -135,23 +142,73 @@ def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG, suffix=""):
     return out
 
 
-def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=(), suffix=""):
+def parse_pins(items):
+    """['bball7=37500', 'sub2=12000'] -> {'bball7': 37500, 'sub2': 12000}.
+
+    A pin names a teacher by its manifest stem (an activity/arm name, or sub<N>
+    for a per-source OMOMO teacher) and the EPOCH of the numbered snapshot to
+    take instead of the latest. Why: a student's DAgger labels came from the
+    teacher snapshots present when it trained, and a resumed or re-evaluated
+    student must see the SAME ones or the teacher epoch becomes a confound
+    (2026-10-03: the GCP matchctr student trained against bball7 37500 /
+    soccer15 32000 / cpr13 15500 while the cluster's g3_act had been
+    re-collected at 38000 / 33000 / 16500)."""
+    pins = {}
+    for it in items or []:
+        m = re.fullmatch(r"([A-Za-z0-9_]+)=(\d+)", it)
+        if not m:
+            raise SystemExit(f"ERROR: --pin expects NAME=EPOCH (got {it!r})")
+        name, ep = m.group(1), int(m.group(2))
+        if name in pins:
+            raise SystemExit(f"ERROR: --pin {name} given twice")
+        pins[name] = ep
+    return pins
+
+
+def pinned_ckpt(nn_dir, epoch):
+    """(path, epoch) of the numbered snapshot mimic_<epoch:08d>.pth, else (None, None).
+
+    The filename IS the epoch for numbered snapshots (latest_ckpt relies on the
+    same fact), so no load is needed and a missing file is a hard miss, never a
+    fallback to a neighbouring epoch."""
+    p = os.path.join(nn_dir, f"mimic_{epoch:08d}.pth")
+    return (p, epoch) if os.path.isfile(p) else (None, None)
+
+
+def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=(), suffix="", pins=None):
     """[(file, sources, origin, epoch)] or a SystemExit listing what is missing.
 
     suffix: a variant fleet's experiment-name infix, e.g. "_xf_nvadlr_nopose"
     (see the module docstring). Must start with "_" when given, so a typo like
-    "xf" cannot silently resolve to a different fleet's dirs."""
+    "xf" cannot silently resolve to a different fleet's dirs.
+    pins: {stem: epoch} from parse_pins -- those teachers take the named
+    numbered snapshot instead of the latest; every pin must name a teacher
+    that is actually being collected (a stale pin is an error, not a no-op)."""
     if suffix and not suffix.startswith("_"):
         raise SystemExit(f"ERROR: --exp-suffix must start with '_' (got {suffix!r})")
+    pins = dict(pins or {})
+    unused = set(pins)
+
+    def pick(stem, nn_dir):
+        if stem in pins:
+            unused.discard(stem)
+            ck, ep = pinned_ckpt(nn_dir, pins[stem])
+            why = f"has no mimic_{pins[stem]:08d}.pth (pinned)"
+        else:
+            ck, ep = latest_ckpt(nn_dir)
+            why = "has no mimic*.pth"
+        return ck, ep, why
+
     plan, missing = [], []
     for s in omomo_sources:
         if suffix:
             exp = with_suffix(OMOMO_EXP.format(S=s), suffix)    # variant fleets name sub2 _src2 too
         else:
             exp = OMOMO_EXP_OVERRIDE.get(s, OMOMO_EXP.format(S=s))
-        ck, ep = latest_ckpt(os.path.join(root, exp, "nn"))
+        nn_dir = os.path.join(root, exp, "nn")
+        ck, ep, why = pick(f"sub{s}", nn_dir)
         if ck is None:
-            missing.append(f"sub{s}: {os.path.join(root, exp, 'nn')} has no mimic*.pth")
+            missing.append(f"sub{s}: {nn_dir} {why}")
         else:
             plan.append((f"sub{s}.pth", [s], ck, ep))
     # multi-source teachers: one checkpoint serving every source in the arm's dataSub
@@ -159,11 +216,15 @@ def plan_teachers(root, omomo_sources, activities, cfg_dir, omomo_arms=(), suffi
                                    + [(n, OMOMO_ARM_EXP, OMOMO_ARM_CFG) for n in omomo_arms]):
         exp = with_suffix(exp_pat.format(name=name), suffix)
         srcs = activity_sources(name, cfg_dir, cfg_pat, suffix)
-        ck, ep = latest_ckpt(os.path.join(root, exp, "nn"))
+        nn_dir = os.path.join(root, exp, "nn")
+        ck, ep, why = pick(name, nn_dir)
         if ck is None:
-            missing.append(f"{name}: {os.path.join(root, exp, 'nn')} has no mimic*.pth")
+            missing.append(f"{name}: {nn_dir} {why}")
         else:
             plan.append((f"{name}.pth", srcs, ck, ep))
+    if unused:
+        raise SystemExit(f"ERROR: --pin names teachers not being collected: {sorted(unused)} "
+                         f"(a pin that matches nothing would silently leave that teacher at 'latest')")
     if missing:
         raise SystemExit("ERROR: missing teacher checkpoints -- refusing a partial set:\n  "
                          + "\n  ".join(missing))
@@ -194,12 +255,19 @@ def main(argv=None):
     ap.add_argument("--root", default=os.path.join(REPO, "checkpoints"),
                     help="checkpoint tree (default: <repo>/checkpoints)")
     ap.add_argument("--cfg-dir", default=CFG_DIR, help="where the activity env cfgs live")
+    ap.add_argument("--pin", nargs="*", default=[], metavar="NAME=EPOCH",
+                    help="take this teacher's numbered snapshot mimic_<EPOCH>.pth instead of its "
+                         "latest, e.g. --pin bball7=37500 soccer15=32000 cpr13=15500 (the set a "
+                         "student was distilled from; see parse_pins)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
-    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms, a.exp_suffix)
+    pins = parse_pins(a.pin)
+    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms, a.exp_suffix, pins)
     if a.exp_suffix:
         print(f"  (variant fleet: experiment names carry {a.exp_suffix!r} before __f0)")
+    if pins:
+        print(f"  (pinned: {', '.join(f'{k}={v}' for k, v in pins.items())}; the rest take their latest)")
     for f, srcs, ck, ep in plan:
         print(f"  {f:<14} sources {srcs}  <- {os.path.relpath(ck, a.root)}  (epoch {ep})")
     if a.dry_run:
