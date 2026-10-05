@@ -36,7 +36,13 @@ ALL_OBJECTS = {"clothesstand", "floorlamp", "largebox", "largetable", "monitor",
                "smallbox", "smalltable", "suitcase", "trashcan", "tripod", "whitechair", "woodchair"}
 
 
-def arm(g): return f"gen4_omomo_geoall_{g}_xf_nvadlr_nopose__f0"
+def arm(g, tag=""): return f"gen4_omomo_geoall_{g}_xf_nvadlr_nopose{tag}__f0"
+
+
+def _gen():
+    spec = importlib.util.spec_from_file_location("mk", REPO / "scripts/make_gen4_activity_teacher_cfgs.py")
+    mk = importlib.util.module_from_spec(spec); spec.loader.exec_module(mk)
+    return mk
 
 
 def flatten(d, prefix=""):
@@ -132,3 +138,46 @@ def test_budget_object_filter_matches_task_rule(tmp_path):
     assert got == {"sub2": [11]}
     got = mb.clip_lengths(str(tmp_path), ["sub1", "sub2"])                  # no filter: everything
     assert got == {"sub1": [5, 7], "sub2": [13, 11]}                         # filename-sorted order
+
+
+# --- the _msexp variant: the same four arms with the motion-scale reward exponent on ---
+
+def test_msexp_env_cfgs_five_edits_only():
+    mk = _gen()
+    base = yaml.safe_load(open(CFG / f"omomo_teacher_{BASE}.yaml"))
+    block = {"env.motionScaleReward.enable", "env.motionScaleReward.referenceStd"}
+    for g, objs in GROUPS.items():
+        plain = yaml.safe_load(open(CFG / f"omomo_teacher_{arm(g)}.yaml"))
+        new = yaml.safe_load(open(CFG / f"omomo_teacher_{arm(g, mk.MS_TAG)}.yaml"))
+        assert differing_keys(base, new) == {"env.dataSub", "env.dataObjects", "env.raggedMotionData",
+                                             "env.retargetedMotionDir"} | block, g
+        # identical to the plain group arm except the block: the reward is the ONLY extra change
+        assert differing_keys(plain, new) == block, g
+        assert new["env"]["motionScaleReward"] == {"enable": True, "referenceStd": mk.MS_REFERENCE_STD}, g
+        assert "floorStd" not in new["env"]["motionScaleReward"], g       # capped at product: no floor
+        assert mk.MS_REFERENCE_STD == 0.5157                       # OMOMO_new median key-body std, all 4421 clips
+        assert new["env"]["rewardShape"] == "geometric_all", g     # the exponent replaces this shape's root
+        assert new["env"]["rewardTerms"]["pose"]["enable"] is False, g   # 4 factors under the root
+
+
+def test_msexp_train_cfgs_name_only():
+    mk = _gen()
+    base = yaml.safe_load(open(CFG / "train/rlg" / f"omomo_teacher_{BASE}.yaml"))
+    for g in GROUPS:
+        new = yaml.safe_load(open(CFG / "train/rlg" / f"omomo_teacher_{arm(g, mk.MS_TAG)}.yaml"))
+        assert differing_keys(base, new) == {"params.config.full_experiment_name"}, g
+        assert new["params"]["config"]["full_experiment_name"] == f"smplx_teacher_{arm(g, mk.MS_TAG)}", g
+
+
+def test_msexp_launchers_carry_the_guard_and_their_own_names():
+    mk = _gen()
+    for g, objs in GROUPS.items():
+        txt = (REPO / f"slurm_teacher_{arm(g, mk.MS_TAG)}.sh").read_text()
+        code = "\n".join(l for l in txt.splitlines() if not l.lstrip().startswith("#"))
+        assert BASE not in code and arm(g) + ".yaml" not in code, g      # never the plain arm's cfgs
+        assert f"omomo_teacher_{arm(g, mk.MS_TAG)}.yaml" in code, g
+        assert "motionScaleReward" in code and f"referenceStd:\\s*{mk.MS_REFERENCE_STD}" in code, g
+        assert "floorStd" not in txt, g
+        assert "raggedMotionData" in code and f"for o in {' '.join(objs)}; do" in code, g
+        assert re.search(r'^#SBATCH --job-name="tch-' + re.escape(arm(g, mk.MS_TAG)), txt, flags=re.M), g
+        assert "MOTION-SCALE EXPONENT" in code, g
