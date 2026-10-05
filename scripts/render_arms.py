@@ -12,10 +12,15 @@ WHAT IS HELD FIXED ACROSS ARMS
     file path before capping, so every arm gets the same file. Verified, not
     assumed: each run prints the clip it loaded and this script cross-checks them
     and FAILS if they differ.
-  * body, source, state init (Start), and the base test yaml.
-  * The base yaml is the arch-matched TEST config (no retargetedMotionDir), so
-    the retarget arms are rendered against the same references as everyone else
-    -- the same yardstick the evals use.
+  * body, source, state init (Start).
+  * the ENVIRONMENT is each arm's OWN eval config (eval_one.sh EMIT -> ENV_YAML,
+    resolved by scripts/check_eval_cfg.py) -- the config its eval is scored in,
+    with that arm's retargetedMotionDir, betas, reset gating and obs horizons.
+    Two arms that share an eval config (e.g. the srcall13 MLP and transformer
+    teachers) therefore track the IDENTICAL retargeted reference file
+    <retargetedMotionDir>/<body>/<clip>.pt. Arms with different eval configs are
+    each rendered in their own environment, which is the honest view of what
+    each was trained and scored on.
 
 WHAT VARIES (deliberately)
   * --attempts N runs N envs at once. Each env is an independent attempt at the
@@ -23,10 +28,14 @@ WHAT VARIES (deliberately)
     is best-of-~385 attempts: a single rollout is one draw and may be atypical in
     either direction. Watching N side by side is the honest visual analogue.
 
-Arch/betas/checkpoint resolution is delegated to eval_one.sh in EMIT mode -- the
-same single implementation the eval path uses. Re-deriving it here is exactly how
-a mismatched betas file silently corrupts 32 obs dims and still renders something
-plausible-looking.
+Config/checkpoint resolution is delegated to eval_one.sh in EMIT mode -- the same
+single implementation the eval path uses. Nothing about the observation layout
+(arch, obs width, betas) is derived or overridden here any more: it all lives in
+the arm's eval config, which is passed through with only the per-render keys
+patched (body, source, object, clip pin, numEnvs). Until 2026-10-05 this script
+still asked EMIT for BETAS_FILE / BASE_YAML, which eval_one.sh stopped emitting
+when it moved to per-arm eval configs, so every render died at resolution
+(tests/test_render_arms.py now pins the two files' key sets against each other).
 
 Usage (needs a GPU; see slurm_render_arms.sh for the queued form):
     python3 scripts/render_arms.py \\
@@ -46,6 +55,14 @@ import tempfile
 from pathlib import Path
 
 
+# What this script reads from `EMIT=1 sh scripts/eval_one.sh <run>`. ENV_YAML is
+# the arm's own eval config; EVAL_ENTRY / EVAL_TASK are the module and task it
+# is scored through (intermimic.run + InterMimic for teachers, run_distill +
+# InterMimicDistillG3 for g3 students). tests/test_render_arms.py checks every
+# one of these is a key eval_one.sh really prints.
+REQUIRED_PLAN_KEYS = ("CHECKPOINT", "ENV_YAML", "TRAIN_YAML", "EVAL_ENTRY", "EVAL_TASK")
+
+
 def emit_plan(run, repo_root):
     """Resolve one run via eval_one.sh EMIT -> dict of KEY=VALUE."""
     spec, _, pinned = run.partition("@")
@@ -60,15 +77,15 @@ def emit_plan(run, repo_root):
         m = re.match(r"^(\w+)='(.*)'$", line.strip())
         if m:
             plan[m.group(1)] = m.group(2)
-    for k in ("CHECKPOINT", "BETAS_FILE", "BASE_YAML", "TRAIN_YAML"):
+    for k in REQUIRED_PLAN_KEYS:
         if k not in plan:
             raise SystemExit(f"FATAL: eval_one.sh EMIT gave no {k} for {run!r}")
     return plan
 
 
-def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file,
+def make_render_yaml(base_yaml, body, source, obj, attempts,
                      motion_dir=None, playdataset=False):
-    """Patch the arch-matched TEST yaml into a single-clip render config.
+    """Patch the arm's own EVAL config into a single-clip render config.
 
     Regex-on-text rather than yaml round-trip, matching eval_per_pair.py's
     make_temp_yaml -- the configs carry load-bearing comments and a round-trip
@@ -86,8 +103,14 @@ def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file,
         ("maxClipsPerObject", "1"),
     ]
     for key, val in subs:
-        pat = rf"^(\s*{key}:)[^#\n]*(\s*#.*)?$"
-        rep = rf"\1 {val}\2"
+        pat = rf"^(\s*{key}:)[^#\n]*(#.*)?$"
+
+        def rep(m, val=val):
+            # Keep the trailing comment, but put whitespace back in front of it:
+            # `[^#\n]*` swallows the spaces before the '#', and YAML only treats
+            # '#' as a comment after a space -- `numEnvs: 1# why` is the STRING
+            # "1# why", not the number 1 (caught by tests/test_render_arms.py).
+            return f"{m.group(1)} {val}" + (f"  {m.group(2)}" if m.group(2) else "")
         text, n = re.subn(pat, rep, text, flags=re.MULTILINE)
         if n == 0:
             # dataObjects/maxClipsPerObject may be absent from the base config;
@@ -110,11 +133,6 @@ def make_render_yaml(base_yaml, body, source, obj, attempts, betas_file,
         if n == 0:
             text = re.sub(r"^(env:\s*)$", r"\1\n  playdataset: True", text,
                           count=1, flags=re.MULTILINE)
-    if betas_file and betas_file != "none":
-        text, n = re.subn(r"^(\s*betas_file:).*$", rf"\1 {betas_file}", text,
-                          flags=re.MULTILINE)
-        if n == 0:
-            raise SystemExit(f"FATAL: no betas_file line in {base_yaml} to override")
     fd, path = tempfile.mkstemp(suffix=".yaml", prefix="render_")
     os.close(fd)
     Path(path).write_text(text)
@@ -170,8 +188,8 @@ def render_one(run, plan, args, repo_root, motion_dir=None, reference=False):
     # them just parks the camera at (15,15,12), making everything unviewably
     # small. Attempts come SEQUENTIALLY instead: each episode is a fresh attempt,
     # so recording attempts*episodeLength frames captures that many, all close up.
-    cfg = make_render_yaml(plan["BASE_YAML"], args.body, args.source,
-                           args.object, 1, plan["BETAS_FILE"],
+    cfg = make_render_yaml(plan["ENV_YAML"], args.body, args.source,
+                           args.object, 1,
                            motion_dir=motion_dir, playdataset=reference)
     # Filename carries every knob that changes what the video SHOWS: body,
     # attempts, and the checkpoint epoch. Two renders of the same arm that differ
@@ -201,8 +219,8 @@ def render_one(run, plan, args, repo_root, motion_dir=None, reference=False):
         "RECORD_VIDEO_CAM_POS": args.cam_pos,
         "RECORD_VIDEO_CAM_TARGET": args.cam_target,
     })
-    cmd = ["python", "-u", "-m", "intermimic.run",
-           "--task", "InterMimic",
+    cmd = ["python", "-u", "-m", plan["EVAL_ENTRY"],
+           "--task", plan["EVAL_TASK"],
            "--cfg_env", cfg,
            "--cfg_train", plan["TRAIN_YAML"],
            "--test", "--headless",
@@ -210,7 +228,8 @@ def render_one(run, plan, args, repo_root, motion_dir=None, reference=False):
     if not reference:                      # play_dataset ignores the policy
         cmd[-2:-2] = ["--checkpoint", plan["CHECKPOINT"]]
     print(f"\n=== {run} ===\n  ckpt : {plan['CHECKPOINT']}\n"
-          f"  betas: {plan['BETAS_FILE']}\n  base : {plan['BASE_YAML']}\n"
+          f"  env  : {plan['ENV_YAML']}  (the arm's own eval config)\n"
+          f"  entry: {plan['EVAL_ENTRY']} / {plan['EVAL_TASK']}\n"
           f"  cmd  : {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
 
     p = subprocess.run(cmd, cwd=repo_root, env=env, capture_output=True, text=True)
@@ -295,7 +314,7 @@ def main():
               f"[render] MIXED epochs {sorted(distinct)} (--allow-mixed-epochs)")
 
     motion_dir, clip_name = pin_clip_dir(
-        plans[args.runs[0]]["BASE_YAML"], args.source, args.object,
+        plans[args.runs[0]]["ENV_YAML"], args.source, args.object,
         args.clip, args.repo_root)
     print(f"[render] pinned clip {clip_name} -> {motion_dir}")
 
