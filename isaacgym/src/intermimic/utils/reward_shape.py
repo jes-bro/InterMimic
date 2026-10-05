@@ -56,12 +56,17 @@ VALID_SHAPES = ('product', 'geometric', 'geometric_all')
 _FLOOR = 1e-8
 
 
-def combine(factors, shape, pose=None):
+def combine(factors, shape, pose=None, exponent=None):
     """Combine reward factors under `shape`.
 
-    factors  the base per-aspect factors, in order [rb, ro, rig, rcg]
-    shape    one of VALID_SHAPES
-    pose     the optional pose factor, or None when rewardTerms.pose is off
+    factors   the base per-aspect factors, in order [rb, ro, rig, rcg]
+    shape     one of VALID_SHAPES
+    pose      the optional pose factor, or None when rewardTerms.pose is off
+    exponent  optional per-env tensor (same shape as a factor): the exponent on
+              the whole product, replacing the fixed 1/N root. Only meaningful
+              for 'geometric_all' (utils/motion_scale.py: 1/N = today's root,
+              1 = product, >1 = stricter than product); an error elsewhere so a
+              cfg cannot silently combine it with a shape that ignores it.
 
     Returns the shaped reward. 'product' and 'geometric' apply `pose` OUTSIDE
     the combination, byte-identically to how they have always run;
@@ -71,10 +76,16 @@ def combine(factors, shape, pose=None):
         raise ValueError(f"reward shape {shape!r}; expected one of {VALID_SHAPES}")
     if not factors:
         raise ValueError("reward shape: no factors given")
+    if exponent is not None and shape != 'geometric_all':
+        raise ValueError(f"reward shape {shape!r} does not take a per-env exponent; "
+                         f"motionScaleReward requires rewardShape: geometric_all")
 
     if shape == 'geometric_all':
         allf = list(factors) + ([] if pose is None else [pose])
-        return torch.stack(allf, dim=0).clamp_min(_FLOOR).prod(dim=0) ** (1.0 / len(allf))
+        prod = torch.stack(allf, dim=0).clamp_min(_FLOOR).prod(dim=0)
+        if exponent is None:
+            return prod ** (1.0 / len(allf))
+        return prod ** exponent
 
     if shape == 'geometric':
         out = torch.stack(list(factors), dim=0).clamp_min(_FLOOR).prod(dim=0) ** 0.25

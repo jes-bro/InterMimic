@@ -16,6 +16,7 @@ import imageio
 from ...utils.path_utils import resolve_data_path
 from ...utils.psi_update import psi_buffer_update
 from ...utils import reward_shape
+from ...utils import motion_scale
 
 
 # ----------------------------------------------------------------------------
@@ -109,7 +110,7 @@ class InterMimic(Humanoid_SMPLX):
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'raggedMotionData', 'resetThresholds', 'retargetedMotionDir',
         'rewardTerms', 'rewardWeights',
-        'rewardShape', 'robotType', 'rolloutLength',
+        'rewardShape', 'motionScaleReward', 'robotType', 'rolloutLength',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'staticScene',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
@@ -182,6 +183,17 @@ class InterMimic(Humanoid_SMPLX):
         # scripts/motion_memory_budget.py). Default OFF = the padded tensors,
         # byte-identical to every run before it. See utils/ragged_motion.py.
         self._ragged_motion = bool(cfg['env'].get('raggedMotionData', False))
+        # motionScaleReward is parsed HERE, early, because _load_motion (called right
+        # after super().__init__, long before the reward settings below) computes the
+        # per-clip std when it is enabled. Parsing it next to rewardShape, where it
+        # reads naturally, would be too late: _load_motion would hit an attribute
+        # that does not exist yet. tests/test_motion_scale.py pins this ordering.
+        self._motion_scale = motion_scale.parse_cfg(cfg['env'].get('motionScaleReward'))
+        self._motion_std = None
+        # Factors under the root, known from the cfg alone (the pose flag itself is
+        # parsed much later): 4, or 5 when the pose term is enabled.
+        self._motion_scale_n_factors = 4 + (1 if bool(
+            ((cfg['env'].get('rewardTerms', {}) or {}).get('pose', {}) or {}).get('enable', False)) else 0)
         # Evaluation only works with stateInit "Start"
         state_init_is_start = (state_init == "Start")
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
@@ -503,6 +515,22 @@ class InterMimic(Humanoid_SMPLX):
             raise ValueError(
                 f"[intermimic] rewardShape={self._reward_shape!r}; expected one "
                 f"of {reward_shape.VALID_SHAPES}")
+        # motionScaleReward: per-clip exponent on the whole reward product from the
+        # clip's own key-body position std (utils/motion_scale.py). Absent => every
+        # existing run is byte-identical. Needs geometric_all: the exponent REPLACES
+        # that shape's 1/N root (a product/geometric cfg would silently ignore it).
+        # The block itself was parsed before the motion load (see _ragged_motion
+        # above) and the per-motion std is already in self._motion_std by now; only
+        # the shape check has to wait until the shape is known.
+        if self._motion_scale['enable']:
+            if self._reward_shape != 'geometric_all':
+                raise ValueError("[intermimic] motionScaleReward.enable needs rewardShape: "
+                                 f"geometric_all (got {self._reward_shape!r})")
+            print(f"[intermimic] motionScaleReward: exponent = clamp((referenceStd/std)^2, 1/N, 1) "
+                  f"with referenceStd={self._motion_scale['referenceStd']} m (clips moving no more "
+                  f"than that are graded as PRODUCT, twice that or more keep the 1/N root); "
+                  f"std = per-clip key-body position std",
+                  flush=True)
         self._env_body_height = None
         if self._body_normalized_reward:
             if getattr(self, 'subject_bodies', None) is not None:
@@ -763,10 +791,51 @@ class InterMimic(Humanoid_SMPLX):
         super()._setup_character_props(key_bodies)
         return
 
+    def _print_motion_scale_table(self, motion_file, motion_stds):
+        """motionScaleReward startup table: what exponent every CLIP will be graded
+        under (first body block only when references are per-body expanded; the
+        other bodies' stds differ by their bone lengths, not by much). Nothing is
+        decided silently: how many clips land on product, on the root, and in
+        between is counted, and the extremes are listed."""
+        ms = self._motion_scale
+        n_clips = getattr(self, '_n_clips', len(motion_file)) or len(motion_file)
+        n_factors = self._motion_scale_n_factors      # NOT _pose_term_enable: that is set after the load
+        lo = 1.0 / n_factors
+        rows = []
+        for i in range(min(n_clips, len(motion_stds))):
+            std = motion_stds[i]
+            rows.append((os.path.basename(motion_file[i]), std,
+                         motion_scale.exponent(std, ms['referenceStd'], n_factors)))
+        rows.sort(key=lambda r: r[1])
+        stds = [r[1] for r in rows]
+        n_prod = sum(1 for r in rows if r[2] >= motion_scale.MAX_EXPONENT)
+        n_root = sum(1 for r in rows if r[2] <= lo)
+        print(f"[motion-scale] {len(rows)} clips: key-body std min {min(stds):.3f} median "
+              f"{sorted(stds)[len(stds)//2]:.3f} max {max(stds):.3f} m; exponent = "
+              f"clamp(({ms['referenceStd']}/std)^2, {lo:.2f}, 1)", flush=True)
+        print(f"[motion-scale] {n_prod} clips at exponent 1 (PRODUCT), {n_root} at {lo:.2f} "
+              f"(today's root), {len(rows) - n_prod - n_root} in between", flush=True)
+        print(f"[motion-scale] {'clip':40s} {'std m':>7s} {'exponent':>9s}", flush=True)
+        if len(rows) <= 40:
+            show = [(r, False) for r in rows]
+        else:                                   # smallest 15, the 10 around the median, largest 15
+            mid = len(rows) // 2
+            show = ([(r, False) for r in rows[:15]] + [(rows[mid - 5], True)]
+                    + [(r, False) for r in rows[mid - 4: mid + 5]] + [(rows[-15], True)]
+                    + [(r, False) for r in rows[-14:]])
+        for (name, std, e), gap_before in show:
+            if gap_before:
+                print(f"[motion-scale] {'...':40s}", flush=True)
+            print(f"[motion-scale] {name:40s} {std:7.3f} {e:9.2f}", flush=True)
+
     def _load_motion(self, motion_file, startk=0, topk=1, initk=0):
 
         hoi_datas = []
         hoi_refs = []
+        # motionScaleReward: per-motion key-body position std (metres). The block is
+        # parsed in InterMimic.__init__ before any _load_motion call.
+        _ms_on = self._motion_scale['enable']
+        motion_stds = []
         if type(motion_file) != type([]):
             motion_file = [motion_file]
         max_episode_length = []
@@ -843,6 +912,13 @@ class InterMimic(Humanoid_SMPLX):
             loaded_dict['dof_vel'] = torch.cat((torch.zeros((1, loaded_dict['dof_vel'].shape[-1])),loaded_dict['dof_vel']),dim=0)
 
             loaded_dict['body_pos'] = loaded_dict['hoi_data'][:, 162: 162+52*3].clone()
+            if _ms_on:
+                # The clip's own motion scale, from the same key bodies the position
+                # reward grades, in raw metres (height cancels in the exponent ratio).
+                # Per MOTION, so with retargeted references each (body, clip) pair
+                # gets the std of its own reference.
+                # body_pos is a CPU tensor here; _key_body_ids lives on the sim device -> index with a list
+                motion_stds.append(motion_scale.key_body_std(loaded_dict['body_pos'], self._key_body_ids.tolist()))
             loaded_dict['body_pos_vel'] = (loaded_dict['body_pos'][1:,:].clone() - loaded_dict['body_pos'][:-1,:].clone())*self.fps_data
             loaded_dict['body_pos_vel'] = torch.cat((torch.zeros((1, loaded_dict['body_pos_vel'].shape[-1])),loaded_dict['body_pos_vel']),dim=0)
 
@@ -920,6 +996,11 @@ class InterMimic(Humanoid_SMPLX):
         max_length = max(max_episode_length) + initk
         self.num_motions = len(max_episode_length)
         self.max_episode_length = to_torch(max_episode_length, dtype=torch.long, device=self.device) + initk
+        if _ms_on:
+            if len(motion_stds) != len(motion_file):
+                raise RuntimeError(f"[motion-scale] {len(motion_stds)} stds for {len(motion_file)} motions")
+            self._motion_std = to_torch(motion_stds, dtype=torch.float, device=self.device)
+            self._print_motion_scale_table(motion_file, motion_stds)
         if ragged:
             # Same index tuples as the padded tensors (see RaggedMotion), so every
             # reader below, _motion_gather, and psi_buffer_update are unchanged.
@@ -2229,8 +2310,16 @@ class InterMimic(Humanoid_SMPLX):
         # than after the shaping because 'geometric_all' needs it INSIDE the root;
         # the other shapes apply it outside, exactly as they always have.
         pose_factor = self._compute_pose_reward() if self._pose_term_enable else None
+        # motionScaleReward: per-env exponent on the whole product, gathered by the
+        # env's current motion (same indexing as max_episode_length[self.data_id]).
+        # N counts the factors actually under the root, pose included when on.
+        exponent = None
+        if self._motion_scale['enable']:
+            n_factors = 4 + (1 if pose_factor is not None else 0)
+            exponent = motion_scale.exponent(self._motion_std[self.data_id],
+                                             self._motion_scale['referenceStd'], n_factors)
         reward = reward_shape.combine([rb, ro, rig, rcg], self._reward_shape,
-                                      pose=pose_factor)
+                                      pose=pose_factor, exponent=exponent)
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
                 self._log_reward_breakdown(rb, ro, rig, rcg,
