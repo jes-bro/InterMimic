@@ -85,6 +85,24 @@ GROUPS = {
 ALL_OBJECTS = {"clothesstand", "floorlamp", "largebox", "largetable", "monitor", "plasticbox",
                "smallbox", "smalltable", "suitcase", "trashcan", "tripod", "whitechair", "woodchair"}
 
+# The GENERALIST next to the four specialists (Jess, 2026-10-06: "a teacher that
+# does all of them"): every object the four groups cover, in group order, so its
+# data is exactly their union -- 3356 training clips, the same 13 sources and 43
+# bodies. Written only with --motion-scale (the reward under test); it is the
+# srcall13 teacher's data on the gen4 bodies + reward, so the four _msexp
+# specialists read against it at a matched epoch. Memory: motion_memory_budget.py
+# with no --objects, ragged 226.3 GiB -> 471 GiB at the 2.02x model -> 480G, the
+# srcall13 arm's own value (same data, same bodies).
+ALL_ARM = ("all", ([o for objs, _ in GROUPS.values() for o in objs], "480G"))
+
+
+def teachers(ms):
+    """The arms to write: the four groups, plus the all-objects generalist with --motion-scale."""
+    return dict(GROUPS, **({ALL_ARM[0]: ALL_ARM[1]} if ms else {}))
+
+
+TEACHERS = dict(GROUPS, **{ALL_ARM[0]: ALL_ARM[1]})   # lookup table for every name we may write
+
 
 def arm(g, tag=""):
     return f"gen4_omomo_geoall_{g}_xf_nvadlr_nopose{tag}__f0"
@@ -106,7 +124,7 @@ def yaml_list(items):
 
 
 def env_header(g, tag="", ms=False):
-    objs, _ = GROUPS[g]
+    objs, _ = TEACHERS[g]
     n_edits = "five" if ms else "four"
     ms_lines = "" if not ms else (
         f"#   motionScaleReward   -> enable, referenceStd {MS_REFERENCE_STD} (utils/motion_scale.py: the 4th root\n"
@@ -134,7 +152,7 @@ def train_header(g, tag=""):
 
 
 def sh_header(g, tag="", ms=False):
-    objs, mem = GROUPS[g]
+    objs, mem = TEACHERS[g]
     extra = "" if not ms else (
         f"# PLUS the motion-scale reward exponent (motionScaleReward, referenceStd {MS_REFERENCE_STD}; a third\n"
         f"# guard checks the block is present) -- this arm trains on the NEW reward, so it differs from\n"
@@ -151,7 +169,7 @@ def sh_header(g, tag="", ms=False):
 
 
 def rewrite_env(text, g, ms=False):
-    objs, _ = GROUPS[g]
+    objs, _ = TEACHERS[g]
     text, n = re.subn(r"^(\s*)dataSub:\s*\['sub1'\]\s*$",
                       rf"\1dataSub: {yaml_list(TRAIN_SOURCES)}", text, count=1, flags=re.M)
     if n != 1:
@@ -215,7 +233,7 @@ fi
 
 
 def guard(g, ms=False):
-    objs, _ = GROUPS[g]
+    objs, _ = TEACHERS[g]
     out = GUARD_GROUP.replace("OBJECTS", " ".join(objs))
     if ms:
         out += GUARD_MS.replace("REFSTD", str(MS_REFERENCE_STD))
@@ -224,7 +242,7 @@ def guard(g, ms=False):
 
 def rewrite_sbatch(text, g, tag=""):
     """The #SBATCH block: names swapped, --mem set to the group's budget."""
-    _, mem = GROUPS[g]
+    _, mem = TEACHERS[g]
     text = text.replace(BASE, arm(g, tag))            # job name, output
     text, n = re.subn(r"^#SBATCH --mem=\S+$", f"#SBATCH --mem={mem}", text, count=1, flags=re.M)
     if n != 1:
@@ -234,7 +252,7 @@ def rewrite_sbatch(text, g, tag=""):
 
 def rewrite_body(text, g, tag="", ms=False):
     """The launcher body: names swapped, group guards added, recipe echoes rewritten."""
-    objs, _ = GROUPS[g]
+    objs, _ = TEACHERS[g]
     text = text.replace(BASE, arm(g, tag))            # cfg paths, echo, ckpt dir
     # the gen4 guard loop ends with 'done'; the group guards go right after it
     anchor = "run slurm_retarget_gen.sh for this source"
@@ -281,7 +299,7 @@ def main():
     for p in (env_src, tr_src, sh_src):
         if not p.is_file():
             raise SystemExit(f"ERROR: base file missing: {p}")
-    for g in GROUPS:
+    for g in teachers(ms):
         env_out = CFG / f"omomo_teacher_{arm(g, tag)}.yaml"
         tr_out = CFG / "train/rlg" / f"omomo_teacher_{arm(g, tag)}.yaml"
         sh_out = REPO / f"slurm_teacher_{arm(g, tag)}.sh"
@@ -296,7 +314,8 @@ def main():
         print(f"{g:7s}: {env_out.name}  {tr_out.name}  {sh_out.name}")
         if a.diff:
             subprocess.run([sys.executable, str(REPO / "scripts/cfg_diff.py"), str(env_src), str(env_out)], check=False)
-    print(f"wrote {3 * len(GROUPS)} files for {len(GROUPS)} object-group teacher arms"
+    n_arms = len(teachers(ms))
+    print(f"wrote {3 * n_arms} files for {n_arms} object-group teacher arms"
           + (" (motion-scale variant)" if ms else ""))
 
 

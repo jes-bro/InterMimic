@@ -1,0 +1,210 @@
+# gen4 OBJECT-GROUP TEACHER gen4_omomo_geoall_all_xf_nvadlr_nopose_msexp__f0: every OMOMO clip whose object is one of
+#   largebox smallbox plasticbox suitcase trashcan monitor tripod clothesstand floorlamp whitechair woodchair largetable smalltable
+# from the 13 fold-0 training sources, on the gen4 bodies. This file is the gen4 src1
+# nopose transformer teacher's env cfg (gen4_omomo_geoall_src1_xf_nvadlr_nopose__f0) with exactly five edits
+# (python3 scripts/cfg_diff.py the two files; pinned by tests/test_gen4_activity_teacher_cfgs.py):
+#   dataSub             -> the 13 training sources (held out: sub4 sub10 sub13 sub16)
+#   dataObjects         -> the group (intermimic.py keeps only these objects' clips)
+#   raggedMotionData    -> true (per-clip storage; see scripts/make_gen4_activity_teacher_cfgs.py)
+#   retargetedMotionDir -> InterAct/OMOMO_retarget_contact_srcall13 (merged 13-source tree, must hold sub600-629)
+#   motionScaleReward   -> enable, referenceStd 0.5157 (utils/motion_scale.py: the 4th root
+#                          becomes a per-clip exponent clamp((ref/std)^2, 1/4, 1): a clip moving no more
+#                          than OMOMO's median is graded as PRODUCT, twice that or more keeps the root)
+# Sampling unchanged: env e owns object e % n_obj, uniform clips within the object.
+# Recipe otherwise the gen4 fleet's: geometric_all reward, no pose term, 6 obs horizons,
+# retargeted references, PSI 3, body-normalised reward, _inertial MJCFs, 43 bodies.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataObjects: ['largebox', 'smallbox', 'plasticbox', 'suitcase', 'trashcan', 'monitor', 'tripod', 'clothesstand', 'floorlamp', 'whitechair', 'woodchair', 'largetable', 'smalltable']
+  dataSub: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  humanoidAssetSuffix: _inertial
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  moreRigid: false
+  motionScaleReward:
+    enable: true
+    referenceStd: 0.5157
+  motion_file: InterAct/OMOMO_new
+  numEnvs: 4096
+  numObs: 9594
+  objectDensity: 200
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  raggedMotionData: true
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_srcall13
+  rewardShape: geometric_all
+  rewardTerms:
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: false
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 50
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub600
+  - sub601
+  - sub602
+  - sub603
+  - sub604
+  - sub605
+  - sub606
+  - sub607
+  - sub608
+  - sub609
+  - sub610
+  - sub611
+  - sub612
+  - sub613
+  - sub614
+  - sub615
+  - sub616
+  - sub617
+  - sub618
+  - sub619
+  - sub620
+  - sub621
+  - sub622
+  - sub623
+  - sub624
+  - sub625
+  - sub626
+  - sub627
+  - sub628
+  - sub629
+  subjectHeightsFile: scripts/synthetic_heights_gen4.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2

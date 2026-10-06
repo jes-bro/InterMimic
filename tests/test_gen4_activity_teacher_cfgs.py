@@ -181,3 +181,34 @@ def test_msexp_launchers_carry_the_guard_and_their_own_names():
         assert "raggedMotionData" in code and f"for o in {' '.join(objs)}; do" in code, g
         assert re.search(r'^#SBATCH --job-name="tch-' + re.escape(arm(g, mk.MS_TAG)), txt, flags=re.M), g
         assert "MOTION-SCALE EXPONENT" in code, g
+
+
+# --- the all-objects generalist (_msexp only): the four groups' union in one teacher ---
+
+def test_all_arm_is_the_union_of_the_four_groups_and_otherwise_a_specialist():
+    mk = _gen()
+    g = yaml.safe_load(open(CFG / f"omomo_teacher_{arm('all', mk.MS_TAG)}.yaml"))
+    boxes = yaml.safe_load(open(CFG / f"omomo_teacher_{arm('boxes', mk.MS_TAG)}.yaml"))
+    union = [o for objs in GROUPS.values() for o in objs]
+    assert g["env"]["dataObjects"] == union and sorted(union) == sorted(ALL_OBJECTS)
+    # identical to a specialist except the object list: same sources, bodies, reward, tree
+    assert differing_keys(boxes, g) == {"env.dataObjects"}
+    assert g["env"]["motionScaleReward"] == {"enable": True, "referenceStd": mk.MS_REFERENCE_STD}
+    tr = yaml.safe_load(open(CFG / "train/rlg" / f"omomo_teacher_{arm('all', mk.MS_TAG)}.yaml"))
+    assert tr["params"]["config"]["full_experiment_name"] == f"smplx_teacher_{arm('all', mk.MS_TAG)}"
+
+
+def test_all_arm_launcher_memory_and_guards():
+    mk = _gen()
+    txt = (REPO / f"slurm_teacher_{arm('all', mk.MS_TAG)}.sh").read_text()
+    assert "#SBATCH --mem=480G\n" in txt                       # ragged 226 GiB motion, = srcall13's budget
+    code = "\n".join(l for l in txt.splitlines() if not l.lstrip().startswith("#"))
+    assert f"for o in {' '.join(o for objs in GROUPS.values() for o in objs)}; do" in code
+    assert "motionScaleReward" in code and "raggedMotionData" in code
+    assert re.search(r'^#SBATCH --job-name="tch-' + re.escape(arm('all', mk.MS_TAG)), txt, flags=re.M)
+
+
+def test_all_arm_is_written_only_with_motion_scale():
+    mk = _gen()
+    assert "all" not in mk.teachers(False) and "all" in mk.teachers(True)
+    assert not (CFG / f"omomo_teacher_{arm('all')}.yaml").exists()      # no plain generalist
