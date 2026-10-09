@@ -1,0 +1,132 @@
+# EVAL config -- gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0 (the chairs
+# teacher on the MOTION-SCALE reward: per-clip exponent clamp((0.5157/std)^2, 1/4, 1)
+# on the 4-factor product -- product for clips moving no more than OMOMO's median,
+# the 4th root at twice that; utils/motion_scale.py).
+# Mirrors omomo_teacher_gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0.yaml on
+# every key outside check_eval_cfg.py's EVAL_OWNED set (python3 scripts/cfg_diff.py).
+# Hand-written (no generator), 2026-10-09.
+#
+# Carried from the arm because they are its identity, NOT eval-owned:
+#   motionScaleReward    the reward the policy was trained under. The scored metrics
+#                        (success, pose error) do not read the reward, so this cannot
+#                        move a number; it is mirrored so the eval env IS the train env
+#   dataObjects          whitechair woodchair -- the eval scores chairs clips only
+#   humanoidAssetSuffix  _inertial -- the gen4 MJCFs (sub4 PhysX fix)
+#   subjectHeightsFile   synthetic_heights_gen4.json -- the sub600-629 heights
+#   retargetedMotionDir  the merged 13-source tree; must hold the held-out bodies
+#                        sub4 sub10 sub13 sub16 too (eval_one's gen4 default)
+#   raggedMotionData     storage layout only, never a value
+# Read at a MATCHED EPOCH against the plain chairs twin, never at matched wall time.
+evalFor:
+  - gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0
+
+env:
+  numEnvs: 1024                            # CONCURRENCY, not the attempt budget; the
+                                           # same in every eval cfg (check_eval_cfg.py)
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"                       # eval-owned: metrics exist only in Start
+  enableEvaluation: True                   # eval-owned
+  rolloutLength: 1000                      # eval-owned: a window shorter than the clip
+                                           # can never satisfy success (arm trains at 50)
+  physicalBufferSize: 1                    # eval-owned: PSI copies are identical at eval
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataObjects: ['whitechair', 'woodchair']
+  dataSub: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']   # overwritten per pair by --data_sub
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  humanoidAssetSuffix: _inertial
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_srcall13
+  cpuMotionData: true
+  raggedMotionData: true
+  subjectHeightsFile: scripts/synthetic_heights_gen4.json
+  bodyNormalizedReward: true
+  ballSize: 1.0
+  numObs: 9594                             # 6 horizons x 1599, no betas block
+  obsHorizons: [1, 4, 7, 10, 13, 16]
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3", "L_Thumb3", "R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3", "R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  resetThresholds:
+    human: 0.5
+    object: 0.5
+    igRatio: 2.0
+    contactSteps: 10
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardShape: geometric_all
+
+  motionScaleReward:
+    enable: true
+    referenceStd: 0.5157
+
+  rewardTerms:
+    pose:
+      enable: false
+      lambda: 0.02
+    freeFlightGate:
+      reward: false
+      resets: true
+
+  rewardWeights:
+    p: 30.0
+    r: 2.5
+    pv: 0.0
+    rv: 0.0
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.0
+
+    ig: 5.0
+
+    cg_hand: 5.0
+    cg_other: 5.0
+    cg_all: 3.0
+
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
