@@ -277,8 +277,17 @@ fi
 EXCLUDE_NODES="${EXCLUDE_NODES-simurgh6}"
 [ -n "$EXCLUDE_NODES" ] && echo "   exclude    : $EXCLUDE_NODES"
 
+# Walltime. slurm_eval_curriculum.sh's header asks for 08:00:00, which covers a
+# held-out-only eval (3-4 bodies x 13 sources, ~50 pairs at 6-9 min each) and
+# nothing bigger: the default body set of a 13-source arm is 22 bodies = 286
+# pairs = 29-43 h, and the job was simply killed at 8 h and had to be RESUME=1'd
+# four or five times. A CLI --time overrides the header, so WALLTIME=2-00:00:00
+# (slurm syntax, D-HH:MM:SS) sizes the job to the pair count. Unset = the header.
+WALLTIME="${WALLTIME:-}"
+[ -n "$WALLTIME" ] && echo "   walltime   : $WALLTIME (overrides the 08:00:00 header)"
+
 CHECKPOINT="$CKPT" OUT="$OUT" \
 ENV_YAML="$ENV_YAML" TRAIN_YAML="$trainc" \
 SOURCES="$SOURCES" BODIES="$BODIES" RESUME="${RESUME:-0}" \
 EVAL_ENTRY="$EVAL_ENTRY" EVAL_TASK="$EVAL_TASK" \
-sbatch ${EXCLUDE_NODES:+--exclude="$EXCLUDE_NODES"} slurm_eval_curriculum.sh
+sbatch ${EXCLUDE_NODES:+--exclude="$EXCLUDE_NODES"} ${WALLTIME:+--time="$WALLTIME"} slurm_eval_curriculum.sh
