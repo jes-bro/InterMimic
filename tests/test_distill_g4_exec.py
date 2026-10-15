@@ -387,7 +387,8 @@ def test_query_teachers_loop_routes_each_env_to_its_own_teacher_with_its_own_nor
     t.action_buf = torch.zeros(n_env, 153)
     t.mu_buf = torch.zeros(n_env, 153)
     G3Q._query_teachers_loop(t)                                 # the stand-in has no methods; call the lifted one
-    expected = {0: 0.0 + 3.0, 1: 10.0 + 0.0, 2: 20.0 + 3.0}
+    z = 3.0 / (1.0 + 1e-5) ** 0.5                               # the task normalises by sqrt(var + 1e-5), as the vmap path does
+    expected = {0: 0.0 + z, 1: 10.0 + 0.0, 2: 20.0 + z}
     for e in range(n_env):
         want = expected[int(t.model_indices[e])]
         assert abs(float(t.mu_buf[e, 0]) - want) < 1e-5, (e, float(t.mu_buf[e, 0]), want)
