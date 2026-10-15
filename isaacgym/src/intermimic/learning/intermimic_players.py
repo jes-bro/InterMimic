@@ -325,6 +325,15 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                 # inference
                 for n in range(self.max_steps):
                     obs_dict = self.env_reset(done_indices)
+                    if n == 0 and (_best is not None or _traj is not None):
+                        # Frame 0: the state the episode starts from (stateInit Start =
+                        # the clip's first frame). Recording began after the first step
+                        # until 2026-10-15, so dump frame i was clip frame i+1 and a
+                        # replay dump (which records frame t at step t) did not line up.
+                        if _best is not None:
+                            _best_record(torch.zeros_like(self.env.task.reset_buf), {})
+                        else:
+                            _dump_step()
 
                     if has_masks:
                         masks = self.env.get_action_mask()
@@ -376,7 +385,11 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             _finish_and_exit()
                     elif _traj is not None:
                         _dump_step()
-                        if len(_traj["body_rot"]) >= _dump_max:
+                        _env0_done = bool(done[0]) if hasattr(done, "__len__") else bool(done)
+                        if len(_traj["body_rot"]) >= _dump_max or _env0_done:
+                            if _env0_done:
+                                print(f"[player] DUMP_TRAJ: env 0's episode ended at frame {len(_traj['body_rot']) - 1}; "
+                                      f"stopping (the next frame would be a restarted episode)", flush=True)
                             _dump_save()
                             _finish_and_exit()
 

@@ -114,8 +114,11 @@ def test_player_wires_dump_pick_best(tmp_path):
     # ONE dump site per step in the inference branch (two until 2026-10-15: every env-0
     # dump recorded each frame twice), and dump/video exits close each other out
     inf = s[s.index("# inference"):]
-    assert inf.count("_dump_step()") == 1 and "def _finish_and_exit():" in inf
-    assert "elif _traj is not None:\n                        _dump_step()\n                        if len(_traj[\"body_rot\"]) >= _dump_max:" in inf
+    assert inf.count("_dump_step()") == 2 and "def _finish_and_exit():" in inf      # frame 0 once, then one per step
+    assert "if n == 0 and (_best is not None or _traj is not None):" in inf          # frame 0 recorded before the first step
+    assert "_env0_done = bool(done[0])" in inf and "stopping (the next frame would be a restarted episode)" in inf
+    assert "elif _traj is not None:\n                        _dump_step()\n                        _env0_done = bool(done[0])" in inf
+    assert "if len(_traj[\"body_rot\"]) >= _dump_max or _env0_done:" in inf
     assert "if _best is not None:\n                                _best_save()\n                            elif _traj is not None:\n                                _dump_save()" in inf
 
 
