@@ -168,7 +168,12 @@ def test_dry_run_expert_on_novice(tmp_path, real_clip):
         assert f"--out-dir {out}/retarget/sub9998" in o
         assert "DUMP_PICK=best" in o and "REPLAY_ASSET_FILE=smplx/smplh_behave_sub9998.xml" in o
         assert "--subject_bodies sub9998 --data_sub sub6 --data_objects woodchair --num_envs 16" in o
-        assert "[skinned]" in o and "--model-type smplh" in o
+        assert "[novice_npz]" in o and f"--out {out}/novice_original.npz" in o
+        assert "[novice_skin]" in o and "[expert_skin]" in o and "--model-type smplh" in o
+        assert f"--out {out}/novice_original.mp4" in o and f"--out {out}/expert_on_novice.mp4" in o
+        assert f"DUMP_TRAJ={out}/expert_on_novice.npz" in o
+        assert "[differencing]" in o and f"--novice {out}/novice_original.npz --expert {out}/expert_on_novice.npz" in o
+        assert "--task woodchair" in o and "--dry_run" in o and f"--out {out}/feedback/joint_differences.json" in o
         assert f"--pt {novice_clip} --anchor-rollout" in o and f"--out {out}/hy3d/Date170_Sub9998_woodchair_t000_sim.pth" in o
         assert "viz_pred.py" in o and "--flat_color 255,140,0" in o and "--no_side" in o
         # derived files
@@ -177,7 +182,7 @@ def test_dry_run_expert_on_novice(tmp_path, real_clip):
         e = yaml.safe_load(open(out / "env_cfg.yaml"))["env"]
         assert e["motion_file"] == str(out / "clip") and e["retargetedMotionDir"] == str(out / "retarget")
         assert e["subjectHeightsFile"] == str(out / "heights.json") and e["humanoidAssetSuffix"] == "_inertial"
-        assert e["stateInit"] == "Start" and e["rolloutLength"] == 1000 and not (out / "rollout.npz").exists()
+        assert e["stateInit"] == "Start" and e["rolloutLength"] == 1000 and not (out / "expert_on_novice.npz").exists()
         # refusals: expert == novice, expert not a training source, novice a training body
         same = subprocess.run(argv[:argv.index("--novice-clip") + 1] + [str(real_clip)] + argv[argv.index("--novice-clip") + 2:],
                               capture_output=True, text=True, cwd=str(REPO))
@@ -196,16 +201,24 @@ def test_student_arm_commands_use_run_distill_and_the_teacher_skip(tmp_path):
          "train_yaml": train, "ckpt": tmp_path / "c.pth", "expert": "sub401", "novice": "sub204", "object": "bballx",
          "num_envs": 32, "models": tmp_path, "mesh": tmp_path / "m" / "m.obj", "bundle": tmp_path / "b.pth",
          "novice_clip": tmp_path / "sub204_bball_000.pt", "expert_clip": tmp_path / "sub401_bballx_000.pt", "seq": "b",
-         "cari4d_root": None, "video": None, "flat_color": "255,140,0", "retarget_iters": 300}
-    stages, rt_file, dump, betas = nr.commands(p, tmp_path / "env.yaml")
+         "cari4d_root": None, "video": None, "flat_color": "255,140,0", "retarget_iters": 300,
+         "drill_name": "Reverse Layup", "feedback_model": None}
+    stages, files = nr.commands(p, tmp_path / "env.yaml")
     names = [s[0] for s in stages]
-    assert names == ["retarget", "rollout", "skinned", "bundle", "overlay"]
-    envv, argv = stages[1][1], stages[1][2]
+    assert names == ["retarget", "novice_npz", "rollout", "novice_skin", "expert_skin", "differencing", "bundle", "overlay"]
+    by = {n: (e, a) for n, e, a in stages}
+    envv, argv = by["rollout"]
     assert envv["DISTILL_SKIP_TEACHERS"] == "1" and envv["DUMP_PICK"] == "best" and envv["DUMP_FRAMES"] == "500"
     assert argv[3] == "intermimic.run_distill" and argv[5] == "InterMimicDistillG3"
     assert argv[argv.index("--subject_bodies") + 1] == "sub204" and argv[argv.index("--data_sub") + 1] == "sub401"
-    assert rt_file == tmp_path / "retarget" / "sub204" / "sub401_bballx_000.pt"
-    assert "--anchor-rollout" in stages[3][2] and stages[4][2] is None
+    assert files["rt_file"] == tmp_path / "retarget" / "sub204" / "sub401_bballx_000.pt"
+    assert files["dump"].name == "expert_on_novice.npz" and files["novice_npz"].name == "novice_original.npz"
+    d = by["differencing"][1]
+    assert d[d.index("--task") + 1] == "Reverse Layup" and "--dry_run" in d and "--model" not in d
+    assert "--anchor-rollout" in by["bundle"][1] and by["overlay"][1] is None
+    p["feedback_model"] = "Qwen/Qwen2.5-3B-Instruct"
+    d = {n: a for n, _, a in nr.commands(p, tmp_path / "env.yaml")[0]}["differencing"]
+    assert "--dry_run" not in d and d[d.index("--model") + 1] == "Qwen/Qwen2.5-3B-Instruct"
 
 
 # ----------------------------------------------------------------- the short form
@@ -388,3 +401,48 @@ def test_retrieval_copy_carries_the_three_documented_changes():
     assert 'key="participant_tier", match=models.MatchAny(any=list(RATED_TIERS))' in s
     assert nr.RATED_TIERS == ("Early Expert", "Intermediate Expert", "Late Expert")
     assert "PULLED INTO InterMimic" in s and "57fa48f" in s
+
+
+# ----------------------------------------------------------------- clip_to_dump (the novice's npz)
+def test_clip_to_dump_on_a_real_clip(tmp_path, real_clip):
+    cd = _load("cd", "scripts/clip_to_dump.py")
+    import torch
+    x = torch.load(real_clip, map_location="cpu", weights_only=False).detach().numpy()
+    d = cd.clip_to_dump(x, "sub6")
+    T = x.shape[0]
+    assert d["body_pos"].shape == (T, 52, 3) and d["body_rot"].shape == (T, 52, 4)
+    assert d["obj_pos"].shape == (T, 3) and d["obj_rot"].shape == (T, 4) and d["subject"] == "sub6"
+    np.testing.assert_allclose(d["body_pos"][:, 0], x[:, 0:3], atol=1e-5)       # pelvis == root_pos
+    assert cd.subject_of("x/sub204_bball_000.pt") == "sub204"
+    with pytest.raises(ValueError, match=r"expected \(T, 591\)"):
+        cd.clip_to_dump(x[:, :500], "sub6")
+    bad = x.copy(); bad[:, 383:387] *= 3
+    with pytest.raises(ValueError, match="not unit-norm"):
+        cd.clip_to_dump(bad, "sub6")
+    # the CLI writes the same thing, and the feedback script reads it back as a rollout
+    out = tmp_path / "n.npz"
+    r = subprocess.run([sys.executable, str(REPO / "scripts/clip_to_dump.py"), str(real_clip), "--out", str(out)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and "153 frames, subject sub6" in r.stdout, r.stdout + r.stderr
+    mf = _load("mf", "scripts/motion_feedback.py")
+    m = mf.load_motion(str(out))
+    assert m["body_pos"].shape == (T, 52, 3) and m["subject"] == "sub6"
+
+
+def test_differencing_dry_run_writes_the_three_tables(tmp_path, real_clip):
+    other = OMOMO_NEW / "sub7_woodchair_003.pt"
+    if not other.is_file():
+        pytest.fail(f"real clip not found: {other}")
+    a, b = tmp_path / "a.npz", tmp_path / "b.npz"
+    for src, dst in ((real_clip, a), (other, b)):
+        subprocess.run([sys.executable, str(REPO / "scripts/clip_to_dump.py"), str(src), "--out", str(dst)], check=True, capture_output=True)
+    out = tmp_path / "feedback" / "joint_differences.json"
+    r = subprocess.run([sys.executable, str(REPO / "scripts/motion_feedback.py"), "--novice", str(a), "--expert", str(b),
+                        "--task", "sit on a chair", "--dry_run", "--out", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    d = json.load(open(out))
+    assert set(d["tables"]) == {"joint_angles", "object", "motion"} and d["feedback"] is None and d["model"] is None
+    assert d["alignment"]["novice_frames"][0] == 0 and len(d["time"]["rows"]) == 3
+    rows = d["tables"]["joint_angles"]
+    assert {r["joint"] for r in rows} >= {"pelvis", "lower back", "left knee", "right elbow"}
+    assert all("novice_minus_expert_deg" in r for r in rows)

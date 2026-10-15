@@ -3,18 +3,23 @@
 render, overlay on the novice's own video. The point is the RETARGET: an expert's
 clip (training set) performed by a body the policy never saw (any CARI4D novice).
 
-    retarget/<novice>/<expert clip>.pt   the expert clip contact-retargeted onto the
-                                         novice body (scripts/retarget_contact.py, the
-                                         solver every training reference went through)
-    rollout.npz      the best of N simultaneous attempts on the novice body
-                     (DUMP_PICK=best: an env that reached the clip's end, else the
-                     farthest survivor; never a hard failure)
-    skinned.mp4      the novice's SMPL-H surface performing it (render_mesh_replay.py)
-    <seq>_sim.pth    the rollout in CARI4D's prediction format in the novice video's
-                     camera, ANCHORED at the novice's first frame (sim_to_cari4d_bundle.py
-                     --anchor-rollout: the novice's own clip + bundle give the camera)
-    overlay          CARI4D tools/viz_pred.py --wild_video --flat_color: human AND object
-                     as one flat figure over the footage (printed; --run-overlay runs it)
+    novice_original.npz / .mp4     the novice's OWN reconstructed motion: a DUMP_TRAJ-layout
+                                   npz (clip_to_dump.py) and the skinned SMPL-H animation
+    expert_on_novice.npz / .mp4    the expert's motion on the novice body: the best of N
+                                   policy attempts (DUMP_PICK=best: an env that reached the
+                                   clip's end, else the farthest survivor; never a hard
+                                   failure) and its skinned SMPL-H animation
+    retarget/<novice>/<clip>.pt    the kinematic retargeted reference the policy tracked
+                                   (retarget_contact.py, the training data's solver)
+    feedback/joint_differences.json  JOINT DIFFERENCING: motion_feedback.py's expert-vs-novice
+                                   tables over the lined-up movement (20 joint angles,
+                                   body-to-object relations, speeds; dry run, no model);
+                                   --feedback-model adds Qwen's coaching text
+    hy3d/<seq>_sim.pth + overlay   the rollout in CARI4D's prediction format in the novice
+                                   video's camera, ANCHORED at the novice's first frame
+                                   (sim_to_cari4d_bundle.py --anchor-rollout), and the
+                                   viz_pred --flat_color command: human AND object as one
+                                   flat figure over the footage (--run-overlay runs it)
 
 Inputs: the EXPERT clip (sub<E>_<object>_<idx>.pt, a training clip) and body MJCF;
 the NOVICE's installed clip (sub<N>_..., same recon the bundle came from), bundle,
@@ -434,6 +439,8 @@ def build_plan(a):
         "frames": a.frames, "gender": a.gender, "video": a.video, "cari4d_root": a.cari4d_root,
         "flat_color": a.flat_color, "retarget_iters": a.retarget_iters,
         "is_student": entry.endswith("run_distill"), "retrieval": retrieval,
+        "drill_name": a.drill or (retrieval["hit"].get("drill") if retrieval else None) or obj,
+        "feedback_model": a.feedback_model,
     }
 
 
@@ -474,12 +481,25 @@ def write_derived(p):
 
 
 def commands(p, derived):
-    """The stage commands, as (name, env, argv) -- printed by --dry-run, run otherwise."""
+    """The stage commands, as (name, env, argv) -- printed by --dry-run, run otherwise.
+
+    OUTPUTS (Jess, 2026-10-16), all in --out:
+      novice_original.npz / .mp4    the novice's OWN reconstructed motion, as a dump + skinned SMPL
+      expert_on_novice.npz / .mp4   the expert's motion retargeted onto the novice body (policy
+                                    rollout, best of N), as a dump + skinned SMPL
+      retarget/<novice>/<clip>.pt   the kinematic retargeted reference the policy tracked
+      feedback/joint_differences.json  expert-vs-novice tables over the lined-up movement
+                                    (motion_feedback.py: joint angles, body-object relations,
+                                    speeds); the Qwen text only with --feedback-model
+      hy3d/<seq>_sim.pth + overlay  the rollout in the novice video's camera (anchored), and
+                                    the one-colour viz_pred command
+    """
     out = p["out"]
     rt_file = out / "retarget" / p["novice"] / p["expert_clip"].name
-    dump = out / "rollout.npz"
+    nov_npz, nov_mp4 = out / "novice_original.npz", out / "novice_original.mp4"
+    dump, exp_mp4 = out / "expert_on_novice.npz", out / "expert_on_novice.mp4"
     betas = out / f"betas_{p['novice']}.npz"
-    skinned = out / "skinned.mp4"
+    diff_json = out / "feedback" / "joint_differences.json"
     sim_pth = out / "hy3d" / f"{p['seq']}_sim.pth"          # 'hy3d' in the path: viz_pred picks the recon mesh
     py = sys.executable
     pp = {"PYTHONPATH": f"{REPO}/isaacgym/src:{REPO}"}
@@ -487,6 +507,8 @@ def commands(p, derived):
                 "--source", p["expert"], "--source-mjcf", str(ASSET_ROOT / p["expert_mjcf"]),
                 "--target", p["novice"], "--target-mjcf", str(ASSET_ROOT / p["novice_mjcf"]),
                 "--iters", str(p["retarget_iters"]), "--out-dir", str(rt_file.parent)]
+    novice_npz = [py, str(REPO / "scripts/clip_to_dump.py"), str(p["novice_clip"]), "--out", str(nov_npz),
+                  "--subject", p["novice"]]
     env_roll = {**pp, "DUMP_TRAJ": str(dump), "DUMP_PICK": "best", "DUMP_FRAMES": str(p["frames"]),
                 "REPLAY_ASSET_FILE": p["novice_mjcf"]}
     if p["is_student"]:
@@ -495,8 +517,13 @@ def commands(p, derived):
             "--cfg_train", str(p["train_yaml"]), "--test", "--headless", "--checkpoint", str(p["ckpt"]),
             "--subject_bodies", p["novice"], "--data_sub", p["expert"], "--data_objects", p["object"],
             "--num_envs", str(p["num_envs"])]
-    skin = [py, str(REPO / "scripts/render_mesh_replay.py"), "--dump", str(dump), "--betas", str(betas),
-            "--models", str(p["models"]), "--model-type", "smplh", "--object", str(p["mesh"]), "--out", str(skinned)]
+
+    def skin(src, dst):
+        return [py, str(REPO / "scripts/render_mesh_replay.py"), "--dump", str(src), "--betas", str(betas),
+                "--models", str(p["models"]), "--model-type", "smplh", "--object", str(p["mesh"]), "--out", str(dst)]
+    diff = [py, str(REPO / "scripts/motion_feedback.py"), "--novice", str(nov_npz), "--expert", str(dump),
+            "--task", p["drill_name"], "--obj", str(p["mesh"]), "--out", str(diff_json)]
+    diff += ["--model", p["feedback_model"]] if p["feedback_model"] else ["--dry_run"]
     bundle = [py, str(REPO / "scripts/sim_to_cari4d_bundle.py"), "--dump", str(dump), "--bundle", str(p["bundle"]),
               "--pt", str(p["novice_clip"]), "--anchor-rollout", "--betas", str(betas), "--subject", p["novice"],
               "--models", str(p["models"]), "--model-type", "smplh", "--object-mesh", str(p["mesh"]), "--out", str(sim_pth)]
@@ -505,8 +532,12 @@ def commands(p, derived):
         overlay = ["python", "tools/viz_pred.py", "-pf", str(sim_pth), "--wild_video", "--kid", "0", "--no_side",
                    "--flat_color", p["flat_color"], "--hy3d_meshes_root", str(p["mesh"].parent.parent),
                    "--out_root", str(out / "overlay")] + (["--video", str(Path(p["video"]).resolve())] if p["video"] else [])
-    return ([("retarget", pp, retarget), ("rollout", env_roll, roll), ("skinned", pp, skin), ("bundle", pp, bundle),
-             ("overlay", {"cwd": p["cari4d_root"]}, overlay)], rt_file, dump, betas)
+    stages = [("retarget", pp, retarget), ("novice_npz", pp, novice_npz), ("rollout", env_roll, roll),
+              ("novice_skin", pp, skin(nov_npz, nov_mp4)), ("expert_skin", pp, skin(dump, exp_mp4)),
+              ("differencing", pp, diff), ("bundle", pp, bundle), ("overlay", {"cwd": p["cari4d_root"]}, overlay)]
+    files = {"rt_file": rt_file, "novice_npz": nov_npz, "novice_mp4": nov_mp4, "dump": dump, "expert_mp4": exp_mp4,
+             "betas": betas, "diff_json": diff_json, "sim_pth": sim_pth}
+    return stages, files
 
 
 def main(argv=None):
@@ -542,6 +573,9 @@ def main(argv=None):
     ap.add_argument("--cari4d-root", default=os.environ.get("CARI4D_ROOT"), help="CARI4D repo (default: $CARI4D_ROOT); with it the overlay command is printed/run")
     ap.add_argument("--flat-color", default="255,140,0", help="one r,g,b for human AND object in the overlay")
     ap.add_argument("--run-overlay", action="store_true", help="also run viz_pred.py (needs the CARI4D env)")
+    ap.add_argument("--feedback-model", default=None,
+                    help="also write Qwen's coaching text in feedback/joint_differences.json (e.g. "
+                         "Qwen/Qwen2.5-3B-Instruct; needs transformers + a GPU). Default: the tables only")
     ap.add_argument("--dry-run", action="store_true", help="validate, write the derived files, print the commands, run nothing")
     ap.add_argument("--skip-retarget", action="store_true", help="reuse an existing retargeted reference in --out")
     ap.add_argument("--skip-rollout", action="store_true", help="reuse an existing rollout.npz in --out")
@@ -549,7 +583,8 @@ def main(argv=None):
 
     p = build_plan(a)
     derived, changed = write_derived(p)
-    stages, rt_file, dump, betas = commands(p, derived)
+    stages, files = commands(p, derived)
+    by_name = {name: (name, env, argv_) for name, env, argv_ in stages}
 
     print(f"== novice_rollout: {p['novice']} performs {p['expert_clip'].name} (expert {p['expert']}, object {p['object']})")
     if p["retrieval"]:
@@ -568,7 +603,10 @@ def main(argv=None):
         print(f"   object props : {p['object']} -> {p['props'][0]}  (from {p['props'][1]} in {Path(p['props_path']).name})")
     print(f"   env cfg      : {derived}  (from {p['env_yaml'].name}; redirected: {', '.join(changed)})")
     print(f"   attempts     : {p['num_envs']} envs, cap {p['frames']} frames, keep the best (DUMP_PICK=best)")
+    print(f"   task name    : {p['drill_name']!r} (for the differencing tables)")
     print(f"   out          : {p['out']}")
+    print(f"   outputs      : novice_original.npz/.mp4, expert_on_novice.npz/.mp4, retarget/{p['novice']}/{p['expert_clip'].name}, "
+          f"feedback/joint_differences.json, hy3d/{p['seq']}_sim.pth" + (", overlay/" if p["cari4d_root"] else ""))
     for name, env, argv_ in stages:
         if argv_ is None:
             continue
@@ -578,37 +616,42 @@ def main(argv=None):
         print("   (DRY RUN: nothing executed)")
         return 0
 
-    def run(stage, cwd=None):
-        name, env, argv_ = stage
+    def run(name, cwd=None):
+        _, env, argv_ = by_name[name]
         r = subprocess.run(argv_, env={**os.environ, **{k: v for k, v in env.items() if k != "cwd"}},
                            cwd=str(cwd or REPO))
         if r.returncode != 0:
             raise PlanError(f"[{name}] failed (exit {r.returncode})")
 
     if not a.skip_retarget:
-        run(stages[0])
-    if not rt_file.is_file():
-        raise PlanError(f"[retarget] wrote no reference at {rt_file} (the solver refuses a solve that got worse: "
+        run("retarget")
+    if not files["rt_file"].is_file():
+        raise PlanError(f"[retarget] wrote no reference at {files['rt_file']} (the solver refuses a solve that got worse: "
                         f"raise --retarget-iters, see its FAILURES output)")
+    run("novice_npz")
     if not a.skip_rollout:
-        run(stages[1])
-    if not dump.is_file():
-        raise PlanError(f"[rollout] no {dump}")
+        run("rollout")
+    if not files["dump"].is_file():
+        raise PlanError(f"[rollout] no {files['dump']}")
     import numpy as np
-    d = np.load(dump, allow_pickle=True)
+    d = np.load(files["dump"], allow_pickle=True)
     print(f"== rollout: env {int(d['chosen_env'])} kept, {d['body_pos'].shape[0]} frames, "
           f"succeeded={bool(d['chosen_succeeded'])} ({int(d['n_succeeded'])}/{int(d['num_envs'])} envs reached the end)")
-    vec, n_bundle = betas_from_bundle(p["bundle"], p["novice"], p["gender"], betas)
-    print(f"== betas: {betas} (10-dim, mean over the bundle's frames; bundle has {n_bundle} frames)")
-    run(stages[2])
-    run(stages[3])
-    name, env, argv_ = stages[4]
+    vec, n_bundle = betas_from_bundle(p["bundle"], p["novice"], p["gender"], files["betas"])
+    print(f"== betas: {files['betas']} (10-dim, mean over the bundle's frames; bundle has {n_bundle} frames)")
+    run("novice_skin")
+    run("expert_skin")
+    run("differencing")
+    run("bundle")
+    _, env, argv_ = by_name["overlay"]
     if argv_ is not None:
         print("== overlay (run inside the CARI4D env, from the CARI4D repo; needs the flat-colour patch to viz_pred.py):")
         print("   cd " + str(env["cwd"]) + " && " + " ".join(argv_))
         if a.run_overlay:
-            run(stages[4], cwd=env["cwd"])
+            run("overlay", cwd=env["cwd"])
     print(f"== done: {p['out']}")
+    for k in ("novice_npz", "novice_mp4", "dump", "expert_mp4", "rt_file", "diff_json", "sim_pth"):
+        print(f"   {files[k].relative_to(p['out'])}")
     return 0
 
 
