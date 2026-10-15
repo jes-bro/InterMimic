@@ -144,6 +144,25 @@ class InterMimicDistillG3(InterMimic):
         print(f"[distill-g3] teacher obs {self.obs_buf.shape[1]} over horizons {self._obs_horizons}; "
               f"student obs {expected} over horizons {self._student_horizons}", flush=True)
 
+        # ---- DISTILL_SKIP_TEACHERS=1: inference without the teacher set ----
+        # At test time the teachers are queried but their output never reaches the
+        # sim (the student acts), so a collaborator running inference needs only
+        # the student .pth. Refused outside --test: training without labels would
+        # silently fit zeros. Teacher labels (action_buf / mu_buf) stay zeros.
+        self._skip_teachers = os.environ.get("DISTILL_SKIP_TEACHERS", "0") == "1"
+        if self._skip_teachers:
+            _args = cfg.get('args')
+            if not (getattr(_args, 'test', False) or getattr(_args, 'play', False)):
+                raise RuntimeError("[distill-g3] DISTILL_SKIP_TEACHERS=1 is for --test inference only; "
+                                   "training needs the teacher set")
+            self._teacher_entries = []
+            self.functional_models = []
+            self.model_indices = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+            self.sample_indices = torch.arange(self.num_envs, device=self.device)
+            print("[distill-g3] DISTILL_SKIP_TEACHERS=1: no teacher loaded (inference); teacher labels are zeros", flush=True)
+            self._g3_ready = True
+            return
+
         # ---- teacher network (one architecture for the whole fleet) ----
         teacher_cfg_path = resolve_data_path("cfg", "train", "rlg", os.path.basename(env['teacherPolicyCFG']))
         with open(teacher_cfg_path) as f:
@@ -340,11 +359,11 @@ class InterMimicDistillG3(InterMimic):
             # truncation (value bootstrapped), not a failure. Both then land in
             # the same reset batch and _twin_sync re-aligns them.
             twin_coreset(self.reset_buf, self.twin_a, self.twin_b)
-        if self._g3_ready:
+        if self._g3_ready and not self._skip_teachers:
             self._query_teachers()
 
     def reset(self, env_ids=None):
         super().reset(env_ids=env_ids)
-        if self._g3_ready:
+        if self._g3_ready and not self._skip_teachers:
             self._refresh_teacher_indices()
             self._query_teachers()

@@ -136,12 +136,46 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
         # body_rot/body_pos (52 bodies) + object pose to an npz, then exits. Env0.
         _dump_path = os.environ.get("DUMP_TRAJ")
         _dump_max = int(os.environ.get("DUMP_FRAMES", os.environ.get("MAX_VIDEO_FRAMES", "1000")))
+        # DUMP_PICK: 'env0' (default, the original behaviour: env 0 for DUMP_FRAMES
+        # frames, success or not) or 'best': record EVERY env until its episode ends
+        # and keep the one that reached the clip's end, else the farthest survivor
+        # (utils/rollout_pick.py). 'best' is for the inference branch only.
+        _dump_pick = os.environ.get("DUMP_PICK", "env0")
+        if _dump_pick not in ("env0", "best"):
+            raise ValueError(f"DUMP_PICK={_dump_pick!r}: expected 'env0' or 'best'")
         _traj = {"body_rot": [], "body_pos": [], "obj_pos": [], "obj_rot": []} if _dump_path else None
+        _best = None
         if _traj is not None:
             _t = self.env.task
             _sb = getattr(_t, "subject_bodies", None)
             _traj_subject = (_sb[int(_t._env_subject_idx[0])] if _sb else str(getattr(_t, "robot_type", "unknown")))
-            print(f"[player] DUMP_TRAJ -> {_dump_path} (subject={_traj_subject}, cap {_dump_max} frames)", flush=True)
+            print(f"[player] DUMP_TRAJ -> {_dump_path} (subject={_traj_subject}, cap {_dump_max} frames, pick={_dump_pick})", flush=True)
+            if _dump_pick == "best":
+                if self.env.task.play_dataset:
+                    raise ValueError("DUMP_PICK=best needs a policy rollout (not --play_dataset): a replay has no success to pick")
+                from ..utils.rollout_pick import RolloutRecorder
+                _best = RolloutRecorder(self.env.task.num_envs, cap=_dump_max)
+                if _sb and len(set(_sb[int(i)] for i in _t._env_subject_idx.tolist())) != 1:
+                    raise ValueError("DUMP_PICK=best: every env must be the same body (pass one --subject_bodies)")
+
+        def _best_record(done, info):
+            t = self.env.task
+            _best.record(t._rigid_body_rot.detach().cpu().numpy(), t._rigid_body_pos.detach().cpu().numpy(),
+                         t._target_states[:, 0:3].detach().cpu().numpy(), t._target_states[:, 3:7].detach().cpu().numpy())
+            term = info.get("terminate") if isinstance(info, dict) else None
+            _best.step_done(done.detach().cpu().numpy(),
+                            None if term is None else term.detach().cpu().numpy())
+
+        def _best_save():
+            import numpy as _np
+            s = _best.summary()
+            arrs = _best.arrays_for(s["chosen_env"])
+            _np.savez_compressed(
+                _dump_path, subject=_traj_subject, chosen_env=s["chosen_env"], chosen_succeeded=s["chosen_succeeded"],
+                num_envs=s["num_envs"], n_succeeded=s["n_succeeded"], frames_per_env=s["frames_per_env"],
+                succeeded_per_env=s["succeeded_per_env"], reason=s["reason"], **arrs)
+            print(f"[player] DUMP_PICK=best: env {s['chosen_env']} kept, {s['chosen_frames']} frames -- {s['reason']}; "
+                  f"{s['n_ended']}/{s['num_envs']} envs ended, {s['n_succeeded']} succeeded -> {_dump_path}", flush=True)
 
         def _dump_step():
             t = self.env.task
@@ -318,7 +352,13 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             done, _tk_wandering)
                     # A policy rollout dumps the same way a replay does, so the
                     # two render identically and can be compared frame to frame.
-                    if _traj is not None:
+                    if _best is not None:
+                        _best_record(done, info)
+                        if _best.all_ended() or _best.full():
+                            _best_save()
+                            import sys
+                            sys.exit(0)
+                    elif _traj is not None:
                         if len(_traj["body_rot"]) < _dump_max:
                             _dump_step()
                         else:

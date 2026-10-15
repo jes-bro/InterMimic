@@ -89,6 +89,33 @@ def quat_to_mat(q):
     ], axis=-1).reshape(q.shape[:-1] + (3, 3))
 
 
+def yaw_of(R):
+    """Heading (rotation about world z) of a rotation matrix, radians."""
+    return float(np.arctan2(R[1, 0], R[0, 0]))
+
+
+def anchor_rollout(body_pos, body_rot, obj_pos, obj_rot, clip_root_pos0, clip_root_rot0):
+    """Move a rollout (sim world) so its FIRST frame's pelvis stands where the
+    anchor clip's first frame stands, facing the same way: one yaw about the
+    rollout's own first pelvis, then one translation. z is left alone (both are
+    on the floor). Returns transformed copies plus (yaw_deg, shift_m) for the log.
+
+    body_pos (T,52,3), body_rot (T,52,4) xyzw, obj_pos (T,3), obj_rot (T,4) xyzw;
+    clip_root_pos0 (3,), clip_root_rot0 (4,) xyzw from the anchor clip's frame 0."""
+    from scipy.spatial.transform import Rotation as sRot
+    p0 = body_pos[0, 0].copy()
+    dyaw = yaw_of(quat_to_mat(clip_root_rot0)) - yaw_of(quat_to_mat(body_rot[0, 0]))
+    Rz = sRot.from_euler("z", dyaw).as_matrix()
+    shift = np.asarray(clip_root_pos0, dtype=np.float64) - p0
+    shift[2] = 0.0
+    bp = (body_pos - p0) @ Rz.T + p0 + shift
+    op = (obj_pos - p0) @ Rz.T + p0 + shift
+    Rq = sRot.from_matrix(Rz)
+    br = (Rq * sRot.from_quat(body_rot.reshape(-1, 4))).as_quat().reshape(body_rot.shape)
+    orr = (Rq * sRot.from_quat(obj_rot)).as_quat()
+    return bp, br, op, orr, float(np.degrees(dyaw)), shift
+
+
 def load_bundle(path):
     """Load a CARI4D bundle, reusing cari4d_to_interact's permissive unpickler.
 
@@ -136,6 +163,13 @@ def parse_args():
                              "between them is needed to convert. Omitting this "
                              "assumes they coincide.")
     parser.add_argument("--ik-iters", type=int, default=100)
+    parser.add_argument("--anchor-rollout", action="store_true",
+                        help="the rollout is a DIFFERENT motion from --pt (an expert's clip "
+                             "performed on the novice's body): --pt/--bundle, the novice's own "
+                             "clip and reconstruction, still give the camera transform, and the "
+                             "rollout is first placed where the novice stood -- its first-frame "
+                             "pelvis position and heading moved onto the clip's first frame "
+                             "(yaw + translation in the sim world, nothing else)")
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args()
 
@@ -186,6 +220,17 @@ def main():
             f"would mean nothing. Refusing to guess at it.")
     R_sb = R_bs.T
     t_sb = -R_sb @ t_bs
+
+    if args.anchor_rollout:
+        # The rollout performs ANOTHER motion (the expert's) on this body, so
+        # the trajectories above could not have been matched to it; the camera
+        # transform comes from the novice's own pair, and the rollout is placed
+        # at the novice's first frame before it goes through that transform.
+        body_rot = dump["body_rot"].astype(np.float64)
+        body_pos, body_rot, obj_pos, obj_rot, yaw_deg, shift = anchor_rollout(
+            body_pos, body_rot, obj_pos, obj_rot, pt[0, 0:3].numpy(), pt[0, 3:7].numpy())
+        print(f"anchored the rollout at the clip's first frame: yaw {yaw_deg:+.1f} deg, "
+              f"shift {np.round(shift, 3)} m (pelvis now at {np.round(body_pos[0, 0], 3)})")
 
     if len(body_pos) != len(ref_t):
         n = min(len(body_pos), len(ref_t))

@@ -1,0 +1,78 @@
+diff --git a/Utils.py b/Utils.py
+index 656837e..64d5de5 100644
+--- a/Utils.py
++++ b/Utils.py
+@@ -100,13 +100,16 @@ set_logging_format()
+ 
+ 
+ def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_texture='part', hum_only=False,
+-        meshes_root=None, obj_color=None):
++        meshes_root=None, obj_color=None, human_color=None):
+   """Load the SMPL part-texture body and the object as one textured scene.
+ 
+   obj_color, an (r, g, b) in 0-255, replaces the object's texture with that
+   flat colour. A metal pot rendered with its own texture over a kitchen is
+   invisible in the visualization; a magenta one is not. Rendering only --
+   nothing that optimizes against the texture should pass it.
++  human_color does the same for the body (replaces the part texture), so a
++  simulated rollout overlaid on the source video reads as ONE flat figure --
++  human and object in a single colour -- against the real footage.
+   """
+   from pytorch3d.structures import join_meshes_as_scene, join_meshes_as_batch
+   from pytorch3d.renderer import TexturesUV
+@@ -137,6 +140,19 @@ def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_textu
+   print('loading templates from', files)
+   meshes = load_objs_as_meshes(files, device='cuda')
+ 
++  def _flat(m, rgb):
++    maps = m.textures.maps_padded()
++    flat = torch.tensor(rgb, dtype=maps.dtype, device=maps.device).view(1, 1, 1, 3) / 255.0
++    return Meshes(verts=m.verts_list(), faces=m.faces_list(),
++                  textures=TexturesUV(maps=flat.expand_as(maps).contiguous(),
++                                      faces_uvs=m.textures.faces_uvs_padded(),
++                                      verts_uvs=m.textures.verts_uvs_padded()))
++
++  if human_color is not None:
++    rest = [meshes[i] for i in range(1, len(meshes))]
++    meshes = join_meshes_as_batch([_flat(meshes[0], human_color)] + rest) if rest else _flat(meshes[0], human_color)
++    print('human rendered in flat colour', tuple(human_color))
++
+   if obj_color is not None and not hum_only:
+     obj = meshes[1]
+     maps = obj.textures.maps_padded()
+diff --git a/tools/viz_pred.py b/tools/viz_pred.py
+index a7f7969..fb00a1d 100644
+--- a/tools/viz_pred.py
++++ b/tools/viz_pred.py
+@@ -85,6 +85,13 @@ class PredVisualizer(FPBehaveVideoProcessor):
+                             help='render the object in this flat colour, "r,g,b" in 0-255, '
+                                  'instead of its texture -- e.g. 255,0,255 for a metal pot '
+                                  'that vanishes against a kitchen')
++        parser.add_argument('--human_color', type=str, default=None,
++                            help='render the body in this flat colour, "r,g,b" in 0-255, instead of '
++                                 'the part texture')
++        parser.add_argument('--flat_color', type=str, default=None,
++                            help='ONE flat colour, "r,g,b", for human AND object: a simulated '
++                                 'rollout overlaid on the source video as a single figure '
++                                 '(sets --human_color and --obj_color together)')
+         parser.add_argument('--filter_oneeuro', action='store_true')
+         # Sets $HY3D_MESHES_ROOT, which behave_data.const.get_hy3d_mesh_file
+         # reads. A flag as well as the variable because the default is the
+@@ -173,10 +180,16 @@ class PredVisualizer(FPBehaveVideoProcessor):
+                     return self._mesh_cache[obj_name]
+             if combine_smpl:
+                 obj_color = None
++                human_color = None
++                flat = getattr(self.args, 'flat_color', None)
++                if flat:
++                    obj_color = human_color = tuple(int(v) for v in flat.split(','))
+                 if getattr(self.args, 'obj_color', None):
+                     obj_color = tuple(int(v) for v in self.args.obj_color.split(','))
++                if getattr(self.args, 'human_color', None):
++                    human_color = tuple(int(v) for v in self.args.human_color.split(','))
+                 mesh_tensors, meshes = Utils.load_smpl_obj_uvmap(video_prefix, use_hy3d=use_hy3d, human_texture='part',
+-                                                                 obj_color=obj_color)
++                                                                 obj_color=obj_color, human_color=human_color)
+                 verts_list = meshes.verts_list()
+                 smpl_n = verts_list[0].shape[0]
+                 obj_base = verts_list[1].to('cuda').float()
