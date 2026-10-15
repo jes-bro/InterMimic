@@ -165,8 +165,12 @@ class InterMimicDistillG3(InterMimic):
         }
 
         # ---- teacher checkpoints, per the manifest ----
+        # Three seams a subclass may override (InterMimicDistillG4 routes by the
+        # clip's OBJECT): how the manifest is read, how a teacher is described in
+        # the log, and how the env->teacher table is built. g3 behaviour here is
+        # unchanged: the bodies moved into the methods verbatim (2026-10-15).
         teacher_dir = resolve_repo_path(env['teacherPolicy'])
-        self._teacher_entries = load_teacher_manifest(teacher_dir)
+        self._teacher_entries = self._load_teacher_entries(teacher_dir)
         params_list, means, vars_ = [], [], []
         self.functional_models = []
         for e in self._teacher_entries:
@@ -184,12 +188,27 @@ class InterMimicDistillG3(InterMimic):
             params_list.append(params)
             means.append(rm)
             vars_.append(ck['running_mean_std']['running_var'])
-            print(f"[distill-g3] teacher {e.file}: sources {e.sources}, epoch {e.epoch}, from {e.origin}", flush=True)
+            print(f"[distill-g3] teacher {e.file}: {self._describe_teacher(e)}, epoch {e.epoch}, from {e.origin}", flush=True)
         self.stacked_params = tuple(torch.stack(p, dim=0) for p in zip(*params_list))
         self.running_means_all = torch.stack(means).float().to(self.device)
         self.running_vars_all = torch.stack(vars_).float().to(self.device)
 
-        # ---- source -> teacher routing, checked against the data at startup ----
+        self._build_teacher_routing()
+
+        self._g3_ready = True
+        self._refresh_teacher_indices()
+
+    # ------------------------------------------------------------------ teacher seams
+    def _load_teacher_entries(self, teacher_dir):
+        """[TeacherEntry] from teachers.yaml -- g3: keyed by SOURCE subject."""
+        return load_teacher_manifest(teacher_dir)
+
+    def _describe_teacher(self, e):
+        """What a teacher owns, for the startup log line."""
+        return f"sources {e.sources}"
+
+    def _build_teacher_routing(self):
+        """source -> teacher routing, checked against the data at startup."""
         present = torch.unique(self.source_subject_index).tolist()
         lookup, unused = build_source_lookup(self._teacher_entries, present)
         self._source_to_model = torch.tensor(lookup, device=self.device, dtype=torch.long)
@@ -197,9 +216,6 @@ class InterMimicDistillG3(InterMimic):
             print(f"[distill-g3] NOTE: {len(unused)} teacher(s) serve no clip in this data: {unused}", flush=True)
         print(f"[distill-g3] {len(self._teacher_entries)} teachers cover {len(present)} sources: "
               f"{['sub%d' % s for s in present]}", flush=True)
-
-        self._g3_ready = True
-        self._refresh_teacher_indices()
 
     # ------------------------------------------------------------------ routing
     def _refresh_teacher_indices(self):

@@ -122,6 +122,13 @@ def latest_ckpt(nn_dir, read_epoch=None):
 OMOMO_ARM_EXP = "smplx_teacher_g3_omomo_geoall_{name}__f0"      # multi-source OMOMO teachers: srchalf6, srchalf7, srcall13
 OMOMO_ARM_CFG = "omomo_teacher_g3_omomo_geoall_{name}__f0.yaml"
 
+# gen4 OBJECT-GROUP teachers (boxes / stands / chairs / tables, motion-scale reward),
+# collected with --gen4-objects into an OBJECT-keyed manifest for InterMimicDistillG4.
+# All four trained on the same 13 sources, so a source-keyed manifest cannot express
+# them (utils/distill_g4.py). The object list comes from each arm's dataObjects.
+GEN4_OBJ_EXP = "smplx_teacher_gen4_omomo_geoall_{name}_xf_nvadlr_nopose_msexp__f0"
+GEN4_OBJ_CFG = "omomo_teacher_gen4_omomo_geoall_{name}_xf_nvadlr_nopose_msexp__f0.yaml"
+
 
 def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG, suffix=""):
     """The arm's dataSub as ints, from its env cfg -- the same list the teacher trained on."""
@@ -140,6 +147,57 @@ def activity_sources(name, cfg_dir, cfg_pattern=ACT_CFG, suffix=""):
             raise SystemExit(f"ERROR: {path}: dataSub entry {s!r} is not sub<N>")
         out.append(int(m.group(1)))
     return out
+
+
+def arm_objects(name, cfg_dir, cfg_pattern=GEN4_OBJ_CFG):
+    """The arm's dataObjects, from its env cfg -- the objects the teacher trained on."""
+    path = os.path.join(cfg_dir, cfg_pattern.format(name=name))
+    if not os.path.isfile(path):
+        raise SystemExit(f"ERROR: no env cfg for arm '{name}' at {path}")
+    with open(path) as fh:
+        env = (yaml.safe_load(fh) or {}).get("env") or {}
+    objs = env.get("dataObjects")
+    if not objs or not isinstance(objs, list):
+        raise SystemExit(f"ERROR: {path} has no dataObjects list (not an object-group arm?)")
+    return [str(o) for o in objs]
+
+
+def plan_object_teachers(root, names, cfg_dir, pins=None):
+    """[(file, objects, origin, epoch)] for the gen4 object-group arms, or a
+    SystemExit listing what is missing. Same latest/pin rule as plan_teachers;
+    an object owned by two arms is refused here, before the task would."""
+    pins = dict(pins or {})
+    unused = set(pins)
+    plan, missing = [], []
+    for name in names:
+        exp = GEN4_OBJ_EXP.format(name=name)
+        objs = arm_objects(name, cfg_dir)
+        nn_dir = os.path.join(root, exp, "nn")
+        if name in pins:
+            unused.discard(name)
+            ck, ep = pinned_ckpt(nn_dir, pins[name])
+            why = f"has no mimic_{pins[name]:08d}.pth (pinned)"
+        else:
+            ck, ep = latest_ckpt(nn_dir)
+            why = "has no mimic*.pth"
+        if ck is None:
+            missing.append(f"{name}: {nn_dir} {why}")
+        else:
+            plan.append((f"{name}.pth", objs, ck, ep))
+    if unused:
+        raise SystemExit(f"ERROR: --pin names teachers not being collected: {sorted(unused)}")
+    if missing:
+        raise SystemExit("ERROR: missing teacher checkpoints -- refusing a partial set:\n  "
+                         + "\n  ".join(missing))
+    if not plan:
+        raise SystemExit("ERROR: --gen4-objects given no arm names")
+    owner = {}
+    for f, objs, _, _ in plan:
+        for o in objs:
+            if o in owner:
+                raise SystemExit(f"ERROR: object {o} owned by both {owner[o]} and {f}")
+            owner[o] = f
+    return plan
 
 
 def parse_pins(items):
@@ -259,17 +317,31 @@ def main(argv=None):
                     help="take this teacher's numbered snapshot mimic_<EPOCH>.pth instead of its "
                          "latest, e.g. --pin bball7=37500 soccer15=32000 cpr13=15500 (the set a "
                          "student was distilled from; see parse_pins)")
+    ap.add_argument("--gen4-objects", nargs="*", default=[], metavar="NAME",
+                    help="gen4 OBJECT-GROUP teacher arms, e.g. boxes stands chairs tables (exp "
+                         "smplx_teacher_gen4_omomo_geoall_<NAME>_xf_nvadlr_nopose_msexp__f0; objects "
+                         "from each arm's dataObjects). Writes an OBJECT-keyed manifest for "
+                         "InterMimicDistillG4; cannot be mixed with the source-keyed options")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
     pins = parse_pins(a.pin)
-    plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms, a.exp_suffix, pins)
+    by_object = bool(a.gen4_objects)
+    if by_object and (a.omomo_sources or a.activities or a.omomo_arms or a.exp_suffix):
+        raise SystemExit("ERROR: --gen4-objects writes an OBJECT-keyed manifest and cannot be mixed with "
+                         "--omomo-sources / --activities / --omomo-arms / --exp-suffix (one manifest routes one way)")
+    key = "objects" if by_object else "sources"
+    if by_object:
+        plan = plan_object_teachers(a.root, a.gen4_objects, a.cfg_dir, pins)
+        print("  (gen4 object-group teachers: OBJECT-keyed manifest, for --task InterMimicDistillG4)")
+    else:
+        plan = plan_teachers(a.root, a.omomo_sources, a.activities, a.cfg_dir, a.omomo_arms, a.exp_suffix, pins)
     if a.exp_suffix:
         print(f"  (variant fleet: experiment names carry {a.exp_suffix!r} before __f0)")
     if pins:
         print(f"  (pinned: {', '.join(f'{k}={v}' for k, v in pins.items())}; the rest take their latest)")
-    for f, srcs, ck, ep in plan:
-        print(f"  {f:<14} sources {srcs}  <- {os.path.relpath(ck, a.root)}  (epoch {ep})")
+    for f, owned, ck, ep in plan:
+        print(f"  {f:<14} {key} {owned}  <- {os.path.relpath(ck, a.root)}  (epoch {ep})")
     if a.dry_run:
         print(f"DRY RUN: would write {len(plan)} teachers + teachers.yaml into {a.out}")
         return plan
@@ -277,9 +349,9 @@ def main(argv=None):
         raise SystemExit(f"ERROR: {a.out} exists and is not empty -- pick a new dir (never overwrite a teacher set)")
     os.makedirs(a.out, exist_ok=True)
     manifest = []
-    for f, srcs, ck, ep in plan:
+    for f, owned, ck, ep in plan:
         shutil.copy2(ck, os.path.join(a.out, f))
-        manifest.append({"file": f, "sources": srcs,
+        manifest.append({"file": f, key: owned,
                          "from": os.path.relpath(ck, REPO) if ck.startswith(REPO) else ck,
                          "epoch": ep})
     with open(os.path.join(a.out, "teachers.yaml"), "w") as fh:

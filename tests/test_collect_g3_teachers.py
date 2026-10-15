@@ -201,3 +201,75 @@ def test_pin_through_main_writes_pinned_epoch_to_manifest(tree):
     assert m["sub2.pth"]["epoch"] == 9500 and m["sub2.pth"]["from"].endswith("mimic_00009500.pth")
     assert open(os.path.join(out, "sub2.pth"), "rb").read() == b"mimic_00009500.pth"
     assert m["bball7.pth"]["epoch"] == 8000
+
+
+# --- gen4 object-group teachers: --gen4-objects writes an OBJECT-keyed manifest (InterMimicDistillG4) ---
+
+GEN4_GROUPS = {"boxes": ["largebox", "smallbox", "plasticbox", "suitcase", "trashcan", "monitor"],
+               "stands": ["tripod", "clothesstand", "floorlamp"],
+               "chairs": ["whitechair", "woodchair"], "tables": ["largetable", "smalltable"]}
+
+
+def _gen4_cfg(cfg_dir, name, objs):
+    os.makedirs(cfg_dir, exist_ok=True)
+    with open(os.path.join(cfg_dir, cg.GEN4_OBJ_CFG.format(name=name)), "w") as fh:
+        yaml.safe_dump({"env": {"dataObjects": objs, "dataSub": ["sub1", "sub2"]}}, fh)
+
+
+@pytest.fixture
+def gen4_tree(tmp_path):
+    root = tmp_path / "checkpoints"
+    epochs = {"boxes": 35000, "stands": 36000, "chairs": 44000, "tables": 46000}
+    for g, ep in epochs.items():
+        _ckpt(root, cg.GEN4_OBJ_EXP.format(name=g), ["mimic.pth", f"mimic_{ep:08d}.pth", "mimic_00001000.pth"])
+    cfg_dir = tmp_path / "cfg"
+    for g, objs in GEN4_GROUPS.items():
+        _gen4_cfg(cfg_dir, g, objs)
+    return str(root), str(cfg_dir), str(tmp_path / "out")
+
+
+def test_gen4_objects_take_latest_and_read_objects_from_cfg(gen4_tree, monkeypatch):
+    root, cfg_dir, _ = gen4_tree
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: 1000)     # mimic.pth is stale: numbered wins
+    plan = cg.plan_object_teachers(root, ["boxes", "stands", "chairs", "tables"], cfg_dir)
+    assert [(f, objs, ep) for f, objs, _, ep in plan] == [
+        ("boxes.pth", GEN4_GROUPS["boxes"], 35000), ("stands.pth", GEN4_GROUPS["stands"], 36000),
+        ("chairs.pth", GEN4_GROUPS["chairs"], 44000), ("tables.pth", GEN4_GROUPS["tables"], 46000)]
+    assert plan[2][2].endswith("smplx_teacher_gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0/nn/mimic_00044000.pth")
+
+
+def test_gen4_objects_refuse_partial_set_and_overlap(gen4_tree, monkeypatch):
+    root, cfg_dir, _ = gen4_tree
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: 1000)
+    _gen4_cfg(cfg_dir, "tables_overlap", ["woodchair"])          # a cfg but no checkpoints yet
+    with pytest.raises(SystemExit, match="refusing a partial set"):
+        cg.plan_object_teachers(root, ["boxes", "tables_overlap"], cfg_dir)
+    _ckpt(root, cg.GEN4_OBJ_EXP.format(name="tables_overlap"), ["mimic_00005000.pth"])
+    with pytest.raises(SystemExit, match="object woodchair owned by both chairs.pth and tables_overlap.pth"):
+        cg.plan_object_teachers(root, ["chairs", "tables_overlap"], cfg_dir)
+
+
+def test_gen4_objects_main_writes_object_keyed_manifest(gen4_tree, monkeypatch):
+    root, cfg_dir, out = gen4_tree
+    monkeypatch.setattr(cg, "epoch_inside", lambda p: 1000)
+    cg.main(["--gen4-objects", "boxes", "stands", "chairs", "tables", "--out", out, "--root", root, "--cfg-dir", cfg_dir])
+    m = yaml.safe_load(open(os.path.join(out, "teachers.yaml")))["teachers"]
+    assert [e["file"] for e in m] == ["boxes.pth", "stands.pth", "chairs.pth", "tables.pth"]
+    assert all("sources" not in e for e in m)                       # OBJECT-keyed, never sources
+    assert m[2]["objects"] == ["whitechair", "woodchair"] and m[2]["epoch"] == 44000
+    assert m[0]["from"].endswith("mimic_00035000.pth")
+    assert open(os.path.join(out, "chairs.pth"), "rb").read() == b"mimic_00044000.pth"
+    # the written manifest is exactly what the g4 task loads
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "dg4", os.path.join(os.path.dirname(__file__), "..", "isaacgym", "src", "intermimic", "utils", "distill_g4.py"))
+    dg4 = importlib.util.module_from_spec(spec); spec.loader.exec_module(dg4)
+    ents = dg4.load_object_manifest(out)
+    lookup, unused = dg4.build_object_lookup(ents, sorted(o for objs in GEN4_GROUPS.values() for o in objs))
+    assert len(lookup) == 13 and unused == []
+
+
+def test_gen4_objects_cannot_mix_with_source_keyed_options(gen4_tree):
+    root, cfg_dir, out = gen4_tree
+    with pytest.raises(SystemExit, match="cannot be mixed"):
+        cg.main(["--gen4-objects", "boxes", "--omomo-sources", "2", "--out", out, "--root", root, "--cfg-dir", cfg_dir])
