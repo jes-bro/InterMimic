@@ -355,3 +355,69 @@ def test_launcher_fold_guard_executes_and_passes_on_the_real_cfg():
 def test_student_obs_width_rule_for_the_gen4_student():
     e = yaml.safe_load(open(CFG / f"omomo_{ARM}.yaml"))["env"]
     assert dg3.student_obs_width(e["numObs"], e["obsHorizons"], e["studentObsHorizons"], uses_betas=False) == e["numObsRetarget"] == 9594
+
+
+# ----------------------------------------------------------------- transformer teachers: the per-teacher query, executed
+G3Q = lift_methods(PKG / "env/tasks/intermimic_distill_g3.py", "InterMimicDistillG3",
+                   ["_query_teachers_loop", "_query_teachers"])
+
+
+class _ConstTeacher:
+    """A stand-in teacher: mus = a constant per teacher (+ the normalised obs mean, to prove
+    normalisation is per teacher), sigmas tiny so the sample equals mu."""
+    def __init__(self, c):
+        self.c = c
+
+    def __call__(self, d):
+        obs = d["obs"]
+        mus = torch.full((obs.shape[0], 153), float(self.c)) + obs.mean(dim=1, keepdim=True)
+        return {"mus": mus, "sigmas": torch.full_like(mus, 1e-6)}
+
+
+def test_query_teachers_loop_routes_each_env_to_its_own_teacher_with_its_own_normalisation():
+    n_env, n_obs = 16, 10
+    t = type("T", (), {})()
+    t._teacher_loop = True
+    t.teacher_models = [_ConstTeacher(0.0), _ConstTeacher(10.0), _ConstTeacher(20.0)]
+    t.model_indices = torch.tensor([0, 1, 2, 2, 1, 0, 1, 1, 0, 2, 2, 1, 0, 0, 2, 1])
+    t.obs_buf = torch.ones(n_env, n_obs) * 3.0
+    # teacher 1 has mean 3 / var 1 (normalised obs = 0); teachers 0 and 2 have mean 0 / var 1 (normalised obs = 3)
+    t.running_means_all = torch.tensor([[0.0] * n_obs, [3.0] * n_obs, [0.0] * n_obs])
+    t.running_vars_all = torch.ones(3, n_obs)
+    t.action_buf = torch.zeros(n_env, 153)
+    t.mu_buf = torch.zeros(n_env, 153)
+    G3Q._query_teachers_loop(t)                                 # the stand-in has no methods; call the lifted one
+    expected = {0: 0.0 + 3.0, 1: 10.0 + 0.0, 2: 20.0 + 3.0}
+    for e in range(n_env):
+        want = expected[int(t.model_indices[e])]
+        assert abs(float(t.mu_buf[e, 0]) - want) < 1e-5, (e, float(t.mu_buf[e, 0]), want)
+    # actions are clamped samples of a near-deterministic Normal: equal to mu where |mu| <= 1, else +-1
+    assert torch.allclose(t.action_buf[t.model_indices == 1], torch.ones(1) * 1.0)       # mu 10 -> clamp 1
+    assert torch.allclose(t.action_buf[t.model_indices == 0], torch.ones(1) * 1.0)       # mu 3 -> clamp 1
+
+
+def test_query_teachers_loop_skips_teachers_with_no_env():
+    t = type("T", (), {})()
+    t._teacher_loop = True
+    calls = []
+
+    class Spy(_ConstTeacher):
+        def __call__(self, d):
+            calls.append(d["obs"].shape[0]); return super().__call__(d)
+    t.teacher_models = [Spy(0.0), Spy(1.0), Spy(2.0)]
+    t.model_indices = torch.tensor([0, 0, 2, 2])
+    t.obs_buf = torch.zeros(4, 5); t.running_means_all = torch.zeros(3, 5); t.running_vars_all = torch.ones(3, 5)
+    t.action_buf = torch.zeros(4, 153); t.mu_buf = torch.zeros(4, 153)
+    G3Q._query_teachers_loop(t)
+    assert calls == [2, 2]                                     # teacher 1 never called
+    assert t.mu_buf[2, 0] == 2.0 and t.mu_buf[0, 0] == 0.0
+
+
+def test_transformer_teachers_bypass_vmap_in_source():
+    s = _src_text = (PKG / "env/tasks/intermimic_distill_g3.py").read_text()
+    assert "self._teacher_loop = (net_name == 'intermimic_transformer')" in s
+    assert "if getattr(self, '_teacher_loop', False):\n            return self._query_teachers_loop()" in s
+    assert "if self._teacher_loop:\n                model.eval()\n                self.teacher_models.append(model)" in s
+    # the MLP path is still the vmap path, verbatim
+    assert "batched = vmap(self.single_model_forward, in_dims=(0, 0, 0, 0))" in s
+    assert "self.action_buf = act[self.model_indices, self.sample_indices]" in s

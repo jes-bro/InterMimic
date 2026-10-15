@@ -176,6 +176,16 @@ class InterMimicDistillG3(InterMimic):
             raise ValueError(f"[distill-g3] unsupported teacher network '{net_name}' in {teacher_cfg_path}")
         network.load(cfg_teacher['params']['network'])
         network = intermimic_models_teacher.ModelInterMimicContinuous(network)
+        # TRANSFORMER teachers cannot be queried through vmap: the transformer
+        # builder wraps its embedding and encoder in torch.compile, and
+        # functorch's vmap cannot trace a dynamo-compiled module
+        # (InternalTorchDynamoError at the first query -- the gen4 object-group
+        # student, 2026-10-15; every earlier student had MLP teachers, which are
+        # never compiled). Those teachers are kept as plain modules and queried
+        # one teacher at a time on the envs routed to it (_query_teachers_loop);
+        # the MLP path below is unchanged.
+        self._teacher_loop = (net_name == 'intermimic_transformer')
+        self.teacher_models = []
         build_cfg = {
             'actions_num': 153,
             'input_shape': (self.obs_buf.shape[1],),
@@ -202,15 +212,22 @@ class InterMimicDistillG3(InterMimic):
                     f"[distill-g3] teacher {e.file} was trained on obs width {tuple(rm.shape)} but "
                     f"this env's numObs is {self.obs_buf.shape[1]} (obsHorizons {self._obs_horizons}); "
                     f"the teacher would be queried off-distribution")
-            f_model, params = make_functional(model)
-            self.functional_models.append(f_model)
-            params_list.append(params)
+            if self._teacher_loop:
+                model.eval()
+                self.teacher_models.append(model)
+            else:
+                f_model, params = make_functional(model)
+                self.functional_models.append(f_model)
+                params_list.append(params)
             means.append(rm)
             vars_.append(ck['running_mean_std']['running_var'])
             print(f"[distill-g3] teacher {e.file}: {self._describe_teacher(e)}, epoch {e.epoch}, from {e.origin}", flush=True)
-        self.stacked_params = tuple(torch.stack(p, dim=0) for p in zip(*params_list))
+        self.stacked_params = None if self._teacher_loop else tuple(torch.stack(p, dim=0) for p in zip(*params_list))
         self.running_means_all = torch.stack(means).float().to(self.device)
         self.running_vars_all = torch.stack(vars_).float().to(self.device)
+        if self._teacher_loop:
+            print(f"[distill-g3] {len(self.teacher_models)} TRANSFORMER teachers: queried one at a time on their envs "
+                  f"(torch.compile'd modules cannot go through vmap)", flush=True)
 
         self._build_teacher_routing()
 
@@ -339,7 +356,29 @@ class InterMimicDistillG3(InterMimic):
                                                  'obs': curr_obs, 'rnn_states': None})
         return res['mus'], res['sigmas']
 
+    def _query_teachers_loop(self):
+        """Teacher labels for every env, one teacher at a time: each model sees only
+        the envs routed to it (model_indices == i), normalised by ITS running
+        mean/var. Same labels as the vmap path, computed without functorch."""
+        with torch.no_grad():
+            act = torch.zeros_like(self.action_buf)
+            mu = torch.zeros_like(self.mu_buf)
+            for i, model in enumerate(self.teacher_models):
+                envs = (self.model_indices == i).nonzero(as_tuple=True)[0]
+                if envs.numel() == 0:
+                    continue
+                curr = torch.clamp((self.obs_buf[envs] - self.running_means_all[i])
+                                   / torch.sqrt(self.running_vars_all[i] + 1e-5), min=-5.0, max=5.0)
+                res = model({'is_train': False, 'prev_actions': None, 'obs': curr, 'rnn_states': None})
+                mus, sigmas = res['mus'], res['sigmas']
+                act[envs] = torch.clamp(torch.distributions.Normal(mus, sigmas).sample(), -1.0, 1.0)
+                mu[envs] = mus
+            self.action_buf = act
+            self.mu_buf = mu
+
     def _query_teachers(self):
+        if getattr(self, '_teacher_loop', False):
+            return self._query_teachers_loop()
         with torch.no_grad():
             batched = vmap(self.single_model_forward, in_dims=(0, 0, 0, 0))
             n = self.running_means_all.shape[0]
