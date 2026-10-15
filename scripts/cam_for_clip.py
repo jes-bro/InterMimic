@@ -46,7 +46,7 @@ def clip_bounds(path: Path, include_object: bool = True) -> tuple:
     """
     if not path.is_file():
         raise SystemExit(f"no motion tensor at {path}")
-    data = torch.load(str(path), map_location="cpu")
+    data = torch.load(str(path), map_location="cpu").detach()   # OMOMO clips are saved with requires_grad
     if data.shape[-1] != 591:
         raise SystemExit(f"{path.name}: {data.shape[-1]} channels, want 591")
 
@@ -77,7 +77,7 @@ def heading_degrees(path: Path) -> float:
             meaningless and silently returning zero would aim the camera
             somewhere arbitrary.
     """
-    data = torch.load(str(path), map_location="cpu")
+    data = torch.load(str(path), map_location="cpu").detach()
     root = data[:, 0:3].numpy()
     delta = root[-1, :2] - root[0, :2]
     if np.linalg.norm(delta) < 0.3:

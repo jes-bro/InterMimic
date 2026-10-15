@@ -36,6 +36,9 @@
 #       sbatch slurm_render_policy.sh
 #   # a specific checkpoint of that arm:
 #   ARM=g3_omomo__f0 CHECKPOINT=checkpoints/.../nn/mimic_00054600.pth sbatch slurm_render_policy.sh
+#   # the SAME clip on several bodies (comparable videos; camera auto-framed to the clip):
+#   ARM=gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0 BODY=sub4 SOURCE=sub6 OBJECT=woodchair \
+#       CLIP=sub6_woodchair_000 FRAMES=600 sbatch slurm_render_policy.sh
 #
 # For a pre-gen-2 checkpoint with no arm-specific config (v1 multibody, distill,
 # crosspair), pass ENV_YAML/TRAIN explicitly -- e.g.
@@ -88,7 +91,42 @@ fi
 [ -f "$ENV_YAML" ]   || { echo "[render] ERROR: env cfg not found: $ENV_YAML"; exit 1; }
 [ -f "$TRAIN" ]      || { echo "[render] ERROR: train cfg not found: $TRAIN"; exit 1; }
 
-TAG="${BODY}_${SOURCE}${OBJECT:+_$OBJECT}"
+# CLIP pin (optional): play exactly ONE clip so renders of different bodies /
+# arms show the IDENTICAL motion. Without it the task samples a clip at random
+# per run (intermimic.py _sample_motion_ids), so two renders are not comparable.
+# Same mechanism as slurm_replay_xbody.sh: a one-clip motion dir passed as
+# --motion_file. The retargeted reference is resolved by clip basename under
+# retargetedMotionDir/<body>/, so the pin works for retargeting arms too.
+# CLIP must start with SOURCE's sub<N> (the dataSub filter keeps it) and be a
+# clip of OBJECT when OBJECT is set. The camera is auto-framed to the clip
+# (scripts/cam_for_clip.py) unless RECORD_VIDEO_CAM_POS is already set.
+CLIP="${CLIP:-}"
+MOT_ARG=""
+if [ -n "$CLIP" ]; then
+    case "$CLIP" in
+        "${SOURCE}"_*) : ;;
+        *) echo "[render] ERROR: CLIP=$CLIP does not start with SOURCE=$SOURCE" >&2; exit 1 ;;
+    esac
+    MOTION_DIR=$(python3 -c "import yaml,sys; print(yaml.safe_load(open('$ENV_YAML'))['env']['motion_file'])")
+    SRC_CLIP="$(pwd)/${MOTION_DIR}/${CLIP}.pt"
+    [ -f "$SRC_CLIP" ] || { echo "[render] ERROR: clip not found: $SRC_CLIP" >&2; exit 1; }
+    if [ -n "$OBJECT" ]; then
+        case "$CLIP" in
+            *_"${OBJECT}"_*) : ;;
+            *) echo "[render] ERROR: CLIP=$CLIP is not a ${OBJECT} clip" >&2; exit 1 ;;
+        esac
+    fi
+    CLIPDIR="/tmp/render_policy_clip_${CLIP}_$$"
+    mkdir -p "$CLIPDIR"; ln -sf "$SRC_CLIP" "$CLIPDIR/${CLIP}.pt"
+    MOT_ARG="--motion_file $CLIPDIR"
+    echo "[render] CLIP pinned: only ${CLIP}.pt (motion_file -> $CLIPDIR)"
+    if [ -z "${RECORD_VIDEO_CAM_POS:-}" ]; then
+        eval "$(python3 scripts/cam_for_clip.py "$SRC_CLIP" | grep -E '^export ')" || { echo "[render] ERROR: cam_for_clip.py failed for $SRC_CLIP" >&2; exit 1; }
+        echo "[render] camera auto-framed to the clip: pos=$RECORD_VIDEO_CAM_POS target=$RECORD_VIDEO_CAM_TARGET"
+    fi
+fi
+
+TAG="${BODY}_${SOURCE}${OBJECT:+_$OBJECT}${CLIP:+_${CLIP##*_}}"
 scontrol update JobId="$SLURM_JOB_ID" JobName="rp-$TAG" 2>/dev/null || true
 
 mkdir -p renders
@@ -121,7 +159,7 @@ EOPY
 RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
     python -u -m intermimic.run --task InterMimic \
         --cfg_env "$ENV_YAML" --cfg_train "$TRAIN" \
-        --subject_bodies "$BODY" --data_sub "$SOURCE" $OBJ_ARG \
+        --subject_bodies "$BODY" --data_sub "$SOURCE" $OBJ_ARG $MOT_ARG \
         --test --checkpoint "$CHECKPOINT" --headless --num_envs 1
 
 echo
