@@ -95,13 +95,58 @@ ALL_OBJECTS = {"clothesstand", "floorlamp", "largebox", "largetable", "monitor",
 # srcall13 arm's own value (same data, same bodies).
 ALL_ARM = ("all", ([o for objs, _ in GROUPS.values() for o in objs], "480G"))
 
+# SINGLE-OBJECT teachers, IN ADDITION to the groups (Jess, 2026-10-14: "object
+# specific, so it's the same as the basketball and soccer tasks"; "we don't need
+# the plain set"): one teacher per OMOMO object, 13 arms, the exact analogue of
+# bball7 / soccer15 (one object, every motion done with it), written ONLY on the
+# motion-scale reward (--single-object requires --motion-scale). Same edits as a
+# group arm with a one-element dataObjects; the arm is named by the object:
+# gen4_omomo_geoall_<object>_xf_nvadlr_nopose_msexp__f0.
+#
+# object -> (training clips over the 13 sources, measured ragged RAM GiB at the
+# 2.02x model). Measured 2026-10-14 on ~/new_one/OMOMO_new (4421 clips) with
+# scripts/motion_memory_budget.py --sources <13> --bodies 43 --psi 3 --objects <o>.
+# --mem is the GiB rounded up to the next 16G after a 4 GiB margin (the rule the
+# four group budgets follow: 94->112, 104->112, 128->144, 189->208), floored at
+# the fleet's 64G. Every object is absent from 3 to 10 of the 13 sources; the task
+# warns and trains on the sources that have it, as the chairs group arm did. The
+# clip count is baked into the launcher as a PRE-FLIGHT GUARD
+# (scripts/count_motion_clips.py): a cfg that lost dataObjects, or a dataset copy
+# with stray files, is refused before the GPU job starts.
+SINGLE_MEM_FLOOR_G = 64
+SINGLE_MEM_MARGIN_GIB = 4
+SINGLE_CLIPS_GIB = {
+    "woodchair": (385, 67), "smalltable": (355, 63), "tripod": (329, 55), "floorlamp": (294, 54),
+    "largetable": (293, 55), "suitcase": (280, 50), "trashcan": (278, 48), "plasticbox": (249, 49),
+    "clothesstand": (204, 47), "largebox": (196, 43), "whitechair": (181, 41), "monitor": (168, 37),
+    "smallbox": (144, 33),
+}
 
-def teachers(ms):
-    """The arms to write: the four groups, plus the all-objects generalist with --motion-scale."""
+
+def single_mem(gib):
+    """#SBATCH --mem for a single-object arm: (gib + margin) rounded UP to a
+    multiple of 16, never below the floor. Exact multiples round up too."""
+    need = gib + SINGLE_MEM_MARGIN_GIB
+    return f"{max(SINGLE_MEM_FLOOR_G, ((need + 15) // 16) * 16)}G"
+
+
+SINGLES = {o: ([o], single_mem(gib)) for o, (_, gib) in SINGLE_CLIPS_GIB.items()}
+
+
+def teachers(ms, single=False):
+    """The arms to write: the four groups (plus the all-objects generalist with
+    --motion-scale), or with --single-object the 13 one-object arms."""
+    if single:
+        return dict(SINGLES)
     return dict(GROUPS, **({ALL_ARM[0]: ALL_ARM[1]} if ms else {}))
 
 
-TEACHERS = dict(GROUPS, **{ALL_ARM[0]: ALL_ARM[1]})   # lookup table for every name we may write
+TEACHERS = dict(GROUPS, **{ALL_ARM[0]: ALL_ARM[1]}, **SINGLES)   # lookup table for every name we may write
+
+
+def kind(g):
+    """What the arm is, for its headers and echoes."""
+    return "SINGLE-OBJECT" if g in SINGLES else "OBJECT-GROUP"
 
 
 def arm(g, tag=""):
@@ -130,8 +175,13 @@ def env_header(g, tag="", ms=False):
         f"#   motionScaleReward   -> enable, referenceStd {MS_REFERENCE_STD} (utils/motion_scale.py: the 4th root\n"
         f"#                          becomes a per-clip exponent clamp((ref/std)^2, 1/4, 1): a clip moving no more\n"
         f"#                          than OMOMO's median is graded as PRODUCT, twice that or more keeps the root)\n")
-    return (f"# gen4 OBJECT-GROUP TEACHER {arm(g, tag)}: every OMOMO clip whose object is one of\n"
+    single_lines = "" if g not in SINGLES else (
+        f"# SINGLE-OBJECT arm (the OMOMO analogue of bball7 / soccer15): {SINGLE_CLIPS_GIB[g][0]} training clips\n"
+        f"# of this one object; its launcher refuses to start unless scripts/count_motion_clips.py finds\n"
+        f"# exactly that many, all {g}. Sources without this object are skipped with a warning.\n")
+    return (f"# gen4 {kind(g)} TEACHER {arm(g, tag)}: every OMOMO clip whose object is one of\n"
             f"#   {' '.join(objs)}\n"
+            + single_lines +
             f"# from the 13 fold-0 training sources, on the gen4 bodies. This file is the gen4 src1\n"
             f"# nopose transformer teacher's env cfg ({BASE}) with exactly {n_edits} edits\n"
             f"# (python3 scripts/cfg_diff.py the two files; pinned by tests/test_gen4_activity_teacher_cfgs.py):\n"
@@ -146,7 +196,7 @@ def env_header(g, tag="", ms=False):
 
 
 def train_header(g, tag=""):
-    return (f"# gen4 OBJECT-GROUP TEACHER train cfg for {arm(g, tag)}: byte-identical to the gen4 src1\n"
+    return (f"# gen4 {kind(g)} TEACHER train cfg for {arm(g, tag)}: byte-identical to the gen4 src1\n"
             f"# twin's train cfg (train/rlg/omomo_teacher_{BASE}.yaml) except full_experiment_name\n"
             f"# (own checkpoint dir). Transformer 6 tokens, normalize_value, adaptive LR exact-KL 0.06.\n")
 
@@ -158,12 +208,17 @@ def sh_header(g, tag="", ms=False):
         f"# guard checks the block is present) -- this arm trains on the NEW reward, so it differs from\n"
         f"# the gen4 per-source fleet by the grouping AND the reward.\n")
     mirror = " + motionScaleReward" if ms else ""
-    return (f"# gen4 OBJECT-GROUP TEACHER launcher for {arm(g, tag)}: the gen4 src1 launcher\n"
+    single = "" if g not in SINGLES else (
+        f"# SINGLE-OBJECT PRE-FLIGHT: scripts/count_motion_clips.py must find exactly {SINGLE_CLIPS_GIB[g][0]}\n"
+        f"# clips, all {g}, in motion_file for this cfg's dataSub, or the job exits before the GPU.\n"
+        f"# The task then prints '[retarget] expanded {SINGLE_CLIPS_GIB[g][0]} clips x 43 bodies' at startup:\n"
+        f"# grep that line in this job's .out as the runtime cross-check.\n")
+    return (f"# gen4 {kind(g)} TEACHER launcher for {arm(g, tag)}: the gen4 src1 launcher\n"
             f"# (slurm_teacher_{BASE}.sh) with the names/paths swapped to this arm, --mem={mem}\n"
             f"# (ragged budget, scripts/motion_memory_budget.py --objects {' '.join(objs)}), and two\n"
-            f"# more guards (raggedMotionData on; the merged retarget tree holds this group's clips\n"
+            f"# more guards (raggedMotionData on; the merged retarget tree holds this {'arm' if g in SINGLES else 'group'}'s clips\n"
             f"# for a real AND a gen4 body). Nothing else differs.\n"
-            + extra +
+            + extra + single +
             f"# Eval when done (hand-write omomo_eval_{arm(g, tag)}.yaml first, mirroring\n"
             f"# humanoidAssetSuffix + dataObjects{mirror}):  HELDOUT=\"sub4 sub10 sub13 sub16\" sh scripts/eval_one.sh {arm(g, tag)}\n")
 
@@ -232,11 +287,23 @@ fi
 """
 
 
+GUARD_SINGLE = """# Single-object pre-flight: the data this cfg loads must be exactly this arm's
+# NCLIPS clips of OBJECT (scripts/count_motion_clips.py applies the task's own
+# filename rule to motion_file). A cfg that lost dataObjects, or a dataset copy
+# with stray files, would otherwise train a generalist under this arm's name.
+if ! python3 scripts/count_motion_clips.py --cfg "$CFG_ENV" --expect-clips NCLIPS --expect-objects OBJECT; then
+    echo "[teacher] ERROR: single-object pre-flight failed for $CFG_ENV (see count_motion_clips output above)" >&2; exit 1
+fi
+"""
+
+
 def guard(g, ms=False):
     objs, _ = TEACHERS[g]
     out = GUARD_GROUP.replace("OBJECTS", " ".join(objs))
     if ms:
         out += GUARD_MS.replace("REFSTD", str(MS_REFERENCE_STD))
+    if g in SINGLES:
+        out += GUARD_SINGLE.replace("NCLIPS", str(SINGLE_CLIPS_GIB[g][0])).replace("OBJECT", g)
     return out
 
 
@@ -265,14 +332,14 @@ def rewrite_body(text, g, tag="", ms=False):
     ms_note = "" if not ms else "; reward exponent per clip from its key-body std (utils/motion_scale.py)"
     # the two recipe echo lines name the src1 arm's lineage; say what this arm is instead
     text, n = re.subn(r'^echo "\[teacher\] G3 RECIPE .*$',
-                      f'echo "[teacher] GEN4 OBJECT-GROUP RECIPE {arm(g, tag)} (OMOMO data, objects {" ".join(objs)}, '
+                      f'echo "[teacher] GEN4 {kind(g)} RECIPE {arm(g, tag)} (OMOMO data, objects {" ".join(objs)}, '
                       f'13 sources, RAGGED motion, 6-TOKEN TRANSFORMER, normval+adaptive LR, NO POSE TERM{reward_note}): '
                       f'43 bodies, no betas, gate resets=true, rollout 50, buf=12.0 num_envs=$NUM_ENVS"',
                       text, count=1, flags=re.M)
     if n != 1:
         raise SystemExit("ERROR: G3 RECIPE echo not found exactly once")
     text, n = re.subn(r'^echo "\[teacher\] METHOD CANDIDATE .*$',
-                      f'echo "[teacher] OBJECT GROUP {g}: the gen4 src1 nopose recipe with dataSub = 13 sources, '
+                      f'echo "[teacher] {kind(g).replace("-", " ")} {g}: the gen4 src1 nopose recipe with dataSub = 13 sources, '
                       f'dataObjects = {" ".join(objs)}, ragged storage, merged retarget tree; sampling unchanged '
                       f'(env e owns object e % n_obj){ms_note}"',
                       text, count=1, flags=re.M)
@@ -287,19 +354,27 @@ def main():
     ap.add_argument("--motion-scale", action="store_true",
                     help=f"write the _msexp arms instead: motionScaleReward on with referenceStd "
                          f"{MS_REFERENCE_STD} (exponent clamp((ref/std)^2, 1/4, 1); no floor)")
+    ap.add_argument("--single-object", action="store_true",
+                    help="write the 13 SINGLE-OBJECT arms (one teacher per OMOMO object) instead of the "
+                         "groups; motion-scale reward only, so --motion-scale is required with it")
     a = ap.parse_args()
     ms = a.motion_scale
     tag = MS_TAG if ms else ""
+    if a.single_object and not ms:
+        raise SystemExit("ERROR: the single-object arms are written on the motion-scale reward only "
+                         "(Jess 2026-10-14: no plain set); pass --motion-scale with --single-object")
     listed = [o for objs, _ in GROUPS.values() for o in objs]
     if sorted(listed) != sorted(ALL_OBJECTS):
         raise SystemExit(f"ERROR: groups must partition the 13 OMOMO objects exactly; got {sorted(listed)}")
+    if sorted(SINGLES) != sorted(ALL_OBJECTS):
+        raise SystemExit(f"ERROR: single-object table must cover the 13 OMOMO objects exactly; got {sorted(SINGLES)}")
     env_src = CFG / f"omomo_teacher_{BASE}.yaml"
     tr_src = CFG / "train/rlg" / f"omomo_teacher_{BASE}.yaml"
     sh_src = REPO / f"slurm_teacher_{BASE}.sh"
     for p in (env_src, tr_src, sh_src):
         if not p.is_file():
             raise SystemExit(f"ERROR: base file missing: {p}")
-    for g in teachers(ms):
+    for g in teachers(ms, a.single_object):
         env_out = CFG / f"omomo_teacher_{arm(g, tag)}.yaml"
         tr_out = CFG / "train/rlg" / f"omomo_teacher_{arm(g, tag)}.yaml"
         sh_out = REPO / f"slurm_teacher_{arm(g, tag)}.sh"
@@ -314,8 +389,8 @@ def main():
         print(f"{g:7s}: {env_out.name}  {tr_out.name}  {sh_out.name}")
         if a.diff:
             subprocess.run([sys.executable, str(REPO / "scripts/cfg_diff.py"), str(env_src), str(env_out)], check=False)
-    n_arms = len(teachers(ms))
-    print(f"wrote {3 * n_arms} files for {n_arms} object-group teacher arms"
+    n_arms = len(teachers(ms, a.single_object))
+    print(f"wrote {3 * n_arms} files for {n_arms} {'single-object' if a.single_object else 'object-group'} teacher arms"
           + (" (motion-scale variant)" if ms else ""))
 
 
