@@ -35,7 +35,18 @@ TRAIN_SOURCES = ["sub1", "sub2", "sub3", "sub5", "sub6", "sub7", "sub8", "sub9",
                  "sub11", "sub12", "sub14", "sub15", "sub17"]
 ALL_OBJECTS = {"clothesstand", "floorlamp", "largebox", "largetable", "monitor", "plasticbox",
                "smallbox", "smalltable", "suitcase", "trashcan", "tripod", "whitechair", "woodchair"}
-OMOMO_NEW = Path(os.path.expanduser("~/new_one/OMOMO_new"))     # the full release, 4421 clips
+def _omomo_new():
+    """The FULL OMOMO_new (4421 clips): $OMOMO_NEW, else the laptop copy, else the repo's
+    InterAct/OMOMO_new when it is the full set (the cluster clone). Tests hard-fail otherwise."""
+    for cand in (os.environ.get("OMOMO_NEW"), "~/new_one/OMOMO_new", str(REPO / "InterAct/OMOMO_new")):
+        if cand and Path(os.path.expanduser(cand)).is_dir():
+            n = sum(1 for x in os.listdir(os.path.expanduser(cand)) if x.endswith(".pt"))
+            if n == 4421:
+                return Path(os.path.expanduser(cand))
+    return Path(os.path.expanduser(os.environ.get("OMOMO_NEW") or "~/new_one/OMOMO_new"))
+
+
+OMOMO_NEW = _omomo_new()     # the full release, 4421 clips
 TRAIN_CLIPS = 3356                                               # 4421 minus sub4/10/13/16
 
 

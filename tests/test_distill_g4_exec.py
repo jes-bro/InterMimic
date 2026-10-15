@@ -38,7 +38,18 @@ torch = pytest.importorskip("torch")
 REPO = Path(__file__).resolve().parents[1]
 PKG = REPO / "isaacgym/src/intermimic"
 CFG = PKG / "data/cfg"
-OMOMO_NEW = Path(os.path.expanduser("~/new_one/OMOMO_new"))
+def _omomo_new():
+    """The FULL OMOMO_new (4421 clips): $OMOMO_NEW, else the laptop copy, else the repo's
+    InterAct/OMOMO_new when it is the full set (the cluster clone). Tests hard-fail otherwise."""
+    for cand in (os.environ.get("OMOMO_NEW"), "~/new_one/OMOMO_new", str(REPO / "InterAct/OMOMO_new")):
+        if cand and Path(os.path.expanduser(cand)).is_dir():
+            n = sum(1 for x in os.listdir(os.path.expanduser(cand)) if x.endswith(".pt"))
+            if n == 4421:
+                return Path(os.path.expanduser(cand))
+    return Path(os.path.expanduser(os.environ.get("OMOMO_NEW") or "~/new_one/OMOMO_new"))
+
+
+OMOMO_NEW = _omomo_new()
 TRAIN_SOURCES = [1, 2, 3, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17]
 GROUPS = {"boxes": ["largebox", "smallbox", "plasticbox", "suitcase", "trashcan", "monitor"],
           "stands": ["tripod", "clothesstand", "floorlamp"],
