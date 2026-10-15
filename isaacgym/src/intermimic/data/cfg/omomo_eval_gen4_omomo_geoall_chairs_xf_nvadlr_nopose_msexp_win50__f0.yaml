@@ -1,0 +1,141 @@
+# EVAL config -- SCORING VARIANT `win50` of gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0:
+# the SAME checkpoint scored over the TRAINING window (rolloutLength 50) instead of
+# the eval's 1000-frame window. Hand-written 2026-10-15.
+#
+# WHY. The chairs policies transfer to new bodies but slide across the floor over
+# the 1000-frame eval (Jess, renders of 2026-10-15). The arms train with a 50-frame
+# window from a reference state (Hybrid init + PSI), so a policy that tracks well
+# for 50 frames and drifts after is consistent with everything measured so far.
+# This variant separates the two: if human_pose_error over 50-frame windows is far
+# below the 1000-window number (0.145 m in-dist / 0.153 held-out @27000), the
+# horizon is the cause and the fix is the training window; if it is as bad at 50,
+# the reward is. SUCCESS IS MEANINGLESS IN THIS CFG: an episode is cut at frame 49
+# and success needs the clip's last frame (check_eval_rollout.py), so every clip
+# reads 0 by construction. Read human_pose_error / object_pose_error only.
+#
+# The guard (scripts/check_eval_cfg.py) allows ONLY the key declared under
+# scoringVariant.overrides to differ from the mirrored eval. CSVs carry the suffix
+# __win50 so they never collide with the 1000-window eval's.
+# Everything below the evalFor/scoringVariant block is byte-identical to
+# omomo_eval_gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0.yaml except the one
+# overridden line. Submit with SOURCES restricted to the 9 chair sources, as always.
+evalFor:
+  - gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0+win50
+
+scoringVariant:
+  name: win50
+  arm: gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0
+  overrides:
+    rolloutLength: 50                        # the TRAINING window, instead of the eval's 1000
+
+env:
+  numEnvs: 1024                            # CONCURRENCY, not the attempt budget; the
+                                           # same in every eval cfg (check_eval_cfg.py)
+  envSpacing: 2
+  episodeLength: 300
+  isFlagrun: False
+  enableDebugVis: False
+  playdataset: False
+  projtype: "None"
+  saveImages: False
+  initVel: True
+  moreRigid: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2 # 30 Hz
+  stateInit: "Start"                       # eval-owned: metrics exist only in Start
+  enableEvaluation: True                   # eval-owned
+  rolloutLength: 50                        # VARIANT: the training window. Success is
+                                           # UNDEFINED here (never reaches the clip end);
+                                           # read human_pose_error only
+  physicalBufferSize: 1                    # eval-owned: PSI copies are identical at eval
+  hybridInitProb: 0.1
+  dataFPS: 30
+  dataFramesScale: 1
+  dataObjects: ['whitechair', 'woodchair']
+  dataSub: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']   # overwritten per pair by --data_sub
+  subjectBodies: ['sub2']                  # patched per pair by eval_per_pair.py
+  humanoidAssetSuffix: _inertial
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_srcall13
+  cpuMotionData: true
+  raggedMotionData: true
+  subjectHeightsFile: scripts/synthetic_heights_gen4.json
+  bodyNormalizedReward: true
+  ballSize: 1.0
+  numObs: 9594                             # 6 horizons x 1599, no betas block
+  obsHorizons: [1, 4, 7, 10, 13, 16]
+  motion_file: InterAct/OMOMO_new
+  robotType: "smplx/omomo.xml"             # fallback only; ignored when subjectBodies is set
+  objectDensity: 200
+  localRootObs: False
+  keyBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+  contactBodies: ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest", "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Index3", "L_Middle3", "L_Pinky3", "L_Ring3", "L_Thumb3", "R_Index3", "R_Middle3", "R_Pinky3", "R_Ring3", "R_Thumb3"]
+  terminationHeight: 0.15
+  enableEarlyTermination: True
+
+  resetThresholds:
+    human: 0.5
+    object: 0.5
+    igRatio: 2.0
+    contactSteps: 10
+
+  asset:
+    assetRoot: "intermimic/data/assets"
+
+  plane:
+    staticFriction: 0.9
+    dynamicFriction: 0.9
+    restitution: 0.7
+
+  rewardShape: geometric_all
+
+  motionScaleReward:
+    enable: true
+    referenceStd: 0.5157
+
+  rewardTerms:
+    pose:
+      enable: false
+      lambda: 0.02
+    freeFlightGate:
+      reward: false
+      resets: true
+
+  rewardWeights:
+    p: 30.0
+    r: 2.5
+    pv: 0.0
+    rv: 0.0
+
+    op: 5.0
+    or: 0.1
+    opv: 0.1
+    orv: 0.0
+
+    ig: 5.0
+
+    cg_hand: 5.0
+    cg_other: 5.0
+    cg_all: 3.0
+
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 12.0
+    max_gpu_contact_pairs: 34603008
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25

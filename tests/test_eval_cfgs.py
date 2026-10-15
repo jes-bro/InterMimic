@@ -350,8 +350,17 @@ def test_rollout_window_can_reach_the_success_condition(path):
     frames. One value for every arm, above the longest clip in ANY of them
     (cpr 691), so no arm can be quietly truncated again by a per-arm number.
     """
-    env = cec.load(path)["env"]
+    cfg = cec.load(path)
+    env = cfg["env"]
     train_rollout = cec.load(cec.train_cfg_for(cec.eval_cfgs()[path][0]))["env"]["rolloutLength"]
+    sv = cfg.get("scoringVariant") or {}
+    if "rolloutLength" in (sv.get("overrides") or {}):
+        # A DECLARED window variant (win50, 2026-10-15): scores the training window on
+        # purpose, success is undefined there and the cfg header must say so. Still
+        # never silently -- the override and the header are both required.
+        assert env["rolloutLength"] == sv["overrides"]["rolloutLength"] == train_rollout
+        assert "SUCCESS IS MEANINGLESS" in open(path).read()
+        return
     assert env["rolloutLength"] > train_rollout, (
         "eval rollout window must be widened past the training window")
     assert env["rolloutLength"] == EVAL_ROLLOUT

@@ -111,8 +111,12 @@ def test_player_wires_dump_pick_best(tmp_path):
     assert "_best_record(done, info)" in s and "if _best.all_ended() or _best.full():" in s
     assert 'term = info.get("terminate")' in s                    # success = done without termination
     assert "chosen_env=s[\"chosen_env\"]" in s and "frames_per_env" in s
-    # the original env-0 path is untouched for DUMP_PICK unset
-    assert "elif _traj is not None:\n                        if len(_traj[\"body_rot\"]) < _dump_max:" in s
+    # ONE dump site per step in the inference branch (two until 2026-10-15: every env-0
+    # dump recorded each frame twice), and dump/video exits close each other out
+    inf = s[s.index("# inference"):]
+    assert inf.count("_dump_step()") == 1 and "def _finish_and_exit():" in inf
+    assert "elif _traj is not None:\n                        _dump_step()\n                        if len(_traj[\"body_rot\"]) >= _dump_max:" in inf
+    assert "if _best is not None:\n                                _best_save()\n                            elif _traj is not None:\n                                _dump_save()" in inf
 
 
 def test_task_teacher_skip_flag_is_test_only():

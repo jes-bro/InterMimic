@@ -367,13 +367,26 @@ def check(eval_path, train_path, spec=None):
                         f"scoringVariant block declaring what differs")
     elif variant is not None:
         overrides = dict(sv["overrides"])
+        # The "changes nothing" baseline: the ARM for an arm-identity key, but the
+        # arm's PLAIN EVAL for an eval-owned key -- rolloutLength is 50 in every
+        # arm and 1000 in every eval, so a variant scoring over the training
+        # window (win50, 2026-10-15) is a real change against the eval and would
+        # wrongly read as a no-op against the arm.
+        base = {}
+        if any(k.split(".")[-1] in EVAL_OWNED for k in overrides):
+            arm_only, _ = split_variant(spec)
+            plain = resolve(arm_only)
+            pe = load(plain)
+            base = flatten(pe.get("env")); base.update(flatten({"sim": pe.get("sim")}))
         for key, want in overrides.items():
             va, vb = a.get(key, ABSENT), b.get(key, ABSENT)
             if va != want:
                 problems.append(f"  override {key}: declared {want!r} but the eval "
                                 f"has {fmt(va)}")
-            if vb == want:
-                problems.append(f"  override {key}: arm already has {want!r} -- this "
+            eval_owned = key.split(".")[-1] in EVAL_OWNED
+            against, who = (base.get(key, ABSENT), "the arm's plain eval") if eval_owned else (vb, "arm")
+            if against == want:
+                problems.append(f"  override {key}: {who} already has {want!r} -- this "
                                 f"variant changes nothing and must not exist")
 
     for key in sorted(set(a) | set(b)):

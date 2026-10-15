@@ -350,32 +350,35 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                     if _tk_wandering is not None:
                         _tk_wander_deaths += _takeover_mod.count_wander_deaths(
                             done, _tk_wandering)
-                    # A policy rollout dumps the same way a replay does, so the
-                    # two render identically and can be compared frame to frame.
-                    if _best is not None:
-                        _best_record(done, info)
-                        if _best.all_ended() or _best.full():
-                            _best_save()
-                            import sys
-                            sys.exit(0)
-                    elif _traj is not None:
-                        if len(_traj["body_rot"]) < _dump_max:
-                            _dump_step()
-                        else:
-                            _dump_save()
-                            import sys
-                            sys.exit(0)
                     cr += r
                     steps += 1
 
                     self._post_step(info)
 
-                    if _traj is not None:
+                    # A policy rollout dumps the same way a replay does, so the
+                    # two render identically and can be compared frame to frame.
+                    # ONE dump site per step. Until 2026-10-15 there were two (the
+                    # 2026-07-17 one here and a 2026-08-05 one above `cr += r`),
+                    # so every env-0 DUMP_TRAJ rollout recorded each frame TWICE.
+                    # When the dump is complete the video writer, if any, is closed
+                    # before exiting, and vice versa, so neither output is truncated.
+                    def _finish_and_exit():
+                        if _writer is not None:
+                            _writer.close()
+                            print(f"[player] wrote {_frames_written} frames to {_record_path}, video done", flush=True)
+                        import sys
+                        sys.exit(0)
+
+                    if _best is not None:
+                        _best_record(done, info)
+                        if _best.all_ended() or _best.full():
+                            _best_save()
+                            _finish_and_exit()
+                    elif _traj is not None:
                         _dump_step()
                         if len(_traj["body_rot"]) >= _dump_max:
                             _dump_save()
-                            import sys
-                            sys.exit(0)
+                            _finish_and_exit()
 
                     if _writer is not None:
                         task = self.env.task
@@ -394,6 +397,12 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             # When recording was the whole point (RECORD_VIDEO set),
                             # exit now — don't keep running the policy and printing
                             # reward stats that block the next render in the script.
+                            # A pending dump is saved first (DUMP_FRAMES > the video
+                            # length would otherwise lose it).
+                            if _best is not None:
+                                _best_save()
+                            elif _traj is not None:
+                                _dump_save()
                             import sys
                             sys.exit(0)
 
