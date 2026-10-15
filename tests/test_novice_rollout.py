@@ -299,3 +299,92 @@ def test_short_form_dry_run(tmp_path, real_clip):
             expert_mjcf.unlink(missing_ok=True)
         if made_ckpt:
             (ckpt_dir / "mimic_00027000.pth").unlink(missing_ok=True); ckpt_dir.rmdir(); ckpt_dir.parent.rmdir()
+
+
+# ----------------------------------------------------------------- retrieval -> expert clip
+def _matches(tmp_path):
+    doc = {"query": {"clip": "Date170_Sub204_bball_t004a"}, "hits": [
+        {"rank": 1, "clip": "Date08_Sub09_bball_t022a", "participant": 385, "participant_tier": "unlabelled",
+         "take_label": "unlabelled", "motion_sim": 0.37, "body_dist": 0.73},
+        {"rank": 2, "clip": "Date03_Sub01_bball_rev009c", "participant": 387, "participant_tier": "Late Expert",
+         "take_label": "Late Expert", "motion_sim": 0.32, "body_dist": 0.23},
+        {"rank": 3, "clip": "Date06_Sub04_bball_t012a", "participant": 382, "participant_tier": "Late Expert",
+         "take_label": "Late Expert", "motion_sim": 0.30, "body_dist": 0.40},
+    ]}
+    m = tmp_path / "matches.json"; json.dump(doc, open(m, "w"))
+    return m
+
+
+def test_installed_name_for_uses_the_manifest_naming_rule(tmp_path):
+    md = tmp_path / "InterAct" / "act"; md.mkdir(parents=True)
+    (md / "sub401_bballd03s01rev009c_001.pt").write_bytes(b"x")
+    assert nr.installed_name_for("Date03_Sub01_bball_rev009c", "InterAct/act", repo=tmp_path).name == "sub401_bballd03s01rev009c_001.pt"
+    with pytest.raises(SystemExit, match="expected exactly one installed file"):
+        nr.installed_name_for("Date06_Sub04_bball_t012a", "InterAct/act", repo=tmp_path)
+    (md / "sub401_bballd03s01rev009c_002.pt").write_bytes(b"x")
+    with pytest.raises(SystemExit, match="expected exactly one installed file"):
+        nr.installed_name_for("Date03_Sub01_bball_rev009c", "InterAct/act", repo=tmp_path)
+    with pytest.raises(SystemExit, match="is not Date<N>_Sub<N>"):
+        nr.installed_name_for("garbage", "InterAct/act", repo=tmp_path)
+
+
+def test_pick_expert_skips_unrated_and_uninstalled_hits(tmp_path, capsys):
+    m = _matches(tmp_path)
+    md = tmp_path / "InterAct" / "act"; md.mkdir(parents=True)
+    (md / "sub409_bballd08s09t022a_000.pt").write_bytes(b"x")       # rank 1 IS installed but unrated
+    (md / "sub401_bballd03s01rev009c_001.pt").write_bytes(b"x")     # rank 2: rated + installed
+    hit, path = nr.pick_expert(m, "InterAct/act", repo=tmp_path)
+    assert hit["rank"] == 2 and path.name == "sub401_bballd03s01rev009c_001.pt"
+    out = capsys.readouterr().out
+    assert "#1 Date08_Sub09_bball_t022a" in out and "skipped: not a rated expert" in out
+    assert "#2 Date03_Sub01_bball_rev009c" in out and "<== chosen" in out
+    assert "#3 Date06_Sub04_bball_t012a" in out and "NOT INSTALLED" in out
+    # rank 2 gone: rank 3 is rated but not installed -> refuse, never fall back to the unrated rank 1
+    (md / "sub401_bballd03s01rev009c_001.pt").unlink()
+    with pytest.raises(SystemExit, match="no retrieval hit is both a RATED expert and installed"):
+        nr.pick_expert(m, "InterAct/act", repo=tmp_path)
+
+
+def test_dry_run_with_matches_json_picks_the_rated_expert(tmp_path, real_clip):
+    """Short form with a prior matches.json: the expert comes from retrieval, not a flag."""
+    seq = "Date170_Sub9996_woodchair_t004a"
+    d = _novice_export(tmp_path, seq)
+    inst = REPO / "InterAct" / f"behave_cari4d_{seq.lower()}"
+    novice_mjcf = ASSETS / "smplx/smplh_behave_sub9996.xml"
+    expert_mjcf = ASSETS / "smplx/smplh_behave_sub402.xml"          # 400 + Sub02
+    expert_file = REPO / "InterAct/OMOMO_new" / "sub402_woodchaird03s02rev009c_000.pt"   # chairs arm's motion dir
+    made_expert_mjcf = not expert_mjcf.exists()
+    models = tmp_path / "models"; models.mkdir(); (models / "SMPLH_MALE.pkl").write_bytes(b"x")
+    ckpt = tmp_path / "c.pth"; ckpt.write_bytes(b"x")
+    matches = tmp_path / "m.json"
+    json.dump({"query": {"clip": seq}, "hits": [
+        {"rank": 1, "clip": "Date03_Sub02_woodchair_rev009c", "participant": 388, "participant_tier": "Late Expert",
+         "take_label": "Late Expert", "motion_sim": 0.3, "body_dist": 0.2}]}, open(matches, "w"))
+    try:
+        inst.mkdir(parents=True); (inst / "sub9996_woodchair_000.pt").symlink_to(real_clip)
+        expert_file.symlink_to(real_clip)
+        novice_mjcf.write_text(TRACKED_MJCF.read_text())
+        if made_expert_mjcf:
+            expert_mjcf.write_text(TRACKED_MJCF.read_text())
+        base = [sys.executable, str(REPO / "scripts/novice_rollout.py"), "--dry-run", "--novice-dir", str(d),
+                "--matches", str(matches), "--checkpoint", str(ckpt), "--out", str(tmp_path / "out")]
+        # the chairs arm lists sub2, not sub402, as a source: the plan must refuse that (expert not a training source)
+        r = subprocess.run(base + ["--arm", "gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0"],
+                           capture_output=True, text=True, cwd=str(REPO), env={**os.environ, "SMPLX_MODELS": str(models)})
+        assert r.returncode != 0 and "is not in the arm's dataSub" in r.stderr, r.stdout + r.stderr
+        assert "<== chosen" in r.stdout and "retrieval hits for" in r.stdout      # the pick itself happened first
+    finally:
+        (inst / "sub9996_woodchair_000.pt").unlink(missing_ok=True); inst.rmdir()
+        expert_file.unlink(missing_ok=True); novice_mjcf.unlink(missing_ok=True)
+        if made_expert_mjcf:
+            expert_mjcf.unlink(missing_ok=True)
+
+
+def test_retrieval_copy_carries_the_three_documented_changes():
+    s = (REPO / "scripts/recon_retrieval.py").read_text()
+    assert 'DEFAULT_DB = osp.join(HERE, "recon_retrieval_db")' in s
+    assert (REPO / "scripts/recon_retrieval_db").is_dir() and any((REPO / "scripts/recon_retrieval_db").iterdir())
+    assert "note: no takes.json" in s and '"--rated_only"' in s
+    assert 'key="participant_tier", match=models.MatchAny(any=list(RATED_TIERS))' in s
+    assert nr.RATED_TIERS == ("Early Expert", "Intermediate Expert", "Late Expert")
+    assert "PULLED INTO InterMimic" in s and "57fa48f" in s

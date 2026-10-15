@@ -36,11 +36,15 @@ smplx_omomo_<sub>.xml; a reconstructed person is smplh_behave_<sub>.xml).
 Students run through intermimic.run_distill with DISTILL_SKIP_TEACHERS=1 (at
 test the teachers are never used, so only the student .pth is needed).
 
-    # SHORT FORM: the expert clip's name + the novice's CARI4D export folder; the arm
+    # THE WHOLE THING from the novice's CARI4D export folder: retrieval picks the
+    # expert (scripts/recon_retrieval.py query, --rated_only; first rated hit that is
+    # installed for the arm), then retarget -> rollout -> render -> overlay. The arm
     # (act student), its latest checkpoint, $SMPLX_MODELS, $CARI4D_ROOT and the output
-    # dir are defaults. --dry-run validates and prints the plan, running nothing:
+    # dir are defaults. --dry-run validates and prints the plan, running nothing but
+    # the retrieval (CPU, seconds):
     SMPLX_MODELS=/path/to/models/smplx python3 scripts/novice_rollout.py --dry-run \\
-        --expert-clip sub401_bballd03s01rev003b_000 --novice-dir ~/novice_Sub204/Date170_Sub204_bball_t004a
+        --novice-dir ~/novice_Sub204/Date170_Sub204_bball_t004a --drill "Reverse Layup"
+    # --expert-clip <name> overrides retrieval; --matches <json> reuses a retrieval run
     # LONG FORM: every input explicit (--novice-clip --novice-bundle --object-mesh --gender
     # --arm --checkpoint --models --out); any of them also overrides the short form.
     # then the same line without --dry-run on a GPU node (scripts/slurm_novice_rollout.sh)
@@ -251,6 +255,85 @@ def resolve_expert_clip(name_or_path, motion_file, repo=REPO):
     raise PlanError(f"expert clip {name_or_path!r} not found as a path nor as {cand}")
 
 
+RATED_TIERS = ("Early Expert", "Intermediate Expert", "Late Expert")
+
+
+def installed_name_for(cari4d_clip, motion_file, repo=REPO):
+    """A CARI4D clip name (Date03_Sub01_bball_rev009c, as retrieval reports it) ->
+    the clip INSTALLED for training in the arm's motion dir. The naming rule is
+    scripts/cari4d_bball7_manifest.py's (subject 400+Sub, object token
+    'bball'+date/sub/clip compressed) with the clip index left to a glob:
+    InterAct/<motion_file>/sub401_bballd03s01rev009c_*.pt, exactly one."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("mf", REPO / "scripts/cari4d_bball7_manifest.py")   # the rule lives here; `repo` scopes the motion dir
+    mf = importlib.util.module_from_spec(spec); spec.loader.exec_module(mf)
+    try:
+        token, sid = mf.object_token(cari4d_clip), mf.subject_id(cari4d_clip)
+    except ValueError as e:
+        raise PlanError(str(e))
+    hits = sorted((repo / motion_file).glob(f"sub{sid}_{token}_*.pt"))
+    if len(hits) != 1:
+        raise PlanError(f"retrieved expert clip {cari4d_clip} -> expected exactly one installed file "
+                        f"{repo / motion_file}/sub{sid}_{token}_*.pt, found {[h.name for h in hits]} "
+                        f"(not converted for this arm, or dropped from its data)")
+    return hits[0]
+
+
+def pick_expert(matches, motion_file, repo=REPO, prefer_installed=True):
+    """The expert clip from a retrieval matches.json: the first hit, by rank, whose
+    participant is RATED (Early / Intermediate / Late Expert) AND whose clip is
+    installed in the arm's motion dir. Prints the full tier table first, so the
+    choice is auditable; refuses when no hit qualifies. Returns (hit, installed path)."""
+    doc = json.load(open(matches)) if not isinstance(matches, dict) else matches
+    hits = doc.get("hits") or []
+    if not hits:
+        raise PlanError(f"no hits in {matches}")
+    print(f"== retrieval hits for {doc.get('query', {}).get('clip', '?')} (rated tiers: {', '.join(RATED_TIERS)}):")
+    chosen = None
+    for h in hits:
+        tier = h.get("participant_tier")
+        rated = tier in RATED_TIERS
+        status = ""
+        inst = None
+        if rated:
+            try:
+                inst = installed_name_for(h["clip"], motion_file, repo)
+                status = f"-> {inst.name}"
+            except SystemExit as e:
+                status = f"-> NOT INSTALLED ({str(e).split('(')[-1].rstrip(')')})"
+        else:
+            status = "-> skipped: not a rated expert"
+        mark = " <== chosen" if (chosen is None and rated and inst is not None) else ""
+        print(f"   #{h['rank']} {h['clip']:34s} participant {h.get('participant')} ({tier}; take {h.get('take_label')}) "
+              f"motion_sim {h.get('motion_sim', 0):.3f} body_dist {h.get('body_dist', 0):.3f} {status}{mark}")
+        if chosen is None and rated and inst is not None:
+            chosen = (h, inst)
+    if chosen is None:
+        raise PlanError("no retrieval hit is both a RATED expert and installed for this arm; widen --top, check "
+                        "the arm's motion dir, or pass --expert-clip explicitly (an unrated person is never used)")
+    return chosen
+
+
+def run_retrieval(novice_dir, out_dir, python, drill=None, top=5, extra=()):
+    """scripts/recon_retrieval.py query on the novice's export folder -> the matches.json it wrote."""
+    novice_dir = Path(os.path.expanduser(str(novice_dir))).absolute()
+    out_dir = Path(out_dir).absolute()
+    cmd = [python, str(REPO / "scripts/recon_retrieval.py"), "query", "--clip_dir", str(novice_dir),
+           "--top", str(top), "--no_videos", "--rated_only", "--out_dir", str(out_dir)] + list(extra)
+    if drill:
+        cmd += ["--task", drill]
+    print("== retrieval: " + " ".join(cmd), flush=True)
+    r = subprocess.run(cmd, cwd=str(REPO))
+    if r.returncode != 0:
+        raise PlanError(f"[retrieval] failed (exit {r.returncode}); it needs qdrant-client in {python}")
+    meta = json.load(open(novice_dir / "meta.json"))
+    seq = meta.get("clip") or novice_dir.name
+    m = out_dir / seq / "matches.json"
+    if not m.is_file():
+        raise PlanError(f"[retrieval] wrote no {m}")
+    return m
+
+
 def latest_checkpoint(arm, train_yaml, repo=REPO):
     """The arm's latest numbered snapshot (eval_one.sh's rule), else mimic.pth."""
     exp = re.search(r"full_experiment_name:\s*(\S+)", train_yaml.read_text())
@@ -289,7 +372,29 @@ def build_plan(a):
             raise PlanError(f"--{k.replace('_', '-')} is required (or give --novice-dir, the CARI4D export folder)")
     if not a.models:
         raise PlanError("--models is required (or set SMPLX_MODELS)")
-    expert_clip = resolve_expert_clip(a.expert_clip, env["motion_file"])
+    retrieval = None
+    if a.expert_clip:
+        expert_clip = resolve_expert_clip(a.expert_clip, env["motion_file"])
+    else:
+        if a.matches:
+            matches = Path(os.path.expanduser(a.matches)).absolute()
+            if not matches.is_file():
+                raise PlanError(f"--matches not found: {matches}")
+        elif a.novice_dir:
+            out = Path(a.out).absolute() if a.out else None
+            sibling = Path(os.path.expanduser(a.novice_dir)).absolute()
+            seq = (json.load(open(sibling / "meta.json")).get("clip") if (sibling / "meta.json").is_file() else None) or sibling.name
+            prior = sibling.parent / "matches" / seq / "matches.json"
+            if a.reuse_matches and prior.is_file():
+                print(f"== retrieval: reusing {prior} (--reuse-matches)")
+                matches = prior
+            else:
+                matches = run_retrieval(a.novice_dir, (out or REPO / "renders" / f"novice_{sibling.name}") / "retrieval",
+                                        a.retrieval_python, a.drill, a.top)
+        else:
+            raise PlanError("give --expert-clip, or --matches <matches.json>, or --novice-dir (retrieval runs on it)")
+        hit, expert_clip = pick_expert(matches, env["motion_file"])
+        retrieval = {"matches": str(matches), "hit": hit}
     novice_clip = _file(a.novice_clip, "novice clip")
     bundle = _file(a.novice_bundle, "novice bundle")
     mesh = _file(a.object_mesh, "object mesh")
@@ -328,7 +433,7 @@ def build_plan(a):
         "num_envs": a.num_envs,
         "frames": a.frames, "gender": a.gender, "video": a.video, "cari4d_root": a.cari4d_root,
         "flat_color": a.flat_color, "retarget_iters": a.retarget_iters,
-        "is_student": entry.endswith("run_distill"),
+        "is_student": entry.endswith("run_distill"), "retrieval": retrieval,
     }
 
 
@@ -406,9 +511,17 @@ def commands(p, derived):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--expert-clip", required=True,
-                    help="the EXPERT's training clip: a bare name like sub401_bballd03s01rev003b_000 (looked up in "
-                         "the arm's motion dir) or a path")
+    ap.add_argument("--expert-clip", default=None,
+                    help="OVERRIDE the retrieval: the expert's training clip, a bare name like "
+                         "sub401_bballd03s01rev003b_000 (looked up in the arm's motion dir) or a path. Default: "
+                         "RETRIEVED -- scripts/recon_retrieval.py query on --novice-dir, first RATED hit that is installed")
+    ap.add_argument("--matches", default=None, help="a retrieval matches.json to pick the expert from (skips running retrieval)")
+    ap.add_argument("--reuse-matches", action="store_true",
+                    help="use <novice-dir>/../matches/<seq>/matches.json if it exists instead of re-running retrieval")
+    ap.add_argument("--drill", default=None, help="retrieval --task, e.g. 'Reverse Layup' (default: all drills of the DB)")
+    ap.add_argument("--top", type=int, default=5, help="retrieval --top")
+    ap.add_argument("--retrieval-python", default=sys.executable,
+                    help="python with qdrant-client for scripts/recon_retrieval.py (default: this one)")
     ap.add_argument("--novice-dir", default=None,
                     help="SHORT FORM: the novice's CARI4D export folder (<seq>.pth, *_align.obj, meta.json); "
                          "gives --novice-bundle, --object-mesh, --gender and the installed --novice-clip")
@@ -439,6 +552,12 @@ def main(argv=None):
     stages, rt_file, dump, betas = commands(p, derived)
 
     print(f"== novice_rollout: {p['novice']} performs {p['expert_clip'].name} (expert {p['expert']}, object {p['object']})")
+    if p["retrieval"]:
+        h = p["retrieval"]["hit"]
+        print(f"   expert from  : retrieval rank {h['rank']} {h['clip']} (participant {h['participant']}, {h['participant_tier']}; "
+              f"motion_sim {h['motion_sim']:.3f}, body_dist {h['body_dist']:.3f}) -- {p['retrieval']['matches']}")
+    else:
+        print("   expert from  : --expert-clip (explicit override of retrieval)")
     print(f"   novice recon : {p['novice_clip'].name} + bundle {p['seq']} (camera, betas, {p['gender']})")
     print(f"   arm          : {p['arm']}  ->  {p['entry']} / {p['task']}"
           + ("  [DISTILL_SKIP_TEACHERS=1: student .pth only]" if p["is_student"] else ""))
