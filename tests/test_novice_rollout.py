@@ -206,3 +206,96 @@ def test_student_arm_commands_use_run_distill_and_the_teacher_skip(tmp_path):
     assert argv[argv.index("--subject_bodies") + 1] == "sub204" and argv[argv.index("--data_sub") + 1] == "sub401"
     assert rt_file == tmp_path / "retarget" / "sub204" / "sub401_bballx_000.pt"
     assert "--anchor-rollout" in stages[3][2] and stages[4][2] is None
+
+
+# ----------------------------------------------------------------- the short form
+def _novice_export(root, seq="Date170_Sub9997_bball_t004a", gender="male"):
+    d = root / seq; d.mkdir(parents=True)
+    (d / f"{seq}.pth").write_bytes(b"x")
+    (d / f"{seq}_067_align.obj").write_text("v 0 0 0\n")
+    json.dump({"clip": seq, "gender": gender, "n_frames": 135}, open(d / "meta.json", "w"))
+    return d
+
+
+def test_resolve_novice_dir_from_a_cari4d_export_folder(tmp_path, real_clip):
+    d = _novice_export(tmp_path)
+    repo = tmp_path / "repo"
+    inst = repo / "InterAct" / "behave_cari4d_date170_sub9997_bball_t004a"; inst.mkdir(parents=True)
+    (inst / "sub9997_bball_000.pt").symlink_to(real_clip)
+    bundle, mesh, gender, clip, n = nr.resolve_novice_dir(d, repo=repo)
+    assert bundle.name == "Date170_Sub9997_bball_t004a.pth" and mesh.name.endswith("_067_align.obj")
+    assert gender == "male" and clip.name == "sub9997_bball_000.pt" and n == 135
+    # refusals: no installed clip, two bundles, bad gender
+    with pytest.raises(SystemExit, match="exactly one installed clip"):
+        nr.resolve_novice_dir(d, repo=tmp_path / "empty")
+    (d / "other.pth").write_bytes(b"x")
+    with pytest.raises(SystemExit, match="exactly one bundle"):
+        nr.resolve_novice_dir(d, repo=repo)
+    (d / "other.pth").unlink()
+    json.dump({"clip": "Date170_Sub9997_bball_t004a", "gender": None}, open(d / "meta.json", "w"))
+    with pytest.raises(SystemExit, match="gender is None"):
+        nr.resolve_novice_dir(d, repo=repo)
+
+
+def test_resolve_expert_clip_by_bare_name_in_the_arms_motion_dir(tmp_path, real_clip):
+    repo = tmp_path / "repo"; md = repo / "InterAct" / "act"; md.mkdir(parents=True)
+    (md / "sub401_bballd03_000.pt").symlink_to(real_clip)
+    assert nr.resolve_expert_clip("sub401_bballd03_000", "InterAct/act", repo=repo).name == "sub401_bballd03_000.pt"
+    assert nr.resolve_expert_clip("sub401_bballd03_000.pt", "InterAct/act", repo=repo).name == "sub401_bballd03_000.pt"
+    assert nr.resolve_expert_clip(str(real_clip), "InterAct/act", repo=repo) == real_clip.absolute()
+    with pytest.raises(SystemExit, match="not found as a path nor as"):
+        nr.resolve_expert_clip("sub402_x_000", "InterAct/act", repo=repo)
+
+
+def test_latest_checkpoint_rule(tmp_path):
+    tr = tmp_path / "t.yaml"; tr.write_text("params:\n  config:\n    full_experiment_name: smplx_student_x\n")
+    nn = tmp_path / "checkpoints" / "smplx_student_x" / "nn"; nn.mkdir(parents=True)
+    with pytest.raises(SystemExit, match="no checkpoint"):
+        nr.latest_checkpoint("x", tr, repo=tmp_path)
+    (nn / "mimic.pth").write_bytes(b"x")
+    assert nr.latest_checkpoint("x", tr, repo=tmp_path).name == "mimic.pth"
+    for n in ("mimic_00018000.pth", "mimic_00100000.pth", "mimic_00099000.pth"):
+        (nn / n).write_bytes(b"x")
+    assert nr.latest_checkpoint("x", tr, repo=tmp_path).name == "mimic_00100000.pth"
+
+
+def test_short_form_dry_run(tmp_path, real_clip):
+    """--expert-clip <bare name> --novice-dir <folder>, everything else defaulted or from
+    the environment, through the chairs teacher arm (its motion dir is OMOMO_new)."""
+    seq = "Date170_Sub9997_woodchair_t004a"
+    d = _novice_export(tmp_path, seq)
+    inst = REPO / "InterAct" / f"behave_cari4d_{seq.lower()}"
+    novice_mjcf = ASSETS / "smplx/smplh_behave_sub9997.xml"
+    expert_mjcf = ASSETS / "smplx/smplx_omomo_sub6.xml"
+    made_expert = not expert_mjcf.exists()
+    models = tmp_path / "models"; models.mkdir(); (models / "SMPLH_MALE.pkl").write_bytes(b"x")
+    ckpt_dir = REPO / "checkpoints" / "smplx_teacher_gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0" / "nn"
+    made_ckpt = not ckpt_dir.exists()
+    try:
+        inst.mkdir(parents=True); (inst / "sub9997_woodchair_000.pt").symlink_to(real_clip)
+        novice_mjcf.write_text(TRACKED_MJCF.read_text())
+        if made_expert:
+            expert_mjcf.write_text(TRACKED_MJCF.read_text())
+        if made_ckpt:
+            ckpt_dir.mkdir(parents=True); (ckpt_dir / "mimic_00027000.pth").write_bytes(b"x")
+        r = subprocess.run([sys.executable, str(REPO / "scripts/novice_rollout.py"), "--dry-run",
+                            "--expert-clip", str(real_clip), "--novice-dir", str(d),      # repo's OMOMO_new is sub2-only here
+                            "--arm", "gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0", "--out", str(tmp_path / "out")],
+                           capture_output=True, text=True, cwd=str(REPO),
+                           env={**os.environ, "SMPLX_MODELS": str(models), "CARI4D_ROOT": str(tmp_path)})
+        assert r.returncode == 0, r.stdout + r.stderr
+        o = r.stdout
+        assert "sub9997 performs sub6_woodchair_000.pt (expert sub6, object woodchair)" in o
+        assert f"novice recon : sub9997_woodchair_000.pt + bundle {seq} (camera, betas, male)" in o
+        assert "mimic_00027000.pth" in o or "mimic_0" in o                              # latest snapshot picked
+        assert "--flat_color 255,140,0" in o and "viz_pred.py" in o                      # CARI4D_ROOT honoured
+        assert "DRY RUN" in o
+    finally:
+        for f in (inst / "sub9997_woodchair_000.pt",):
+            f.unlink(missing_ok=True)
+        inst.rmdir()
+        novice_mjcf.unlink(missing_ok=True)
+        if made_expert:
+            expert_mjcf.unlink(missing_ok=True)
+        if made_ckpt:
+            (ckpt_dir / "mimic_00027000.pth").unlink(missing_ok=True); ckpt_dir.rmdir(); ckpt_dir.parent.rmdir()

@@ -36,14 +36,13 @@ smplx_omomo_<sub>.xml; a reconstructed person is smplh_behave_<sub>.xml).
 Students run through intermimic.run_distill with DISTILL_SKIP_TEACHERS=1 (at
 test the teachers are never used, so only the student .pth is needed).
 
-    python3 scripts/novice_rollout.py --dry-run \\
-        --expert-clip InterAct/behave_cari4d_act/sub401_bballd03s01rev003b_000.pt \\
-        --novice-clip InterAct/behave_cari4d_rectinj_hy3d3_optj3d/sub204_bball_000.pt \\
-        --novice-bundle ~/novice_Sub204/Date170_Sub204_bball_t004a/Date170_Sub204_bball_t004a.pth \\
-        --object-mesh ~/novice_Sub204/Date170_Sub204_bball_t004a/Date170_Sub204_bball_t004a_067_align.obj \\
-        --gender male --arm student_g3_act_xf_ret_nvadlr__f0 \\
-        --checkpoint checkpoints/smplx_student_g3_act_xf_ret_nvadlr__f0/nn/mimic_00100000.pth \\
-        --models /simurgh2/projects/ret-hoi/InterAct/models/smplx --out renders/novice_sub204_from_sub401
+    # SHORT FORM: the expert clip's name + the novice's CARI4D export folder; the arm
+    # (act student), its latest checkpoint, $SMPLX_MODELS, $CARI4D_ROOT and the output
+    # dir are defaults. --dry-run validates and prints the plan, running nothing:
+    SMPLX_MODELS=/path/to/models/smplx python3 scripts/novice_rollout.py --dry-run \\
+        --expert-clip sub401_bballd03s01rev003b_000 --novice-dir ~/novice_Sub204/Date170_Sub204_bball_t004a
+    # LONG FORM: every input explicit (--novice-clip --novice-bundle --object-mesh --gender
+    # --arm --checkpoint --models --out); any of them also overrides the short form.
     # then the same line without --dry-run on a GPU node (scripts/slurm_novice_rollout.sh)
 """
 import argparse
@@ -207,6 +206,65 @@ def derived_env_cfg(base_yaml, redirects, out_yaml, note):
     return changed
 
 
+# ---------------------------------------------------------------- the short form
+def resolve_novice_dir(novice_dir, repo=REPO):
+    """A CARI4D export folder (<seq>/{<seq>.pth, *_align.obj, meta.json}) -> the
+    bundle, the aligned mesh, the gender, and the novice's INSTALLED clip under
+    InterAct/ (the dataset tag carries the sequence name in lower case:
+    InterAct/behave_cari4d_<seq lower>/sub<N>_<object>_<idx>.pt). Each must be
+    exactly one file, or the candidates are listed and nothing is guessed."""
+    d = Path(os.path.expanduser(str(novice_dir))).absolute()
+    if not d.is_dir():
+        raise PlanError(f"--novice-dir is not a directory: {d}")
+    pths = sorted(d.glob("*.pth"))
+    if len(pths) != 1:
+        raise PlanError(f"--novice-dir must hold exactly one bundle .pth, found {[p.name for p in pths]} in {d}")
+    meshes = sorted(d.glob("*_align.obj")) + sorted(d.glob("*_align/*_align.obj"))
+    if len(meshes) != 1:
+        raise PlanError(f"--novice-dir must hold exactly one *_align.obj, found {[m.name for m in meshes]} in {d}")
+    meta_p = d / "meta.json"
+    if not meta_p.is_file():
+        raise PlanError(f"--novice-dir has no meta.json: {d} (it carries the gender and the clip name)")
+    meta = json.load(open(meta_p))
+    gender = meta.get("gender")
+    if gender not in ("male", "female", "neutral"):
+        raise PlanError(f"{meta_p}: gender is {gender!r}; pass --gender explicitly")
+    seq = meta.get("clip") or pths[0].stem
+    hits = sorted(repo.glob(f"InterAct/*{seq.lower()}*/sub*_*.pt"))
+    if len(hits) != 1:
+        raise PlanError(f"expected exactly one installed clip for {seq} under {repo}/InterAct/*{seq.lower()}*/, "
+                        f"found {[str(h.relative_to(repo)) for h in hits]} -- install it (scripts/cari4d_render.py) "
+                        f"or pass --novice-clip")
+    return pths[0], meshes[0], gender, hits[0], int(meta.get("n_frames", 0) or 0)
+
+
+def resolve_expert_clip(name_or_path, motion_file, repo=REPO):
+    """'sub401_bballd03s01rev003b_000' (or with .pt) -> the file in the arm's
+    motion dir; a path is taken as given."""
+    p = Path(os.path.expanduser(str(name_or_path)))
+    if p.suffix == ".pt" and p.is_file():
+        return p.absolute()
+    stem = p.name[:-3] if p.name.endswith(".pt") else p.name
+    cand = repo / motion_file / f"{stem}.pt"
+    if cand.is_file():
+        return cand.absolute()
+    raise PlanError(f"expert clip {name_or_path!r} not found as a path nor as {cand}")
+
+
+def latest_checkpoint(arm, train_yaml, repo=REPO):
+    """The arm's latest numbered snapshot (eval_one.sh's rule), else mimic.pth."""
+    exp = re.search(r"full_experiment_name:\s*(\S+)", train_yaml.read_text())
+    if not exp:
+        raise PlanError(f"no full_experiment_name in {train_yaml}")
+    nn = repo / "checkpoints" / exp.group(1) / "nn"
+    snaps = sorted(nn.glob("mimic_0*.pth"))
+    if snaps:
+        return snaps[-1]
+    if (nn / "mimic.pth").is_file():
+        return nn / "mimic.pth"
+    raise PlanError(f"no checkpoint for {arm} under {nn}; pass --checkpoint")
+
+
 # ---------------------------------------------------------------- the plan
 def _file(path, what):
     # absolute(), not resolve(): a clip may be a symlink named for the subject it
@@ -218,11 +276,24 @@ def _file(path, what):
 
 
 def build_plan(a):
-    expert_clip = _file(a.expert_clip, "expert clip")
+    env_yaml, train_yaml, entry, task = arm_cfgs(a.arm)
+    env = yaml.safe_load(open(env_yaml))["env"]
+    if a.novice_dir:
+        d_bundle, d_mesh, d_gender, d_clip, _ = resolve_novice_dir(a.novice_dir)
+        a.novice_bundle = a.novice_bundle or d_bundle
+        a.object_mesh = a.object_mesh or d_mesh
+        a.gender = a.gender or d_gender
+        a.novice_clip = a.novice_clip or d_clip
+    for k in ("novice_clip", "novice_bundle", "object_mesh", "gender"):
+        if not getattr(a, k):
+            raise PlanError(f"--{k.replace('_', '-')} is required (or give --novice-dir, the CARI4D export folder)")
+    if not a.models:
+        raise PlanError("--models is required (or set SMPLX_MODELS)")
+    expert_clip = resolve_expert_clip(a.expert_clip, env["motion_file"])
     novice_clip = _file(a.novice_clip, "novice clip")
     bundle = _file(a.novice_bundle, "novice bundle")
     mesh = _file(a.object_mesh, "object mesh")
-    ckpt = _file(a.checkpoint, "checkpoint")
+    ckpt = _file(a.checkpoint, "checkpoint") if a.checkpoint else latest_checkpoint(a.arm, train_yaml)
     expert, obj, idx = parse_clip_name(expert_clip)
     novice, novice_obj, _ = parse_clip_name(novice_clip)
     if expert == novice:
@@ -231,8 +302,6 @@ def build_plan(a):
     if not any((models / f).exists() for f in ("SMPLH_MALE.pkl", "SMPLH_MALE.npz", "SMPLX_MALE.npz", "SMPLX_MALE.pkl")):
         raise PlanError(f"--models {models}: no SMPLH_*/SMPLX_* model file there (licensed; download them yourself)")
 
-    env_yaml, train_yaml, entry, task = arm_cfgs(a.arm)
-    env = yaml.safe_load(open(env_yaml))["env"]
     if expert not in env.get("dataSub", []):
         raise PlanError(f"expert {expert} is not in the arm's dataSub {env.get('dataSub')}: the expert must be a "
                         f"training source of {a.arm}")
@@ -254,7 +323,9 @@ def build_plan(a):
         "train_yaml": train_yaml, "entry": entry, "task": task,
         "expert_mjcf": expert_mjcf, "novice_mjcf": novice_mjcf,
         "props": props, "props_path": props_path, "height": height, "height_src": height_src,
-        "heights_file": heights_file, "out": Path(a.out).resolve(), "num_envs": a.num_envs,
+        "heights_file": heights_file,
+        "out": Path(a.out).resolve() if a.out else (REPO / "renders" / f"novice_{novice}_from_{expert_clip.stem}"),
+        "num_envs": a.num_envs,
         "frames": a.frames, "gender": a.gender, "video": a.video, "cari4d_root": a.cari4d_root,
         "flat_color": a.flat_color, "retarget_iters": a.retarget_iters,
         "is_student": entry.endswith("run_distill"),
@@ -335,22 +406,27 @@ def commands(p, derived):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--expert-clip", required=True, help="the EXPERT's motion tensor sub<E>_<object>_<idx>.pt (a training clip)")
-    ap.add_argument("--novice-clip", required=True, help="the NOVICE's own installed clip sub<N>_... (from the same recon as --novice-bundle)")
-    ap.add_argument("--novice-bundle", required=True, help="the CARI4D .pth the novice clip was built from (camera + betas)")
-    ap.add_argument("--object-mesh", required=True, help="the *_align.obj CARI4D posed for the novice sequence")
-    ap.add_argument("--arm", required=True, help="the policy's arm, e.g. student_g3_act_xf_ret_nvadlr__f0 (its eval cfg is the env)")
-    ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--gender", required=True, choices=["male", "female", "neutral"], help="the novice's SMPL-H body model")
-    ap.add_argument("--models", required=True, help="dir holding SMPLH_*.pkl / SMPLX_*.npz (licensed)")
-    ap.add_argument("--out", required=True, help="output dir")
+    ap.add_argument("--expert-clip", required=True,
+                    help="the EXPERT's training clip: a bare name like sub401_bballd03s01rev003b_000 (looked up in "
+                         "the arm's motion dir) or a path")
+    ap.add_argument("--novice-dir", default=None,
+                    help="SHORT FORM: the novice's CARI4D export folder (<seq>.pth, *_align.obj, meta.json); "
+                         "gives --novice-bundle, --object-mesh, --gender and the installed --novice-clip")
+    ap.add_argument("--novice-clip", default=None, help="the NOVICE's own installed clip sub<N>_... (default: from --novice-dir)")
+    ap.add_argument("--novice-bundle", default=None, help="the CARI4D .pth the novice clip was built from (default: from --novice-dir)")
+    ap.add_argument("--object-mesh", default=None, help="the *_align.obj CARI4D posed (default: from --novice-dir)")
+    ap.add_argument("--arm", default="student_g3_act_xf_ret_nvadlr__f0", help="the policy's arm (its eval cfg is the env)")
+    ap.add_argument("--checkpoint", default=None, help="default: the arm's latest numbered snapshot")
+    ap.add_argument("--gender", default=None, choices=["male", "female", "neutral"], help="the novice's SMPL-H body model (default: meta.json)")
+    ap.add_argument("--models", default=os.environ.get("SMPLX_MODELS"), help="dir holding SMPLH_*.pkl / SMPLX_*.npz (default: $SMPLX_MODELS)")
+    ap.add_argument("--out", default=None, help="output dir (default: renders/novice_<novice>_from_<expert clip>)")
     ap.add_argument("--expert-mjcf", default=None, help="the expert's MJCF under the asset root (default: smplh_behave_<E>.xml, else smplx_omomo_<E>.xml)")
     ap.add_argument("--novice-mjcf", default=None, help="the novice's MJCF under the asset root (default: smplh_behave_<N>.xml)")
     ap.add_argument("--num-envs", type=int, default=64, help="simultaneous attempts; the best one is kept")
     ap.add_argument("--frames", type=int, default=1000, help="DUMP_FRAMES cap per attempt")
     ap.add_argument("--retarget-iters", type=int, default=300)
     ap.add_argument("--video", default=None, help="the novice's source video for the overlay (viz_pred.py --video)")
-    ap.add_argument("--cari4d-root", default=None, help="CARI4D repo; with it the overlay command is printed/run")
+    ap.add_argument("--cari4d-root", default=os.environ.get("CARI4D_ROOT"), help="CARI4D repo (default: $CARI4D_ROOT); with it the overlay command is printed/run")
     ap.add_argument("--flat-color", default="255,140,0", help="one r,g,b for human AND object in the overlay")
     ap.add_argument("--run-overlay", action="store_true", help="also run viz_pred.py (needs the CARI4D env)")
     ap.add_argument("--dry-run", action="store_true", help="validate, write the derived files, print the commands, run nothing")
