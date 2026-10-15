@@ -457,3 +457,15 @@ def test_differencing_dry_run_writes_the_three_tables(tmp_path, real_clip):
     rows = d["tables"]["joint_angles"]
     assert {r["joint"] for r in rows} >= {"pelvis", "lower back", "left knee", "right elbow"}
     assert all("novice_minus_expert_deg" in r for r in rows)
+
+
+def test_resolve_novice_dir_falls_back_to_the_sub_number_under_any_tag(tmp_path, real_clip):
+    d = _novice_export(tmp_path, "Date170_Sub9995_bball_t004a")
+    repo = tmp_path / "repo"
+    inst = repo / "InterAct" / "behave_cari4d_rectinj_hy3d3_optj3d"; inst.mkdir(parents=True)   # the release tag, not the seq
+    (inst / "sub9995_bball_000.pt").symlink_to(real_clip)
+    bundle, mesh, gender, clip, n = nr.resolve_novice_dir(d, repo=repo)
+    assert clip.name == "sub9995_bball_000.pt"
+    (inst / "sub9995_bball_001.pt").symlink_to(real_clip)
+    with pytest.raises(SystemExit, match="exactly one installed clip"):
+        nr.resolve_novice_dir(d, repo=repo)

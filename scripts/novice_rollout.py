@@ -239,11 +239,19 @@ def resolve_novice_dir(novice_dir, repo=REPO):
     if gender not in ("male", "female", "neutral"):
         raise PlanError(f"{meta_p}: gender is {gender!r}; pass --gender explicitly")
     seq = meta.get("clip") or pths[0].stem
+    # Two install conventions: a dataset tag carrying the sequence name (ikura:
+    # InterAct/behave_cari4d_<seq lower>/), or the release tag with the subject
+    # numbered after the CARI4D Sub (simurgh via cari4d_render.py --subject-id:
+    # InterAct/<any tag>/sub<N>_*.pt with N = the Sub number). Exactly one hit either way.
     hits = sorted(repo.glob(f"InterAct/*{seq.lower()}*/sub*_*.pt"))
+    m = re.search(r"_Sub(\d+)_", seq)
+    if not hits and m:
+        hits = sorted(repo.glob(f"InterAct/*/sub{int(m.group(1))}_*.pt"))
     if len(hits) != 1:
-        raise PlanError(f"expected exactly one installed clip for {seq} under {repo}/InterAct/*{seq.lower()}*/, "
-                        f"found {[str(h.relative_to(repo)) for h in hits]} -- install it (scripts/cari4d_render.py) "
-                        f"or pass --novice-clip")
+        raise PlanError(f"expected exactly one installed clip for {seq}: looked for {repo}/InterAct/*{seq.lower()}*/sub*_*.pt"
+                        + (f" and InterAct/*/sub{int(m.group(1))}_*.pt" if m else "") +
+                        f", found {[str(h.relative_to(repo)) for h in hits]} -- install it (scripts/cari4d_render.py "
+                        f"--subject-id <N> <bundle>) or pass --novice-clip")
     return pths[0], meshes[0], gender, hits[0], int(meta.get("n_frames", 0) or 0)
 
 
