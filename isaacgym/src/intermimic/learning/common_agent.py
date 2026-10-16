@@ -54,6 +54,28 @@ def exact_policy_kl(p0_mu, p0_sigma, p1_mu, p1_sigma, reduce=True):
     kl = (c1 + c2 - 0.5).sum(dim=-1)
     return kl.mean() if reduce else kl
 
+
+def detach_train_result(result):
+    """Detach every tensor in a calc_gradients result dict, in place.
+
+    The per-minibatch dict is kept in self.train_result and appended, key by
+    key, to the epoch's train_info lists (intermimic_agent.py train_epoch),
+    i.e. 24 copies per epoch at 6 mini-epochs x 4 minibatches, alive through
+    the following rollout. A loss tensor that was NOT part of loss.backward()
+    still owns its autograd graph and the activations saved for it. The
+    distill agent computes the actor and critic losses every minibatch but
+    only backprops the critic after epoch 2300 and the actor after 2900, so
+    with a separate transformer critic the retained graphs held ~9.5 GB
+    through every rollout of the student's first 2300 epochs (job 17894921:
+    torch 15.4 GB -> 6.6 GB at epoch 2312 -> 5.9 GB at 2912, then PhysX
+    died on a 64 MB allocation at 44.2/44 GB). The values are only logged,
+    never differentiated, so detaching changes nothing numerically.
+    """
+    for k, v in result.items():
+        if torch.is_tensor(v):
+            result[k] = v.detach()
+    return result
+
 from . import amp_datasets as amp_datasets
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -525,6 +547,7 @@ class CommonAgent(a2c_continuous.A2CAgent):
         }
         self.train_result.update(a_info)
         self.train_result.update(c_info)
+        detach_train_result(self.train_result)   # logged only; drop the autograd graphs
 
         return
 

@@ -764,11 +764,15 @@ class InterMimic(Humanoid_SMPLX):
     def post_physics_step(self):
         super().post_physics_step()
         # GPU memory diagnostic (read-only, throttled): watch total usage climb
-        # toward the OOM point. torch alloc = our tensors; GPU used = incl PhysX.
+        # toward the OOM point. torch alloc = our live tensors; torch reserved =
+        # alloc + the caching allocator's high-water mark, which it never returns
+        # to the driver (so PhysX cannot have it); GPU used = everything incl PhysX.
+        # Job 17894921 read alloc 5.9G at used 44.2/44G: the gap was reserved.
         self._memchk_n = getattr(self, '_memchk_n', 0) + 1
         if self._memchk_n % 200 == 1:
             free, total = torch.cuda.mem_get_info()
-            print(f"[mem] step {self._memchk_n}: torch {torch.cuda.memory_allocated() / 1024 ** 3:.2f}G | "
+            print(f"[mem] step {self._memchk_n}: torch {torch.cuda.memory_allocated() / 1024 ** 3:.2f}G "
+                  f"(reserved {torch.cuda.memory_reserved() / 1024 ** 3:.2f}G) | "
                   f"GPU used {(total - free) / 1024 ** 3:.1f}/{total / 1024 ** 3:.0f}G", flush=True)
         return
 

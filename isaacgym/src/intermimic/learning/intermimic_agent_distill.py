@@ -518,6 +518,11 @@ class InterMimicAgentDistill(intermimic_agent.InterMimicAgent):
         self.train_result.update(a_info)
         self.train_result.update(c_info)
         self.train_result.update(e_info)
+        # Logged only. Before epoch 2300 the critic loss (2900: the actor loss) is
+        # computed but NOT in `loss`, so backward never frees its graph: with a
+        # separate transformer critic that held ~9.5 GB of activations through every
+        # rollout of the first 2300 epochs (job 17894921). See detach_train_result.
+        common_agent.detach_train_result(self.train_result)
         return
 
     def _log_train_info(self, train_info, frame):

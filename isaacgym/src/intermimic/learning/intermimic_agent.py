@@ -762,6 +762,7 @@ class InterMimicAgent(common_agent.CommonAgent):
         }
         self.train_result.update(a_info)
         self.train_result.update(c_info)
+        common_agent.detach_train_result(self.train_result)   # logged only; drop the autograd graphs
 
         return
 
