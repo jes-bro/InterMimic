@@ -110,7 +110,7 @@ class InterMimic(Humanoid_SMPLX):
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'raggedMotionData', 'resetThresholds', 'retargetedMotionDir',
         'rewardTerms', 'rewardWeights',
-        'rewardShape', 'motionScaleReward', 'robotType', 'rolloutLength',
+        'rewardShape', 'motionScaleReward', 'robotType', 'rolloutLength', 'minEpisodeFrames',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'staticScene',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
@@ -171,6 +171,20 @@ class InterMimic(Humanoid_SMPLX):
         self.ball_size = cfg['env']['ballSize']
         self.more_rigid = cfg['env']['moreRigid']
         self.rollout_length = cfg['env']['rolloutLength']
+        # minEpisodeFrames (2026-10-15, Jess: "start at random points, always run to
+        # the end of the sequence"): a start is valid when at least this many frames
+        # of clip remain after it, and a PSI slot is valid on the same rule. Default
+        # = rolloutLength, which is the original "a full window must fit" behaviour
+        # for every existing arm. Set it small with a rolloutLength past the longest
+        # clip and episodes start anywhere and end at the clip's end.
+        self.min_episode_frames = int(cfg['env'].get('minEpisodeFrames', self.rollout_length))
+        if not (1 <= self.min_episode_frames <= self.rollout_length):
+            raise ValueError(f"[intermimic] minEpisodeFrames={self.min_episode_frames} must be in "
+                             f"[1, rolloutLength={self.rollout_length}]")
+        if self.min_episode_frames != self.rollout_length:
+            print(f"[intermimic] minEpisodeFrames={self.min_episode_frames} < rolloutLength={self.rollout_length}: "
+                  f"episodes start anywhere with >= {self.min_episode_frames} frames left and run to the clip's "
+                  f"end (or the window); PSI slots eligible on the same rule", flush=True)
         self.psi = cfg['env'].get('physicalBufferSize', 1)
         # cpuMotionData: keep the (large) reference-motion tensors on CPU and stream
         # the in-flight frames to GPU per step instead of holding every clip resident
@@ -1053,16 +1067,17 @@ class InterMimic(Humanoid_SMPLX):
         # inert while physicalBufferSize still triples the hoi_refs allocation.
         # Print the ceiling here so that is visible rather than assumed.
         if self.psi > 1:
+            from ...utils.psi_update import psi_eligible_cells
             mel = self.max_episode_length
-            per_motion = torch.clamp(mel - self.rollout_length + 1, min=0) * (mel >= self.rollout_length)
+            per_motion = psi_eligible_cells(mel, self.rollout_length, self.min_episode_frames)
             self._psi_eligible = int(per_motion.sum().item())
             n_elig_motions = int((per_motion > 0).sum().item())
             valid_cells = int(mel.sum().item())
             print(f"[psi] buffer {self.psi} slots | eligible: {self._psi_eligible:,} "
                   f"(motion,timestep) cells across {n_elig_motions:,}/{self.num_motions:,} "
                   f"motions = {100.0 * self._psi_eligible / max(valid_cells, 1):.2f}% of "
-                  f"{valid_cells:,} valid cells  [gate: motion length >= rolloutLength="
-                  f"{self.rollout_length}]", flush=True)
+                  f"{valid_cells:,} valid cells  [gate: frames left after a slot >= minEpisodeFrames="
+                  f"{self.min_episode_frames}{' (= rolloutLength)' if self.min_episode_frames == self.rollout_length else ''}]", flush=True)
             if self._psi_eligible == 0:
                 print("[psi] WARNING: NO cell is eligible -- PSI cannot write anything. "
                       "physicalBufferSize is costing memory for nothing; lower "
@@ -1510,7 +1525,7 @@ class InterMimic(Humanoid_SMPLX):
 
         if (self._state_init == InterMimic.StateInit.Random
             or self._state_init == InterMimic.StateInit.Hybrid):
-            motion_times = torch.cat([torch.randint(0, max(1, self.max_episode_length[i[e]]-self.rollout_length), (1,), device=self.device, dtype=torch.long) for e in range(num_envs)]) 
+            motion_times = torch.cat([torch.randint(0, max(1, self.max_episode_length[i[e]]-self.min_episode_frames), (1,), device=self.device, dtype=torch.long) for e in range(num_envs)]) 
         elif (self._state_init == InterMimic.StateInit.Start):
             motion_times = torch.zeros(num_envs, device=self.device, dtype=torch.long)#.int()
 
@@ -1539,7 +1554,7 @@ class InterMimic(Humanoid_SMPLX):
         return
 
     def cal_cdf(self, i, e):
-        rewards = self.ref_reward[i[e], :, :max(1, self.max_episode_length[i[e]]-self.rollout_length)].clone() 
+        rewards = self.ref_reward[i[e], :, :max(1, self.max_episode_length[i[e]]-self.min_episode_frames)].clone() 
         ref_reward_sum = 1 / (rewards.sum(dim=0)) 
         prob = ref_reward_sum / ref_reward_sum.sum()
         cdf = torch.cumsum(prob, 0)
@@ -1940,7 +1955,7 @@ class InterMimic(Humanoid_SMPLX):
             reset_ind = (self.reset_buf == 1)
             data_id = self.data_id[reset_ind]
             max_episode_length = self.max_episode_length[data_id]
-            if (max_episode_length < self.rollout_length).all():
+            if (max_episode_length < self.min_episode_frames).all():
                 self._sum_reward[reset_ind] = 0
                 return
             start_index, end_index = self.start_times[reset_ind], self.progress_buf[reset_ind]
@@ -1961,7 +1976,7 @@ class InterMimic(Humanoid_SMPLX):
             # WRONG row -- same misalignment, quieter symptom.
             # Short motions are excluded downstream anyway: psi_update's `eligible`
             # drops any motion with mel < rollout_length, so those rows are never read.
-            reset_ind_long = torch.logical_and(reset_ind, self.max_episode_length[self.data_id] > self.rollout_length)
+            reset_ind_long = torch.logical_and(reset_ind, self.max_episode_length[self.data_id] > self.min_episode_frames)
             if reset_ind_long.sum() < 0.995:
                 return
             state = self._curr_state[reset_ind]
@@ -1985,7 +2000,7 @@ class InterMimic(Humanoid_SMPLX):
                 data_id=data_id, start_index=start_index, end_index=end_index,
                 end_i=end_i, state=state, ref_reward=self.ref_reward,
                 hoi_refs=self.hoi_refs, max_episode_length=self.max_episode_length,
-                rollout_length=self.rollout_length)
+                rollout_length=self.rollout_length, min_frames=self.min_episode_frames)
             self.ref_reward[:, 1:, :] = self.ref_reward[:, 1:, :] * (1 - 1e-5)
 
             # --- PSI occupancy. Slot 0 is the mocap reference; slots 1: start at 0

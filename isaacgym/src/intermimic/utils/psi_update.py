@@ -26,8 +26,27 @@ pins that against a verbatim transcription of the old loop.
 import torch
 
 
+def psi_eligible_cells(max_episode_length, rollout_length, min_frames=None):
+    """Per-motion count of (motion, timestep) slots PSI may write, under the gate
+    psi_buffer_update applies: a slot at frame j of a motion of length mel is
+    eligible iff mel >= min_frames and mel - j >= min_frames, where min_frames
+    defaults to rollout_length (the original rule: a full window must fit after
+    j). minEpisodeFrames < rolloutLength (2026-10-15, 'start anywhere, run to the
+    clip's end') keeps PSI live on clips shorter than the window."""
+    mf = rollout_length if min_frames is None else int(min_frames)
+    mel = max_episode_length
+    return torch.clamp(mel - mf + 1, min=0) * (mel >= mf)
+
+
+def n_valid_starts(mel, min_frames):
+    """How many start frames the sampler may draw for a motion of length mel:
+    max(1, mel - min_frames) (the original with min_frames = rollout_length)."""
+    return max(1, int(mel) - int(min_frames))
+
+
 def psi_buffer_update(data_id, start_index, end_index, end_i, state,
-                      ref_reward, hoi_refs, max_episode_length, rollout_length):
+                      ref_reward, hoi_refs, max_episode_length, rollout_length,
+                      min_frames=None):
     """Fold this batch's rollouts into the PSI buffers, in place.
 
     Args:
@@ -100,9 +119,12 @@ def psi_buffer_update(data_id, start_index, end_index, end_i, state,
     mel = max_episode_length[motions].to(dev)
     # Original skipped a motion when mel < rollout_length, and broke out of the
     # time loop at the first j with mel - j < rollout_length; since j ascends,
-    # that is exactly "keep j while mel - j >= rollout_length".
-    eligible = ((mel >= rollout_length)[:, None]
-                & ((mel[:, None] - j[None, :]) >= rollout_length))
+    # that is exactly "keep j while mel - j >= rollout_length". min_frames (default
+    # rollout_length, bit-identical) replaces rollout_length in that gate: a slot
+    # is a valid episode START whenever min_frames of clip remain after it.
+    mf = rollout_length if min_frames is None else int(min_frames)
+    eligible = ((mel >= mf)[:, None]
+                & ((mel[:, None] - j[None, :]) >= mf))
     offset = j[None, :] - start_index[winner]                     # (M, T)
     cond = (eligible & (offset > 0) & (offset < rollout_length) & (adjust > 0.5))
     if not bool(cond.any()):

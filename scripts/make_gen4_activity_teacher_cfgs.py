@@ -69,6 +69,22 @@ TRAIN_SOURCES = ["sub1", "sub2", "sub3", "sub5", "sub6", "sub7", "sub8", "sub9",
                  "sub11", "sub12", "sub14", "sub15", "sub17"]
 MERGED_TREE = "InterAct/OMOMO_retarget_contact_srcall13"
 MS_TAG = "_msexp"                      # motion-scale-exponent arms: ..._nopose_msexp__f0
+# FULL-EPISODE arms (Jess, 2026-10-15: "start at random points throughout the sequence
+# but always let it finish to the end"): rolloutLength past the longest OMOMO clip
+# (652 frames, clothesstand) so the window never cuts an episode, and
+# minEpisodeFrames small so starts are drawn anywhere with >= that many frames left
+# and PSI slots stay eligible on the same rule (intermimic.py minEpisodeFrames,
+# utils/psi_update.py). Measured on the 566 chair clips: rolloutLength 300 alone
+# leaves 25/566 clips PSI-eligible and pins 544 to frame 0; 700 alone leaves 0;
+# 1000 + minEpisodeFrames 30 keeps all 566 eligible (94,673 cells vs 83,353 at the
+# 50 window) and pins none. 1000 = the eval window, so train and eval episodes
+# are cut by the same rule (the clip's end). Why: the 50-frame window never asks the policy to
+# initiate or sustain a walk, and the chairs policies shuffle instead of stepping
+# over a whole clip (renders of 2026-10-15). GPU cost: _curr_state is
+# [num_envs, rolloutLength, 332] floats = 2.7 GB at 2048 envs.
+FULLEP_TAG = "_fullep"
+FULLEP_ROLLOUT = 1000                  # = the eval window (Jess 2026-10-15); anything > 652 never cuts an episode
+FULLEP_MIN_FRAMES = 30
 MS_REFERENCE_STD = 0.5157              # OMOMO_new median key-body std, all 4421 clips (utils/motion_scale.py)
 
 # group -> (objects, #SBATCH --mem). Memory = scripts/motion_memory_budget.py
@@ -168,9 +184,13 @@ def yaml_list(items):
     return "[" + ", ".join(f"'{x}'" for x in items) + "]"
 
 
-def env_header(g, tag="", ms=False):
+def env_header(g, tag="", ms=False, fullep=False):
     objs, _ = TEACHERS[g]
-    n_edits = "five" if ms else "four"
+    n_edits = {(False, False): "four", (True, False): "five", (True, True): "seven"}[(ms, fullep)]
+    fullep_lines = "" if not fullep else (
+        f"#   rolloutLength       -> {FULLEP_ROLLOUT} (past the longest OMOMO clip: the window never cuts an episode)\n"
+        f"#   minEpisodeFrames    -> {FULLEP_MIN_FRAMES} (starts drawn anywhere with >= {FULLEP_MIN_FRAMES} frames left; PSI slots\n"
+        f"#                          eligible on the same rule -- episodes run to the clip's end)\n")
     ms_lines = "" if not ms else (
         f"#   motionScaleReward   -> enable, referenceStd {MS_REFERENCE_STD} (utils/motion_scale.py: the 4th root\n"
         f"#                          becomes a per-clip exponent clamp((ref/std)^2, 1/4, 1): a clip moving no more\n"
@@ -189,7 +209,7 @@ def env_header(g, tag="", ms=False):
             f"#   dataObjects         -> the group (intermimic.py keeps only these objects' clips)\n"
             f"#   raggedMotionData    -> true (per-clip storage; see scripts/make_gen4_activity_teacher_cfgs.py)\n"
             f"#   retargetedMotionDir -> {MERGED_TREE} (merged 13-source tree, must hold sub600-629)\n"
-            + ms_lines +
+            + ms_lines + fullep_lines +
             f"# Sampling unchanged: env e owns object e % n_obj, uniform clips within the object.\n"
             f"# Recipe otherwise the gen4 fleet's: geometric_all reward, no pose term, 6 obs horizons,\n"
             f"# retargeted references, PSI 3, body-normalised reward, _inertial MJCFs, 43 bodies.\n")
@@ -201,8 +221,12 @@ def train_header(g, tag=""):
             f"# (own checkpoint dir). Transformer 6 tokens, normalize_value, adaptive LR exact-KL 0.06.\n")
 
 
-def sh_header(g, tag="", ms=False):
+def sh_header(g, tag="", ms=False, fullep=False):
     objs, mem = TEACHERS[g]
+    fullep_note = "" if not fullep else (
+        f"# FULL EPISODES: rolloutLength {FULLEP_ROLLOUT} + minEpisodeFrames {FULLEP_MIN_FRAMES} (a fourth guard checks both) --\n"
+        f"# starts anywhere, every episode runs to the clip's end, PSI live on every clip. The\n"
+        f"# startup line '[psi] ... eligible ... cells' must show every motion eligible.\n")
     extra = "" if not ms else (
         f"# PLUS the motion-scale reward exponent (motionScaleReward, referenceStd {MS_REFERENCE_STD}; a third\n"
         f"# guard checks the block is present) -- this arm trains on the NEW reward, so it differs from\n"
@@ -218,13 +242,23 @@ def sh_header(g, tag="", ms=False):
             f"# (ragged budget, scripts/motion_memory_budget.py --objects {' '.join(objs)}), and two\n"
             f"# more guards (raggedMotionData on; the merged retarget tree holds this {'arm' if g in SINGLES else 'group'}'s clips\n"
             f"# for a real AND a gen4 body). Nothing else differs.\n"
-            + extra + single +
+            + extra + fullep_note + single +
             f"# Eval when done (hand-write omomo_eval_{arm(g, tag)}.yaml first, mirroring\n"
             f"# humanoidAssetSuffix + dataObjects{mirror}):  HELDOUT=\"sub4 sub10 sub13 sub16\" sh scripts/eval_one.sh {arm(g, tag)}\n")
 
 
-def rewrite_env(text, g, ms=False):
+def rewrite_env(text, g, ms=False, fullep=False):
     objs, _ = TEACHERS[g]
+    if fullep:
+        if re.search(r"^\s*minEpisodeFrames:", text, flags=re.M):
+            raise SystemExit("ERROR: base already has minEpisodeFrames")
+        text, n = re.subn(r"^(\s*)rolloutLength:\s*50\s*$", rf"\1rolloutLength: {FULLEP_ROLLOUT}", text, count=1, flags=re.M)
+        if n != 1:
+            raise SystemExit("ERROR: rolloutLength: 50 not found exactly once in base env cfg")
+        m = re.search(r"^(\s*)moreRigid:", text, flags=re.M)           # 'minEpisodeFrames' sorts before 'moreRigid'
+        if not m:
+            raise SystemExit("ERROR: moreRigid not found (anchor for minEpisodeFrames)")
+        text = text[:m.start()] + f"{m.group(1)}minEpisodeFrames: {FULLEP_MIN_FRAMES}\n" + text[m.start():]
     text, n = re.subn(r"^(\s*)dataSub:\s*\['sub1'\]\s*$",
                       rf"\1dataSub: {yaml_list(TRAIN_SOURCES)}", text, count=1, flags=re.M)
     if n != 1:
@@ -297,11 +331,21 @@ fi
 """
 
 
-def guard(g, ms=False):
+GUARD_FULLEP = """# Full-episode guard: this arm trains with starts anywhere and episodes to the clip's
+# end; a cfg that lost either key would train the 50-frame-window arm under this name.
+if ! grep -qE '^\\s*rolloutLength:\\s*ROLLOUT\\s*$' "$CFG_ENV" || ! grep -qE '^\\s*minEpisodeFrames:\\s*MINF\\s*$' "$CFG_ENV"; then
+    echo "[teacher] ERROR: full-episode arm without rolloutLength ROLLOUT + minEpisodeFrames MINF in $CFG_ENV" >&2; exit 1
+fi
+"""
+
+
+def guard(g, ms=False, fullep=False):
     objs, _ = TEACHERS[g]
     out = GUARD_GROUP.replace("OBJECTS", " ".join(objs))
     if ms:
         out += GUARD_MS.replace("REFSTD", str(MS_REFERENCE_STD))
+    if fullep:
+        out += GUARD_FULLEP.replace("ROLLOUT", str(FULLEP_ROLLOUT)).replace("MINF", str(FULLEP_MIN_FRAMES))
     if g in SINGLES:
         out += GUARD_SINGLE.replace("NCLIPS", str(SINGLE_CLIPS_GIB[g][0])).replace("OBJECT", g)
     return out
@@ -317,7 +361,7 @@ def rewrite_sbatch(text, g, tag=""):
     return text
 
 
-def rewrite_body(text, g, tag="", ms=False):
+def rewrite_body(text, g, tag="", ms=False, fullep=False):
     """The launcher body: names swapped, group guards added, recipe echoes rewritten."""
     objs, _ = TEACHERS[g]
     text = text.replace(BASE, arm(g, tag))            # cfg paths, echo, ckpt dir
@@ -327,14 +371,17 @@ def rewrite_body(text, g, tag="", ms=False):
     if i < 0:
         raise SystemExit("ERROR: gen4 retarget guard not found in launcher")
     j = text.find("\ndone\n", i) + len("\ndone\n")
-    text = text[:j] + guard(g, ms) + text[j:]
+    text = text[:j] + guard(g, ms, fullep) + text[j:]
     reward_note = "" if not ms else f", MOTION-SCALE EXPONENT (ref {MS_REFERENCE_STD}, capped at product)"
+    rollout_note = ("rollout 50" if not fullep else
+                    f"FULL EPISODES (rolloutLength {FULLEP_ROLLOUT} > every clip, minEpisodeFrames {FULLEP_MIN_FRAMES}: "
+                    f"starts anywhere, run to the clip end, PSI live)")
     ms_note = "" if not ms else "; reward exponent per clip from its key-body std (utils/motion_scale.py)"
     # the two recipe echo lines name the src1 arm's lineage; say what this arm is instead
     text, n = re.subn(r'^echo "\[teacher\] G3 RECIPE .*$',
                       f'echo "[teacher] GEN4 {kind(g)} RECIPE {arm(g, tag)} (OMOMO data, objects {" ".join(objs)}, '
                       f'13 sources, RAGGED motion, 6-TOKEN TRANSFORMER, normval+adaptive LR, NO POSE TERM{reward_note}): '
-                      f'43 bodies, no betas, gate resets=true, rollout 50, buf=12.0 num_envs=$NUM_ENVS"',
+                      f'43 bodies, no betas, gate resets=true, {rollout_note}, buf=12.0 num_envs=$NUM_ENVS"',
                       text, count=1, flags=re.M)
     if n != 1:
         raise SystemExit("ERROR: G3 RECIPE echo not found exactly once")
@@ -357,9 +404,16 @@ def main():
     ap.add_argument("--single-object", action="store_true",
                     help="write the 13 SINGLE-OBJECT arms (one teacher per OMOMO object) instead of the "
                          "groups; motion-scale reward only, so --motion-scale is required with it")
+    ap.add_argument("--full-episode", action="store_true",
+                    help=f"write the _fullep arms: rolloutLength {FULLEP_ROLLOUT} + minEpisodeFrames {FULLEP_MIN_FRAMES} "
+                         f"(starts anywhere, episodes to the clip's end, PSI live); motion-scale reward only")
     a = ap.parse_args()
     ms = a.motion_scale
-    tag = MS_TAG if ms else ""
+    fullep = a.full_episode
+    if fullep and not ms:
+        raise SystemExit("ERROR: the full-episode arms are written on the motion-scale reward only; "
+                         "pass --motion-scale with --full-episode")
+    tag = (MS_TAG if ms else "") + (FULLEP_TAG if fullep else "")
     if a.single_object and not ms:
         raise SystemExit("ERROR: the single-object arms are written on the motion-scale reward only "
                          "(Jess 2026-10-14: no plain set); pass --motion-scale with --single-object")
@@ -378,20 +432,20 @@ def main():
         env_out = CFG / f"omomo_teacher_{arm(g, tag)}.yaml"
         tr_out = CFG / "train/rlg" / f"omomo_teacher_{arm(g, tag)}.yaml"
         sh_out = REPO / f"slurm_teacher_{arm(g, tag)}.sh"
-        env_out.write_text(env_header(g, tag, ms) + rewrite_env(strip_header(env_src.read_text()), g, ms))
+        env_out.write_text(env_header(g, tag, ms, fullep) + rewrite_env(strip_header(env_src.read_text()), g, ms, fullep))
         tr_out.write_text(train_header(g, tag) + rewrite_train(strip_header(tr_src.read_text()), g, tag))
         sh_text = sh_src.read_text()
         shebang = sh_text.splitlines(keepends=True)[0]
         body = strip_header(sh_text)[len(shebang):]
         sbatch = "".join(l for l in sh_text.splitlines(keepends=True) if l.startswith("#SBATCH"))
-        sh_out.write_text(shebang + rewrite_sbatch(sbatch, g, tag) + sh_header(g, tag, ms) + rewrite_body(body, g, tag, ms))
+        sh_out.write_text(shebang + rewrite_sbatch(sbatch, g, tag) + sh_header(g, tag, ms, fullep) + rewrite_body(body, g, tag, ms, fullep))
         sh_out.chmod(0o755)
         print(f"{g:7s}: {env_out.name}  {tr_out.name}  {sh_out.name}")
         if a.diff:
             subprocess.run([sys.executable, str(REPO / "scripts/cfg_diff.py"), str(env_src), str(env_out)], check=False)
     n_arms = len(teachers(ms, a.single_object))
     print(f"wrote {3 * n_arms} files for {n_arms} {'single-object' if a.single_object else 'object-group'} teacher arms"
-          + (" (motion-scale variant)" if ms else ""))
+          + (" (motion-scale variant)" if ms else "") + (" (FULL EPISODES)" if fullep else ""))
 
 
 if __name__ == "__main__":

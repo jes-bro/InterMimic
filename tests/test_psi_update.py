@@ -195,3 +195,48 @@ def test_misaligned_state_fails_readably():
     with pytest.raises(ValueError, match="same reset mask|rows but data_id"):
         psi_buffer_update(data_id, start_index, end_index, end_i,
                           torch.randn(n_reset - 2, T, F), ref_reward, hoi_refs, mel, 10)
+
+
+# --- minEpisodeFrames (2026-10-15): starts anywhere, episodes to the clip's end, PSI still live ---
+
+def test_min_frames_default_is_the_original_gate():
+    mel = torch.tensor([20, 39, 40, 41, 120])
+    assert torch.equal(psi_update.psi_eligible_cells(mel, 40), torch.tensor([0, 0, 1, 2, 81]))
+    assert torch.equal(psi_update.psi_eligible_cells(mel, 40, None), psi_update.psi_eligible_cells(mel, 40))
+    assert psi_update.n_valid_starts(120, 40) == 80 and psi_update.n_valid_starts(39, 40) == 1
+
+
+def test_min_frames_keeps_psi_live_under_a_window_longer_than_every_clip():
+    mel = torch.tensor([153, 207, 382, 60])
+    assert int(psi_update.psi_eligible_cells(mel, 700).sum()) == 0               # window 700 alone: PSI dead
+    cells = psi_update.psi_eligible_cells(mel, 700, 30)
+    assert torch.equal(cells, mel - 30 + 1)                                      # every clip, slots up to 30 before its end
+    assert [psi_update.n_valid_starts(int(m), 30) for m in mel] == [123, 177, 352, 30]
+
+
+def test_update_writes_short_motions_with_min_frames_but_not_without(seed=3):
+    """The differential case: same batch, rollout_length longer than every motion."""
+    case = _make_case(seed, num_motions=6, n_reset=5, T=120, rollout_length=40)
+    case["max_episode_length"][:] = 35                                           # every motion shorter than the window
+    case["end_i"] = torch.minimum(case["max_episode_length"][case["data_id"]], case["rollout_length"] + case["start_index"])
+    case["end_index"] = torch.minimum(case["end_index"], case["end_i"] - 1)
+    a = {k: (v.clone() if torch.is_tensor(v) else v) for k, v in case.items()}
+    assert psi_buffer_update(**a) == 0                                           # original gate: nothing eligible
+    b = {k: (v.clone() if torch.is_tensor(v) else v) for k, v in case.items()}
+    n = psi_buffer_update(**b, min_frames=5)
+    assert n > 0                                                                 # the same rollouts now land in the buffer
+    assert torch.equal(a["ref_reward"], case["ref_reward"]) and torch.equal(a["hoi_refs"], case["hoi_refs"])   # untouched
+    assert not torch.equal(b["ref_reward"], case["ref_reward"]) and not torch.equal(b["hoi_refs"], case["hoi_refs"])
+    assert torch.equal(b["ref_reward"][:, 0, :], case["ref_reward"][:, 0, :])      # slot 0 (mocap) never overwritten
+
+
+def test_task_reads_the_knob_at_every_window_site():
+    s = open(os.path.join(REPO, "isaacgym/src/intermimic/env/tasks/intermimic.py")).read()
+    assert "'minEpisodeFrames'" in s                                              # whitelisted
+    assert "self.min_episode_frames = int(cfg['env'].get('minEpisodeFrames', self.rollout_length))" in s
+    assert s.count("self.max_episode_length[i[e]]-self.min_episode_frames") == 2  # start sampler + PSI start CDF
+    assert "psi_eligible_cells(mel, self.rollout_length, self.min_episode_frames)" in s
+    assert "(max_episode_length < self.min_episode_frames).all()" in s
+    assert "self.max_episode_length[self.data_id] > self.min_episode_frames" in s
+    assert "rollout_length=self.rollout_length, min_frames=self.min_episode_frames" in s
+    assert "self.max_episode_length[i[e]]-self.rollout_length" not in s          # no site still keys off the window
