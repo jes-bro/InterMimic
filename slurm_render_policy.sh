@@ -36,6 +36,11 @@
 #       sbatch slurm_render_policy.sh
 #   # a specific checkpoint of that arm:
 #   ARM=g3_omomo__f0 CHECKPOINT=checkpoints/.../nn/mimic_00054600.pth sbatch slurm_render_policy.sh
+#   # a STUDENT arm (cfg omomo_student_*, train/rlg/omomo_student_*): the eval cfg names the
+#   # entry/task (intermimic.run_distill + InterMimicDistillG3/G4) and the student .pth runs
+#   # alone, DISTILL_SKIP_TEACHERS=1 (no teacher set needed to render):
+#   ARM=student_gen4_omomo_groups_xf_ret_nvadlr_nopose_msexp_fullep__f0 BODY=sub6 SOURCE=sub6 \
+#       OBJECT=woodchair CLIP=sub6_woodchair_020 sbatch slurm_render_policy.sh
 #   # the SAME clip on several bodies (comparable videos; camera auto-framed to the clip):
 #   ARM=gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0 BODY=sub4 SOURCE=sub6 OBJECT=woodchair \
 #       CLIP=sub6_woodchair_000 FRAMES=600 sbatch slurm_render_policy.sh
@@ -64,7 +69,10 @@ FRAMES="${FRAMES:-300}"
 CFGDIR=isaacgym/src/intermimic/data/cfg
 if [ -n "$ARM" ]; then
     ENV_YAML=$(python3 scripts/check_eval_cfg.py --arm "$ARM") || exit 2
-    TRAIN="${TRAIN:-$CFGDIR/train/rlg/omomo_teacher_${ARM}.yaml}"
+    case "$ARM" in
+        student_*) TRAIN="${TRAIN:-$CFGDIR/train/rlg/omomo_${ARM}.yaml}" ;;          # students: no teacher_ prefix
+        *)         TRAIN="${TRAIN:-$CFGDIR/train/rlg/omomo_teacher_${ARM}.yaml}" ;;
+    esac
     if [ -z "${CHECKPOINT:-}" ]; then
         EXPNAME=$(grep -oE 'full_experiment_name:[[:space:]]*[^[:space:]]+' "$TRAIN" | awk '{print $2}')
         CHECKPOINT=$(ls -1 "checkpoints/$EXPNAME/nn"/mimic_0*.pth 2>/dev/null | sort | tail -1)
@@ -90,6 +98,19 @@ fi
 [ -f "$CHECKPOINT" ] || { echo "[render] ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 [ -f "$ENV_YAML" ]   || { echo "[render] ERROR: env cfg not found: $ENV_YAML"; exit 1; }
 [ -f "$TRAIN" ]      || { echo "[render] ERROR: train cfg not found: $TRAIN"; exit 1; }
+# Entrypoint / task: stated by the eval cfg (evalEntry / evalTask), never guessed from the
+# name -- teachers: intermimic.run + InterMimic (the defaults); students: run_distill + the
+# distill task that builds the STUDENT observation. Rendering a student through the teacher
+# path would feed it the teacher obs. Students render from the .pth alone (teacher skip).
+eval "$(python3 - "$ENV_YAML" <<'PY'
+import sys, yaml
+c = yaml.safe_load(open(sys.argv[1])) or {}
+print(f"EVAL_ENTRY='{c.get('evalEntry', 'intermimic.run')}'")
+print(f"EVAL_TASK='{c.get('evalTask', 'InterMimic')}'")
+PY
+)"
+SKIP_TEACHERS=""
+[ "$EVAL_ENTRY" = intermimic.run_distill ] && SKIP_TEACHERS="DISTILL_SKIP_TEACHERS=1"
 
 # CLIP pin (optional): play exactly ONE clip so renders of different bodies /
 # arms show the IDENTICAL motion. Without it the task samples a clip at random
@@ -145,6 +166,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="renders/policy_${EXP}_${TAG}_${STAMP}.mp4"
 echo "[render] ckpt=$CHECKPOINT"
 echo "[render] env_cfg=$ENV_YAML  train_cfg=$TRAIN"
+echo "[render] entry=$EVAL_ENTRY task=$EVAL_TASK${SKIP_TEACHERS:+  ($SKIP_TEACHERS: student .pth alone)}"
 echo "[render] body=$BODY source=$SOURCE object=${OBJECT:-ALL} frames=$FRAMES -> $OUT"
 # Record WHAT ENVIRONMENT this video shows, in the job log, next to the video's
 # own name. A render is judged by eye and carries no other provenance.
@@ -156,8 +178,8 @@ print(f"[render] motion={e.get('motion_file')} retarget={e.get('retargetedMotion
 print(f"[render] numObs={e.get('numObs')} betas={e.get('betas_file', '<none>')} "
       f"objectDensity={e.get('objectDensity')} ffgResets={g.get('resets', False)}")
 EOPY
-RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
-    python -u -m intermimic.run --task InterMimic \
+env $SKIP_TEACHERS RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
+    python -u -m "$EVAL_ENTRY" --task "$EVAL_TASK" \
         --cfg_env "$ENV_YAML" --cfg_train "$TRAIN" \
         --subject_bodies "$BODY" --data_sub "$SOURCE" $OBJ_ARG $MOT_ARG \
         --test --checkpoint "$CHECKPOINT" --headless --num_envs 1
