@@ -27,13 +27,13 @@ def test_held_object_is_never_airborne():
     # OMOMO: carried at chest height the whole clip, hand contact on -> held, not flying
     s = cof.flight_stats(_clip(120, np.full(120, 1.2), np.ones(120)))
     assert s["free_share"] == 0 and s["airborne_share"] == 0 and s["air_run_s"] == 0
-    assert s["exponent"] == 1.0
+    assert s["e_air"] == 1.0 and s["e_flight"] == 1.0 and s["flight_m"] == 0
 
 
 def test_resting_object_with_no_contact_is_not_airborne():
     # OMOMO approach phase: object on the floor, nobody touching it
     s = cof.flight_stats(_clip(90, np.full(90, 0.3), np.zeros(90)))
-    assert s["free_share"] == 1.0 and s["airborne_share"] == 0 and s["exponent"] == 1.0
+    assert s["free_share"] == 1.0 and s["airborne_share"] == 0 and s["e_air"] == 1.0 and s["e_flight"] == 1.0
 
 
 def test_rolling_ball_is_free_but_grounded():
@@ -42,7 +42,7 @@ def test_rolling_ball_is_free_but_grounded():
     contact = (np.arange(300) % 10 == 0).astype(float)
     s = cof.flight_stats(_clip(300, z, contact))
     assert s["free_share"] == pytest.approx(0.9)
-    assert s["airborne_share"] == 0 and s["exponent"] == 1.0
+    assert s["airborne_share"] == 0 and s["flight_m"] == 0 and s["e_flight"] == 1.0
 
 
 def test_dribble_is_mostly_airborne_and_reaches_the_root():
@@ -55,12 +55,14 @@ def test_dribble_is_mostly_airborne_and_reaches_the_root():
     s = cof.flight_stats(_clip(T, z, contact))
     assert s["airborne_share"] >= 0.6                  # in the air most of the time
     assert 0.15 <= s["air_run_s"] <= 0.4               # one bounce: ~6 airborne frames of 20
-    assert s["exponent"] == pytest.approx(1 / cof.N_FACTORS)
+    assert s["e_air"] == pytest.approx(1 / cof.N_FACTORS)
+    assert 0.4 < s["air_height_m"] < 0.8 and s["flight_m"] > 0.3     # ~0.6 share x ~0.55 m mean height
+    assert s["e_flight"] < 0.5
     assert 0.7 < s["max_height"] < 0.88                # peak above the 5th-percentile "ground" (a little above the floor)
 
 
 def test_candidate_exponent_shape():
-    assert cof.candidate_exponent(0.0, 0.6) == 1.0
+    assert cof.candidate_exponent(0.0, 0.6) == 1.0 and cof.candidate_exponent(0.0, 0.5) == 1.0
     assert cof.candidate_exponent(0.3, 0.6) == pytest.approx(0.5)
     assert cof.candidate_exponent(0.6, 0.6) == pytest.approx(0.25)
     assert cof.candidate_exponent(0.9, 0.6) == 0.25            # never below 1/N

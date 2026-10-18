@@ -16,12 +16,22 @@ Per clip, from the 591-channel reference (obj_pos 318:321, contact_obj 330):
                   (default 0.15 m): the object is in flight, controlled by nobody
   air_run_s       longest unbroken airborne run, seconds (a dribble bounce ~0.3 s,
                   a shot ~1 s, a rolling ball 0)
+  air_height_m    mean height above rest over the AIRBORNE frames (0 if never airborne)
+  flight_m        airborne_share x air_height_m: metres of uncontrolled flight per
+                  frame, averaged over the clip. Measured 2026-10-17: airborne share
+                  alone does NOT separate soccer (median 30%, p90 69%) from basketball
+                  (median 47%, p90 62%), but a kicked ball skims the ground (peaks
+                  mostly < 1 m) while a basketball flies at hand height or to the hoop
+                  (peaks 1.7-3 m), so the height-weighted share is the candidate.
   key_std         key-body motion std (utils/motion_scale.py), for comparison
 
-A candidate exponent is reported alongside, e = max(1/N, 1 - airborne_share / A_REF)
-with A_REF the --air-ref (default 0.6: a clip airborne 60% of the time is graded at the
-4th root, OMOMO at product). The constant is a PLACEHOLDER until the three datasets
-have been measured; the point of this script is to pick it from their distributions.
+Two candidate exponents are reported, each max(1/N, 1 - stat / ref):
+  e_air     stat = airborne_share, ref = --air-ref (default 0.6)
+  e_flight  stat = flight_m,       ref = --flight-ref (default 0.5 m)
+The constants are PLACEHOLDERS until the three datasets have been measured; the point
+of this script is to pick the statistic and its constant from their distributions.
+OMOMO_new (13 trained sources, 3356 clips): airborne share median 0%, p90 0%; the 4%
+tail is objects raised with no contact flag (resting on a table / missed labels).
 
     python3 scripts/clip_object_flight_stats.py --motion-dir InterAct/OMOMO_new --sources sub2 sub6 [--top 10]
     python3 scripts/clip_object_flight_stats.py --motion-dir InterAct/behave_cari4d_bball7_cf2 --csv bball.csv
@@ -51,6 +61,8 @@ _BODY = ["Pelvis", "L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_
 _KEY = ["L_Hip", "L_Knee", "L_Ankle", "L_Toe", "R_Hip", "R_Knee", "R_Ankle", "R_Toe", "Torso", "Spine", "Chest",
         "Neck", "Head", "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
 KEY_IDS = [_BODY.index(k) for k in _KEY]
+FIELDS = ["clip", "source", "object", "frames", "free_share", "ground_z", "airborne_share", "air_run_s",
+          "max_height", "air_height_m", "flight_m", "key_std", "e_air", "e_flight"]
 
 
 def load_clip(path):
@@ -70,13 +82,13 @@ def key_body_std(body_pos_flat):
     return float(np.sqrt((dev ** 2).sum(-1).mean()))
 
 
-def candidate_exponent(airborne_share, air_ref, n_factors=N_FACTORS):
-    """e = max(1/N, 1 - airborne_share / air_ref): product for a grounded/held object,
-    the 1/N root once the object is airborne air_ref of the time."""
-    return float(max(1.0 / n_factors, 1.0 - airborne_share / air_ref))
+def candidate_exponent(stat, ref, n_factors=N_FACTORS):
+    """e = max(1/N, 1 - stat / ref): product at stat 0 (a held or resting object), the 1/N
+    root once the statistic reaches ref."""
+    return float(max(1.0 / n_factors, 1.0 - stat / ref))
 
 
-def flight_stats(x, air_height=0.15, contact_thres=0.1, fps=FPS, air_ref=0.6):
+def flight_stats(x, air_height=0.15, contact_thres=0.1, fps=FPS, air_ref=0.6, flight_ref=0.5):
     """The per-clip numbers from a (T, 591) clip array."""
     T = len(x)
     free = np.abs(x[:, I_CONTACT_OBJ]) < contact_thres
@@ -88,6 +100,8 @@ def flight_stats(x, air_height=0.15, contact_thres=0.1, fps=FPS, air_ref=0.6):
         run = run + 1 if a else 0
         longest = max(longest, run)
     air_share = float(airborne.mean()) if T else 0.0
+    air_h = float((z - ground)[airborne].mean()) if airborne.any() else 0.0
+    flight = air_share * air_h
     return {
         "frames": T,
         "free_share": float(free.mean()) if T else 0.0,
@@ -95,8 +109,11 @@ def flight_stats(x, air_height=0.15, contact_thres=0.1, fps=FPS, air_ref=0.6):
         "airborne_share": air_share,
         "air_run_s": longest / fps,
         "max_height": float((z - ground).max()) if T else 0.0,
+        "air_height_m": air_h,
+        "flight_m": flight,
         "key_std": key_body_std(x[:, I_BODY]),
-        "exponent": candidate_exponent(air_share, air_ref),
+        "e_air": candidate_exponent(air_share, air_ref),
+        "e_flight": candidate_exponent(flight, flight_ref),
     }
 
 
@@ -120,20 +137,31 @@ def collect(motion_dir, objects=None, sources=None, **kw):
 
 
 def table(rows):
-    out = [f"{'clip':26s} {'frames':>6s} {'free%':>6s} {'air%':>6s} {'air_run_s':>9s} {'max_h_m':>7s} {'key_std':>7s} {'e':>5s}"]
+    out = [f"{'clip':30s} {'frames':>6s} {'free%':>6s} {'air%':>6s} {'run_s':>6s} {'max_h':>6s} {'air_h':>6s} "
+           f"{'flight':>7s} {'kstd':>6s} {'e_air':>5s} {'e_fl':>5s}"]
     for r in rows:
-        out.append(f"{r['clip']:26s} {r['frames']:6d} {100 * r['free_share']:6.1f} {100 * r['airborne_share']:6.1f} "
-                   f"{r['air_run_s']:9.2f} {r['max_height']:7.2f} {r['key_std']:7.3f} {r['exponent']:5.2f}")
+        out.append(f"{r['clip']:30s} {r['frames']:6d} {100 * r['free_share']:6.1f} {100 * r['airborne_share']:6.1f} "
+                   f"{r['air_run_s']:6.2f} {r['max_height']:6.2f} {r['air_height_m']:6.2f} {r['flight_m']:7.3f} "
+                   f"{r['key_std']:6.3f} {r['e_air']:5.2f} {r['e_flight']:5.2f}")
     return "\n".join(out)
 
 
-def summary(rows, air_ref):
-    a = np.array([r["airborne_share"] for r in rows]); s = np.array([r["key_std"] for r in rows])
-    e = np.array([r["exponent"] for r in rows])
-    return (f"{len(rows)} clips | airborne share: median {100 * np.median(a):.1f}%  p90 {100 * np.percentile(a, 90):.1f}%  "
-            f"max {100 * a.max():.1f}% | key_std median {np.median(s):.3f} m | "
-            f"candidate e (air_ref {air_ref}): product {np.mean(e >= 1):.0%}, <= 0.5 {np.mean(e <= 0.5):.0%}, "
-            f"at the floor {np.mean(e <= 1 / N_FACTORS + 1e-9):.0%}")
+def summary(rows, air_ref, flight_ref):
+    def col(k):
+        return np.array([r[k] for r in rows])
+    def dist(v, pct=False):
+        m, u, d = (100, "%", 0) if pct else (1, "", 3)
+        return (f"median {m * np.median(v):.{d}f}{u}  p10 {m * np.percentile(v, 10):.{d}f}{u}  "
+                f"p90 {m * np.percentile(v, 90):.{d}f}{u}  max {m * v.max():.{d}f}{u}")
+    def shares(e):
+        return f"product {np.mean(e >= 1):.0%}, <= 0.5 {np.mean(e <= 0.5):.0%}, at the floor {np.mean(e <= 1 / N_FACTORS + 1e-9):.0%}"
+    return (f"{len(rows)} clips\n"
+            f"  airborne share : {dist(col('airborne_share'), True)}\n"
+            f"  air height (m) : {dist(col('air_height_m'))}\n"
+            f"  flight (m)     : {dist(col('flight_m'))}\n"
+            f"  key_std (m)    : {dist(col('key_std'))}\n"
+            f"  e_air    (air_ref {air_ref}):       {shares(col('e_air'))}\n"
+            f"  e_flight (flight_ref {flight_ref}): {shares(col('e_flight'))}")
 
 
 def main(argv=None):
@@ -142,24 +170,25 @@ def main(argv=None):
     ap.add_argument("--objects", nargs="*", default=None)
     ap.add_argument("--sources", nargs="*", default=None)
     ap.add_argument("--air-height", type=float, default=0.15, help="object this far above its resting height = airborne (m)")
-    ap.add_argument("--air-ref", type=float, default=0.6, help="airborne share at which the candidate exponent reaches 1/N")
-    ap.add_argument("--sort", default="airborne_share", choices=["airborne_share", "free_share", "air_run_s", "key_std", "frames"])
+    ap.add_argument("--air-ref", type=float, default=0.6, help="airborne share at which e_air reaches 1/N")
+    ap.add_argument("--flight-ref", type=float, default=0.5, help="flight metres at which e_flight reaches 1/N")
+    ap.add_argument("--sort", default="flight_m",
+                    choices=["flight_m", "airborne_share", "air_height_m", "free_share", "air_run_s", "key_std", "frames"])
     ap.add_argument("--top", type=int, default=0, help="print only the top N after sorting (0 = all)")
     ap.add_argument("--csv", default=None)
     a = ap.parse_args(argv)
-    rows = collect(a.motion_dir, a.objects, a.sources, air_height=a.air_height, air_ref=a.air_ref)
+    rows = collect(a.motion_dir, a.objects, a.sources, air_height=a.air_height, air_ref=a.air_ref, flight_ref=a.flight_ref)
     if not rows:
         raise SystemExit("no clips matched")
     rows.sort(key=lambda r: r[a.sort], reverse=True)
-    print(summary(rows, a.air_ref))
+    print(summary(rows, a.air_ref, a.flight_ref))
     print(table(rows[:a.top] if a.top else rows))
     if a.csv:
         with open(a.csv, "w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=["clip", "source", "object", "frames", "free_share", "ground_z",
-                                               "airborne_share", "air_run_s", "max_height", "key_std", "exponent"])
+            w = csv.DictWriter(fh, fieldnames=FIELDS)
             w.writeheader()
             for r in rows:
-                w.writerow({k: r[k] for k in w.fieldnames})
+                w.writerow({k: r[k] for k in FIELDS})
         print(f"wrote {a.csv}")
 
 
