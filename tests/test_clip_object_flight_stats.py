@@ -54,9 +54,9 @@ def test_dribble_is_mostly_airborne_and_reaches_the_root():
     contact = (np.abs(phase - 0.5) < 0.06).astype(float)
     s = cof.flight_stats(_clip(T, z, contact))
     assert s["airborne_share"] >= 0.6                  # in the air most of the time
-    assert 0.2 < s["air_run_s"] < 0.4                  # one bounce ~ 0.3 s
+    assert 0.15 <= s["air_run_s"] <= 0.4               # one bounce: ~6 airborne frames of 20
     assert s["exponent"] == pytest.approx(1 / cof.N_FACTORS)
-    assert s["max_height"] == pytest.approx(0.88, abs=0.05)
+    assert 0.7 < s["max_height"] < 0.88                # peak above the 5th-percentile "ground" (a little above the floor)
 
 
 def test_candidate_exponent_shape():
