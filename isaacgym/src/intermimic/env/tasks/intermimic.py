@@ -17,6 +17,7 @@ from ...utils.path_utils import resolve_data_path
 from ...utils.psi_update import psi_buffer_update
 from ...utils import reward_shape
 from ...utils import motion_scale
+from ...utils import object_flight
 
 
 # ----------------------------------------------------------------------------
@@ -110,7 +111,7 @@ class InterMimic(Humanoid_SMPLX):
         'pdControl', 'physicalBufferSize', 'plane', 'playdataset', 'powerScale',
         'projtype', 'raggedMotionData', 'resetThresholds', 'retargetedMotionDir',
         'rewardTerms', 'rewardWeights',
-        'rewardShape', 'motionScaleReward', 'robotType', 'rolloutLength', 'minEpisodeFrames',
+        'rewardShape', 'motionScaleReward', 'objectFlightReward', 'robotType', 'rolloutLength', 'minEpisodeFrames',
         'rootHeightObs', 'saveImages', 'scaling', 'stateInit', 'subjectBodies',
         'staticScene',
         'subjectHeightsFile', 'subjectPairWeightsFile', 'teacherPolicy',
@@ -204,6 +205,16 @@ class InterMimic(Humanoid_SMPLX):
         # that does not exist yet. tests/test_motion_scale.py pins this ordering.
         self._motion_scale = motion_scale.parse_cfg(cfg['env'].get('motionScaleReward'))
         self._motion_std = None
+        # objectFlightReward: the same per-clip-exponent hook, driven by the clip's
+        # OBJECT FLIGHT instead of its motion magnitude (utils/object_flight.py; Jess
+        # 2026-10-17: OMOMO/soccer at product, basketball at the root, as a function
+        # of the clip). Parsed here for the same reason as motionScaleReward: the
+        # motion load computes the per-clip flight. The two rules are exclusive.
+        self._object_flight = object_flight.parse_cfg(cfg['env'].get('objectFlightReward'))
+        self._motion_flight = None
+        if self._object_flight['enable'] and self._motion_scale['enable']:
+            raise ValueError("[intermimic] objectFlightReward and motionScaleReward are both enabled; "
+                             "one per-clip exponent rule at a time")
         # Factors under the root, known from the cfg alone (the pose flag itself is
         # parsed much later): 4, or 5 when the pose term is enabled.
         self._motion_scale_n_factors = 4 + (1 if bool(
@@ -545,6 +556,15 @@ class InterMimic(Humanoid_SMPLX):
                   f"than that are graded as PRODUCT, twice that or more keep the 1/N root); "
                   f"std = per-clip key-body position std",
                   flush=True)
+        if self._object_flight['enable']:
+            if self._reward_shape != 'geometric_all':
+                raise ValueError("[intermimic] objectFlightReward.enable needs rewardShape: "
+                                 f"geometric_all (got {self._reward_shape!r})")
+            of = self._object_flight
+            print(f"[intermimic] objectFlightReward: exponent = 1 - (1 - 1/N) * clamp((flight - "
+                  f"{of['flatFlight']}) / ({of['rootFlight']} - {of['flatFlight']}), 0, 1); flight = per-clip "
+                  f"airborne share x mean airborne height (m): PRODUCT up to {of['flatFlight']} m, the 1/N "
+                  f"root from {of['rootFlight']} m (utils/object_flight.py)", flush=True)
         self._env_body_height = None
         if self._body_normalized_reward:
             if getattr(self, 'subject_bodies', None) is not None:
@@ -846,6 +866,42 @@ class InterMimic(Humanoid_SMPLX):
                 print(f"[motion-scale] {'...':40s}", flush=True)
             print(f"[motion-scale] {name:40s} {std:7.3f} {e:9.2f}", flush=True)
 
+    def _print_object_flight_table(self, motion_file, motion_flights):
+        """objectFlightReward startup table: what exponent every CLIP will be graded
+        under. Same shape as the motion-scale table: counts on product / on the root
+        / in between, and the extremes listed, so a wrong grading (an OMOMO clip at
+        the root, a basketball clip at product) is visible before epoch one."""
+        of = self._object_flight
+        n_clips = getattr(self, '_n_clips', len(motion_file)) or len(motion_file)
+        n_factors = self._motion_scale_n_factors      # NOT _pose_term_enable: that is set after the load
+        lo = 1.0 / n_factors
+        rows = []
+        for i in range(min(n_clips, len(motion_flights))):
+            fl = motion_flights[i]
+            rows.append((os.path.basename(motion_file[i]), fl,
+                         object_flight.exponent(fl, of['rootFlight'], of['flatFlight'], n_factors)))
+        rows.sort(key=lambda r: r[1])
+        fls = [r[1] for r in rows]
+        n_prod = sum(1 for r in rows if r[2] >= 1.0)
+        n_root = sum(1 for r in rows if r[2] <= lo + 1e-9)
+        print(f"[object-flight] {len(rows)} clips: flight min {min(fls):.3f} median "
+              f"{sorted(fls)[len(fls)//2]:.3f} max {max(fls):.3f} m; exponent = 1 - {1 - lo:.2f} * "
+              f"clamp((flight - {of['flatFlight']}) / ({of['rootFlight']} - {of['flatFlight']}), 0, 1)", flush=True)
+        print(f"[object-flight] {n_prod} clips at exponent 1 (PRODUCT), {n_root} at {lo:.2f} "
+              f"(the root), {len(rows) - n_prod - n_root} in between", flush=True)
+        print(f"[object-flight] {'clip':40s} {'flight m':>9s} {'exponent':>9s}", flush=True)
+        if len(rows) <= 40:
+            show = [(r, False) for r in rows]
+        else:                                   # smallest 15, the 10 around the median, largest 15
+            mid = len(rows) // 2
+            show = ([(r, False) for r in rows[:15]] + [(rows[mid - 5], True)]
+                    + [(r, False) for r in rows[mid - 4: mid + 5]] + [(rows[-15], True)]
+                    + [(r, False) for r in rows[-14:]])
+        for (name, fl, e), gap_before in show:
+            if gap_before:
+                print(f"[object-flight] {'...':40s}", flush=True)
+            print(f"[object-flight] {name:40s} {fl:9.3f} {e:9.2f}", flush=True)
+
     def _load_motion(self, motion_file, startk=0, topk=1, initk=0):
 
         hoi_datas = []
@@ -854,6 +910,9 @@ class InterMimic(Humanoid_SMPLX):
         # parsed in InterMimic.__init__ before any _load_motion call.
         _ms_on = self._motion_scale['enable']
         motion_stds = []
+        # objectFlightReward: per-motion object flight (metres), same bookkeeping.
+        _of_on = self._object_flight['enable']
+        motion_flights = []
         if type(motion_file) != type([]):
             motion_file = [motion_file]
         max_episode_length = []
@@ -937,6 +996,10 @@ class InterMimic(Humanoid_SMPLX):
                 # gets the std of its own reference.
                 # body_pos is a CPU tensor here; _key_body_ids lives on the sim device -> index with a list
                 motion_stds.append(motion_scale.key_body_std(loaded_dict['body_pos'], self._key_body_ids.tolist()))
+            if _of_on:
+                # The clip's own object flight from its raw channels (obj z, contact_obj),
+                # per MOTION like the std: the object track is the source clip's.
+                motion_flights.append(object_flight.clip_flight(loaded_dict['hoi_data']))
             loaded_dict['body_pos_vel'] = (loaded_dict['body_pos'][1:,:].clone() - loaded_dict['body_pos'][:-1,:].clone())*self.fps_data
             loaded_dict['body_pos_vel'] = torch.cat((torch.zeros((1, loaded_dict['body_pos_vel'].shape[-1])),loaded_dict['body_pos_vel']),dim=0)
 
@@ -1019,6 +1082,11 @@ class InterMimic(Humanoid_SMPLX):
                 raise RuntimeError(f"[motion-scale] {len(motion_stds)} stds for {len(motion_file)} motions")
             self._motion_std = to_torch(motion_stds, dtype=torch.float, device=self.device)
             self._print_motion_scale_table(motion_file, motion_stds)
+        if _of_on:
+            if len(motion_flights) != len(motion_file):
+                raise RuntimeError(f"[object-flight] {len(motion_flights)} flights for {len(motion_file)} motions")
+            self._motion_flight = to_torch(motion_flights, dtype=torch.float, device=self.device)
+            self._print_object_flight_table(motion_file, motion_flights)
         if ragged:
             # Same index tuples as the padded tensors (see RaggedMotion), so every
             # reader below, _motion_gather, and psi_buffer_update are unchanged.
@@ -2337,6 +2405,12 @@ class InterMimic(Humanoid_SMPLX):
             n_factors = 4 + (1 if pose_factor is not None else 0)
             exponent = motion_scale.exponent(self._motion_std[self.data_id],
                                              self._motion_scale['referenceStd'], n_factors)
+        elif self._object_flight['enable']:
+            # objectFlightReward: the clip's object-flight exponent, same hook.
+            n_factors = 4 + (1 if pose_factor is not None else 0)
+            exponent = object_flight.exponent(self._motion_flight[self.data_id],
+                                              self._object_flight['rootFlight'],
+                                              self._object_flight['flatFlight'], n_factors)
         reward = reward_shape.combine([rb, ro, rig, rcg], self._reward_shape,
                                       pose=pose_factor, exponent=exponent)
         if os.environ.get('REWARD_BREAKDOWN') == '1':
