@@ -18,6 +18,7 @@ from ...utils.psi_update import psi_buffer_update
 from ...utils import reward_shape
 from ...utils import motion_scale
 from ...utils import object_flight
+from ...utils import foot_skate_reward
 
 
 # ----------------------------------------------------------------------------
@@ -142,10 +143,11 @@ class InterMimic(Humanoid_SMPLX):
                 f"wrong thing. If a key is genuinely new, add it to "
                 f"InterMimic.KNOWN_ENV_KEYS.")
         rt = env_cfg.get('rewardTerms') or {}
-        bad = sorted(k for k in rt if k not in ('pose', 'freeFlightGate'))
+        bad = sorted(k for k in rt if k not in ('pose', 'freeFlightGate', 'footSkate'))
         if bad:
             raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} "
-                             f"(only 'pose', 'freeFlightGate').")
+                             f"(only 'pose', 'freeFlightGate', 'footSkate').")
+        foot_skate_reward.parse_cfg(rt.get('footSkate'))      # its own key check
         badf = sorted(k for k in (rt.get('freeFlightGate') or {})
                       if k not in ('enable', 'reward', 'resets'))
         if badf:
@@ -218,7 +220,8 @@ class InterMimic(Humanoid_SMPLX):
         # Factors under the root, known from the cfg alone (the pose flag itself is
         # parsed much later): 4, or 5 when the pose term is enabled.
         self._motion_scale_n_factors = 4 + (1 if bool(
-            ((cfg['env'].get('rewardTerms', {}) or {}).get('pose', {}) or {}).get('enable', False)) else 0)
+            ((cfg['env'].get('rewardTerms', {}) or {}).get('pose', {}) or {}).get('enable', False)) else 0) + (1 if bool(
+            ((cfg['env'].get('rewardTerms', {}) or {}).get('footSkate', {}) or {}).get('enable', False)) else 0)
         # Evaluation only works with stateInit "Start"
         state_init_is_start = (state_init == "Start")
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
@@ -641,6 +644,20 @@ class InterMimic(Humanoid_SMPLX):
         if self._pose_term_enable:
             print(f"[intermimic] pose reward (relative joint-angle) enabled; "
                   f"lambda={self._pose_lambda}", flush=True)
+        # rewardTerms.footSkate (utils/foot_skate_reward.py): a planted foot must not
+        # slide -- exp(-lambda * mean over the feet of |v_xy|^2 * [in contact in the
+        # sim]) as one more factor under the geometric_all root. Default OFF.
+        self._foot_skate = foot_skate_reward.parse_cfg(
+            (cfg['env'].get('rewardTerms', {}) or {}).get('footSkate'))
+        self._foot_skate_ids = None
+        if self._foot_skate['enable']:
+            if self._reward_shape != 'geometric_all':
+                raise ValueError("[intermimic] rewardTerms.footSkate.enable needs rewardShape: "
+                                 f"geometric_all (got {self._reward_shape!r})")
+            self._foot_skate_ids = self._build_key_body_ids_tensor(self._foot_skate['bodies'])
+            print(f"[intermimic] footSkate reward enabled: bodies {self._foot_skate['bodies']} -> rigid body "
+                  f"ids {self._foot_skate_ids.tolist()}, lambda={self._foot_skate['lambda']} per (m/s)^2, "
+                  f"planted = |contact force| > {self._foot_skate['contactThreshold']} N", flush=True)
 
         # --- Per-(body, source) pair sampling weights (curriculum balancing) ---
         # Optional. cfg 'subjectPairWeightsFile' points at a JSON mapping
@@ -2400,18 +2417,25 @@ class InterMimic(Humanoid_SMPLX):
         # motionScaleReward: per-env exponent on the whole product, gathered by the
         # env's current motion (same indexing as max_episode_length[self.data_id]).
         # N counts the factors actually under the root, pose included when on.
+        # rewardTerms.footSkate (opt-in): a planted foot's horizontal speed, one more
+        # factor under the root (utils/foot_skate_reward.py).
+        factors = [rb, ro, rig, rcg]
+        if self._foot_skate['enable']:
+            factors.append(foot_skate_reward.factor(self._rigid_body_vel, self._contact_forces,
+                                                    self._foot_skate_ids, self._foot_skate['lambda'],
+                                                    self._foot_skate['contactThreshold']))
         exponent = None
         if self._motion_scale['enable']:
-            n_factors = 4 + (1 if pose_factor is not None else 0)
+            n_factors = len(factors) + (1 if pose_factor is not None else 0)
             exponent = motion_scale.exponent(self._motion_std[self.data_id],
                                              self._motion_scale['referenceStd'], n_factors)
         elif self._object_flight['enable']:
             # objectFlightReward: the clip's object-flight exponent, same hook.
-            n_factors = 4 + (1 if pose_factor is not None else 0)
+            n_factors = len(factors) + (1 if pose_factor is not None else 0)
             exponent = object_flight.exponent(self._motion_flight[self.data_id],
                                               self._object_flight['rootFlight'],
                                               self._object_flight['flatFlight'], n_factors)
-        reward = reward_shape.combine([rb, ro, rig, rcg], self._reward_shape,
+        reward = reward_shape.combine(factors, self._reward_shape,
                                       pose=pose_factor, exponent=exponent)
         if os.environ.get('REWARD_BREAKDOWN') == '1':
             try:
