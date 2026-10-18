@@ -361,7 +361,10 @@ def test_rollout_window_can_reach_the_success_condition(path):
         assert env["rolloutLength"] == sv["overrides"]["rolloutLength"] == train_rollout
         assert "SUCCESS IS MEANINGLESS" in open(path).read()
         return
-    assert env["rolloutLength"] > train_rollout, (
+    # Wider than the training window, OR equal to it when the arm already trains at
+    # EVAL_ROLLOUT (the _fullep arms, 2026-10-15: rolloutLength 1000 > every clip, so
+    # the training window never truncates and the eval window cannot be wider).
+    assert env["rolloutLength"] > train_rollout or train_rollout == EVAL_ROLLOUT, (
         "eval rollout window must be widened past the training window")
     assert env["rolloutLength"] == EVAL_ROLLOUT
 
