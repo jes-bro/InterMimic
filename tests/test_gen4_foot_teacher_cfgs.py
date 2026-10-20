@@ -16,7 +16,8 @@ REPO = Path(__file__).resolve().parents[1]
 CFG = REPO / "isaacgym/src/intermimic/data/cfg"
 spec = importlib.util.spec_from_file_location("mk", REPO / "scripts/make_gen4_foot_teacher_cfgs.py")
 mk = importlib.util.module_from_spec(spec); spec.loader.exec_module(mk)
-ARMS = [(b, mk.arm_name(b)) for b in mk.BASES]
+ARMS = [(b, mk.arm_name(b)) for src in ("flight2", "flight") for b in mk.bases(src)]
+FLAT = {"flight2": 0.3, "flight": 0.0}
 
 
 def _flat(d, prefix=""):
@@ -35,8 +36,11 @@ def _diff(a, b):
 
 
 def test_the_set():
-    assert len(ARMS) == 21 and all(b.endswith("_flight2_fullep__f0") for b, _ in ARMS)
+    assert len(ARMS) == 42
+    assert sum(b.endswith("_flight2_fullep__f0") for b, _ in ARMS) == 21
+    assert sum(b.endswith("_flight_fullep__f0") for b, _ in ARMS) == 21
     assert mk.arm_name("gen4_x_flight2_fullep__f0") == "gen4_x_flight2foot_fullep__f0"
+    assert mk.arm_name("gen4_x_flight_fullep__f0") == "gen4_x_flightfoot_fullep__f0"
     assert mk.FOOT == {"lambda": 2.0, "bodies": ["L_Toe", "R_Toe"], "contactThreshold": 1.0}
 
 
@@ -49,7 +53,8 @@ def test_env_is_the_flight2_twin_plus_the_foot_block(base, arm):
     e = new["env"]
     assert e["rewardTerms"]["footSkate"] == {"enable": True, "lambda": 2.0, "bodies": ["L_Toe", "R_Toe"], "contactThreshold": 1.0}
     assert e["rewardTerms"]["pose"]["enable"] is False                         # still nopose
-    assert e["objectFlightReward"] == {"enable": True, "rootFlight": 0.6, "flatFlight": 0.3}
+    src = "flight2" if "_flight2_" in base else "flight"
+    assert e["objectFlightReward"] == {"enable": True, "rootFlight": 0.6, "flatFlight": FLAT[src]}
     assert e["rewardShape"] == "geometric_all"
     assert list(e["rewardTerms"]) == ["footSkate", "freeFlightGate", "pose"]  # key order kept
     assert e["keyBodies"].count("L_Toe") == 1 and e["contactBodies"].count("R_Toe") == 1   # the feet exist in the body lists
@@ -69,7 +74,8 @@ def test_launcher(base, arm):
     code = "\n".join(l for l in txt.splitlines() if not l.lstrip().startswith("#"))
     assert base not in code and f'--job-name="tch-{arm}"' in txt and f"smplx_teacher_{arm}/nn/" in code
     assert "footSkate:" in code and "lambda:\\s*2.0" in code                    # the guard
-    assert "objectFlightReward:" in code and "flatFlight:\\s*0.3" in code      # the flight2 guard survives
+    src = "flight2" if "_flight2_" in base else "flight"
+    assert "objectFlightReward:" in code and f"flatFlight:\\s*{FLAT[src]}" in code   # the source guard survives
     assert code.index("footSkate:") < code.index("python -u -m intermimic.run")
     assert "FOOT-SKATE PENALTY" in code
     r = subprocess.run(["bash", "-n", str(REPO / f"slurm_teacher_{arm}.sh")], capture_output=True, text=True)
@@ -89,7 +95,9 @@ def test_guard_refuses_the_flight2_cfg():
 def test_generator_is_idempotent():
     before = {p: p.read_text() for _, arm in ARMS for p in (
         CFG / f"omomo_teacher_{arm}.yaml", CFG / "train/rlg" / f"omomo_teacher_{arm}.yaml", REPO / f"slurm_teacher_{arm}.sh")}
-    r = subprocess.run([sys.executable, str(REPO / "scripts/make_gen4_foot_teacher_cfgs.py")], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+    for src in ("flight2", "flight"):
+        r = subprocess.run([sys.executable, str(REPO / "scripts/make_gen4_foot_teacher_cfgs.py"), "--from", src],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
     for p, txt in before.items():
         assert p.read_text() == txt, p

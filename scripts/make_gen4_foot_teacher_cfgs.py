@@ -36,13 +36,25 @@ _flight = importlib.util.spec_from_file_location("mkf", REPO / "scripts/make_gen
 mkf = importlib.util.module_from_spec(_flight); _flight.loader.exec_module(mkf)
 
 FOOT = {"lambda": 2.0, "bodies": ["L_Toe", "R_Toe"], "contactThreshold": 1.0}
-BASES = [mkf.arm_name(b, "flight2") for b in mkf.BASES]        # the 21 _flight2_fullep arms
-TAG_FROM, TAG_TO = "_flight2_", "_flight2foot_"
+# --from flight2 (default): the _flight2foot arms; --from flight: the _flightfoot arms
+# (Jess 2026-10-20), the same block on the one-constant object-flight arms.
+SOURCES = {"flight2": ("_flight2_", "_flight2foot_"), "flight": ("_flight_", "_flightfoot_")}
+SRC = "flight2"
+
+
+def bases(src=None):
+    """The 21 _<src>_fullep arms this generator twins."""
+    return [mkf.arm_name(b, src or SRC) for b in mkf.BASES]
+
+
+BASES = bases("flight2")
 
 
 def arm_name(base):
-    assert base.count(TAG_FROM) == 1, base
-    return base.replace(TAG_FROM, TAG_TO)
+    for frm, to in SOURCES.values():
+        if base.count(frm) == 1:
+            return base.replace(frm, to)
+    raise AssertionError(base)
 
 
 def foot_block(ind):
@@ -51,7 +63,7 @@ def foot_block(ind):
 
 
 GUARD = (f"# Foot-skate guard: this arm trains with the planted-foot speed penalty; a cfg that\n"
-         f"# lost the block would train the flight2 arm under this arm's name.\n"
+         f"# lost the block would train the SRCTAG arm under this arm's name.\n"
          f"if ! grep -qE '^\\s*footSkate:' \"$CFG_ENV\" || ! grep -qE '^\\s*lambda:\\s*{FOOT['lambda']}\\s*$' \"$CFG_ENV\"; then\n"
          f"    echo \"[teacher] ERROR: foot-skate arm without rewardTerms.footSkate lambda {FOOT['lambda']} in $CFG_ENV\" >&2; exit 1\n"
          f"fi\n")
@@ -91,7 +103,8 @@ def derive_launcher(text, base):
     m = re.search(r"^# Object-flight guard:.*?\nfi\n", text, re.M | re.S)
     if not m:
         raise SystemExit(f"ERROR: {base}: object-flight guard not found in the launcher")
-    text = text[:m.end()] + GUARD + text[m.end():]
+    src = next(k for k, (frm, _) in SOURCES.items() if base.count(frm) == 1)
+    text = text[:m.end()] + GUARD.replace("SRCTAG", src) + text[m.end():]
     text = text.replace(base, arm_name(base))
     text = text.replace("OBJECT-FLIGHT EXPONENT", f"FOOT-SKATE PENALTY (lambda {FOOT['lambda']}) + OBJECT-FLIGHT EXPONENT")
     lines = text.splitlines(keepends=True)
@@ -114,9 +127,11 @@ def verify(base, env_base, env_out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--diff", action="store_true", help="cfg_diff each env cfg vs its flight2 twin")
+    ap.add_argument("--from", dest="src", choices=sorted(SOURCES), default="flight2",
+                    help="which object-flight arms to twin: flight2 -> _flight2foot (default), flight -> _flightfoot")
     a = ap.parse_args()
     n = 0
-    for base in BASES:
+    for base in bases(a.src):
         env_src, tr_src, sh_src = CFG / f"omomo_teacher_{base}.yaml", CFG / "train/rlg" / f"omomo_teacher_{base}.yaml", REPO / f"slurm_teacher_{base}.sh"
         for p in (env_src, tr_src, sh_src):
             if not p.is_file():
