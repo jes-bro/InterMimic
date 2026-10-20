@@ -1,0 +1,165 @@
+# EVAL config -- gen4_soccer15_geoall_xf_nvadlr_nopose_ft49k_flightfootw_fullep__f0: DERIVED from omomo_eval_gen4_soccer15_geoall_xf_nvadlr_nopose_msexp__f0.yaml by scripts/make_finetune_cfgs.py
+# with the fine-tune arm's block edits (minEpisodeFrames mirrored: at eval Start init begins every
+# episode at frame 0 and rolloutLength 1000 runs it to the end). check_eval_cfg.py proves it mirrors the arm.
+evalFor:
+  - gen4_soccer15_geoall_xf_nvadlr_nopose_ft49k_flightfootw_fullep__f0
+
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataSub: ['sub405', 'sub480', 'sub482', 'sub484', 'sub485', 'sub487', 'sub488', 'sub489', 'sub490', 'sub491', 'sub493', 'sub494', 'sub495', 'sub496', 'sub497']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  enableEvaluation: True                   # eval-owned
+  envSpacing: 2
+  episodeLength: 300
+  humanoidAssetSuffix: _inertial
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  minEpisodeFrames: 30
+  moreRigid: false
+  motion_file: InterAct/behave_cari4d_soccer_cf
+  numEnvs: 1024                            # eval-owned: concurrency, same in every eval cfg
+  numObs: 9594
+  objectConvexHull: true
+  objectFlightReward:
+    enable: true
+    rootFlight: 0.6
+    flatFlight: 0.0
+  objectMass: 0.43
+  objectShapeProps:
+    restitution: 0.65
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 1                    # eval-owned: PSI copies are identical at eval
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.65
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/behave_cari4d_soccer_f0_bodymajor
+  rewardShape: geometric_all
+  rewardTerms:
+    footWeight:
+      enable: true
+      weight: 5.0
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: false
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 1000                      # eval-owned: the uniform eval window (> every clip)
+  saveImages: false
+  stateInit: "Start"                       # eval-owned: metrics exist only in Start
+  subjectBodies: ['sub2']                  # placeholder: every pair overrides it via --subject_bodies
+  subjectHeightsFile: scripts/synthetic_heights_gen4.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2
