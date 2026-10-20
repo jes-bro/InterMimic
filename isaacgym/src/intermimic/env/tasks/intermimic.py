@@ -19,6 +19,7 @@ from ...utils import reward_shape
 from ...utils import motion_scale
 from ...utils import object_flight
 from ...utils import foot_skate_reward
+from ...utils import foot_terms
 
 
 # ----------------------------------------------------------------------------
@@ -143,11 +144,13 @@ class InterMimic(Humanoid_SMPLX):
                 f"wrong thing. If a key is genuinely new, add it to "
                 f"InterMimic.KNOWN_ENV_KEYS.")
         rt = env_cfg.get('rewardTerms') or {}
-        bad = sorted(k for k in rt if k not in ('pose', 'freeFlightGate', 'footSkate'))
+        bad = sorted(k for k in rt if k not in ('pose', 'freeFlightGate', 'footSkate', 'footWeight', 'footSwing'))
         if bad:
             raise ValueError(f"[intermimic] unknown rewardTerms key(s) {bad} "
-                             f"(only 'pose', 'freeFlightGate', 'footSkate').")
+                             f"(only 'pose', 'freeFlightGate', 'footSkate', 'footWeight', 'footSwing').")
         foot_skate_reward.parse_cfg(rt.get('footSkate'))      # its own key check
+        foot_terms.parse_foot_weight(rt.get('footWeight'))
+        foot_terms.parse_foot_swing(rt.get('footSwing'))
         badf = sorted(k for k in (rt.get('freeFlightGate') or {})
                       if k not in ('enable', 'reward', 'resets'))
         if badf:
@@ -221,7 +224,8 @@ class InterMimic(Humanoid_SMPLX):
         # parsed much later): 4, or 5 when the pose term is enabled.
         self._motion_scale_n_factors = 4 + (1 if bool(
             ((cfg['env'].get('rewardTerms', {}) or {}).get('pose', {}) or {}).get('enable', False)) else 0) + (1 if bool(
-            ((cfg['env'].get('rewardTerms', {}) or {}).get('footSkate', {}) or {}).get('enable', False)) else 0)
+            ((cfg['env'].get('rewardTerms', {}) or {}).get('footSkate', {}) or {}).get('enable', False)) else 0) + (1 if bool(
+            ((cfg['env'].get('rewardTerms', {}) or {}).get('footSwing', {}) or {}).get('enable', False)) else 0)
         # Evaluation only works with stateInit "Start"
         state_init_is_start = (state_init == "Start")
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
@@ -658,6 +662,28 @@ class InterMimic(Humanoid_SMPLX):
             print(f"[intermimic] footSkate reward enabled: bodies {self._foot_skate['bodies']} -> rigid body "
                   f"ids {self._foot_skate_ids.tolist()}, lambda={self._foot_skate['lambda']} per (m/s)^2, "
                   f"planted = |contact force| > {self._foot_skate['contactThreshold']} N", flush=True)
+        # rewardTerms.footWeight / footSwing (utils/foot_terms.py): make the feet matter.
+        # footWeight multiplies the ankles' and toes' error inside the position and
+        # rotation terms; footSwing penalises a sim toe below the reference toe on the
+        # reference's swing frames, one more factor under the root. Both default OFF.
+        _rt = cfg['env'].get('rewardTerms', {}) or {}
+        self._foot_weight = foot_terms.parse_foot_weight(_rt.get('footWeight'))
+        self._foot_swing = foot_terms.parse_foot_swing(_rt.get('footSwing'))
+        self._toe_ids = None
+        if self._foot_weight['enable'] or self._foot_swing['enable']:
+            if self._reward_shape != 'geometric_all':
+                raise ValueError("[intermimic] rewardTerms.footWeight / footSwing need rewardShape: "
+                                 f"geometric_all (got {self._reward_shape!r})")
+            # the toes in the 52-body (rigid body) order, used by footSwing and the rotation weight
+            self._toe_ids = self._build_key_body_ids_tensor(['L_Toe', 'R_Toe'])
+            self._foot_ids52 = self._build_key_body_ids_tensor(['L_Ankle', 'L_Toe', 'R_Ankle', 'R_Toe'])
+        if self._foot_weight['enable']:
+            print(f"[intermimic] footWeight enabled: ankles + toes weighted x{self._foot_weight['weight']} in the "
+                  f"position and rotation terms (rigid body ids {self._foot_ids52.tolist()})", flush=True)
+        if self._foot_swing['enable']:
+            print(f"[intermimic] footSwing enabled: on reference swing frames (contact_human < {foot_terms.SWING_LABEL}) "
+                  f"a toe below the reference toe costs exp(-{self._foot_swing['lambda']} * shortfall^2); "
+                  f"toe ids {self._toe_ids.tolist()}", flush=True)
 
         # --- Per-(body, source) pair sampling weights (curriculum balancing) ---
         # Optional. cfg 'subjectPairWeightsFile' points at a JSON mapping
@@ -2424,6 +2450,14 @@ class InterMimic(Humanoid_SMPLX):
             factors.append(foot_skate_reward.factor(self._rigid_body_vel, self._contact_forces,
                                                     self._foot_skate_ids, self._foot_skate['lambda'],
                                                     self._foot_skate['contactThreshold']))
+        if self._foot_swing['enable']:
+            # rewardTerms.footSwing: a sim toe below the reference toe on the reference's
+            # swing frames (utils/foot_terms.py). Heights are world z of the toe bodies.
+            _E = self._curr_obs.shape[0]
+            sim_toe_z = self.extract_data_component('body_pos', obs=self._curr_obs).view(_E, -1, 3)[:, self._toe_ids, 2]
+            ref_toe_z = self.extract_data_component('body_pos', obs=self._curr_ref_obs).view(_E, -1, 3)[:, self._toe_ids, 2]
+            ref_toe_label = self.extract_data_component('contact_human', obs=self._curr_ref_obs)[:, self._toe_ids]
+            factors.append(foot_terms.swing_factor(sim_toe_z, ref_toe_z, ref_toe_label, self._foot_swing['lambda']))
         exponent = None
         if self._motion_scale['enable']:
             n_factors = len(factors) + (1 if pose_factor is not None else 0)
@@ -2516,6 +2550,9 @@ class InterMimic(Humanoid_SMPLX):
         weight_hp = weight_h.clone().detach()  
         ancle_toe_ids = [i for i in range(len_keypos) if 'Ankle' in self.key_bodies[i] or 'Toe' in self.key_bodies[i]]
         weight_hp[:, ancle_toe_ids] = 1
+        if self._foot_weight['enable']:
+            # rewardTerms.footWeight: the feet's error counts `weight` times (utils/foot_terms.py)
+            weight_hp[:, self._foot_ids52] = weight_hp[:, self._foot_ids52] * self._foot_weight['weight']
 
         pos_diff = ref_key_pos - key_pos
         if self._body_normalized_reward and self._env_body_height is not None:
@@ -2532,7 +2569,10 @@ class InterMimic(Humanoid_SMPLX):
         diff_angle, diff_axis = torch_utils.quat_to_angle_axis(diff_quat_data)
         diff = diff_angle.view(-1, 52)
         weight_hr = 1 - weight_h
-        
+        if self._foot_weight['enable']:
+            weight_hr = weight_hr.clone()
+            weight_hr[:, self._foot_ids52] = weight_hr[:, self._foot_ids52] * self._foot_weight['weight']
+
         er = torch.mean(diff[:, :] * weight_hr, dim=-1)
         rr = torch.exp(-er*w['r'])
         
