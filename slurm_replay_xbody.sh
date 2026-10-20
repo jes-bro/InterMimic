@@ -72,12 +72,22 @@ if [ -n "$CLIP" ]; then
         "${SOURCE}"_*) : ;;   # must belong to SOURCE or the dataSub filter drops it
         *) echo "[replayxb] ERROR: CLIP=$CLIP does not start with SOURCE=$SOURCE" >&2; exit 1 ;;
     esac
-    SRC_CLIP="$(pwd)/InterAct/OMOMO_new/${CLIP}.pt"
+    # The clip comes from the base cfg's own motion dir (OMOMO_new for OMOMO arms, the
+    # activity dir for bball7 / soccer15 / act22), as slurm_render_policy.sh does, so a
+    # reference can be replayed for any arm the policy renders cover.
+    MOTION_DIR=$(python3 -c "import yaml,sys; print(yaml.safe_load(open('$BASE'))['env']['motion_file'])")
+    SRC_CLIP="$(pwd)/${MOTION_DIR}/${CLIP}.pt"
     [ -f "$SRC_CLIP" ] || { echo "[replayxb] ERROR: clip not found: $SRC_CLIP" >&2; exit 1; }
-    CLIPDIR="/tmp/replayxb_clip_${CLIP}"
+    CLIPDIR="/tmp/replayxb_clip_${CLIP}_$$"
     mkdir -p "$CLIPDIR"; ln -sf "$SRC_CLIP" "$CLIPDIR/${CLIP}.pt"
     MOT_ARG="--motion_file $CLIPDIR"
     echo "[replayxb] CLIP pinned: only ${CLIP}.pt (motion_file -> $CLIPDIR)"
+    # Same camera as the policy render of this clip (scripts/cam_for_clip.py), so the
+    # reference video and the policy videos are framed identically.
+    if [ -z "${RECORD_VIDEO_CAM_POS:-}" ]; then
+        eval "$(python3 scripts/cam_for_clip.py "$SRC_CLIP" | grep -E '^export ')" || { echo "[replayxb] ERROR: cam_for_clip.py failed for $SRC_CLIP" >&2; exit 1; }
+        echo "[replayxb] camera auto-framed to the clip: pos=$RECORD_VIDEO_CAM_POS target=$RECORD_VIDEO_CAM_TARGET"
+    fi
 fi
 
 mkdir -p renders
