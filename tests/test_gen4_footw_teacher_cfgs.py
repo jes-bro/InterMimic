@@ -108,3 +108,14 @@ def test_weight_2p5_set_exists_and_differs_only_in_the_weight():
         assert e2["env"]["rewardTerms"]["footWeight"]["weight"] == 2.5
         sh = (REPO / f"slurm_teacher_{arm2}.sh").read_text()
         assert "weight:\\s*2.5" in sh and f"smplx_teacher_{arm2}/nn/" in sh
+
+
+def test_weight_2_flight_set_exists_and_differs_only_in_the_weight():
+    """--weight 2 --from flight writes the flightfootw2 twins (Jess 2026-10-21: flight gets the lighter weight)."""
+    for src, base, arm in ARMS[21:27]:
+        arm2 = arm.replace("footw_", "footw2_")
+        e5 = yaml.safe_load(open(CFG / f"omomo_teacher_{arm}.yaml"))
+        e2 = yaml.safe_load(open(CFG / f"omomo_teacher_{arm2}.yaml"))
+        assert _diff(e5, e2) == {"env.rewardTerms.footWeight.weight"}
+        assert e2["env"]["rewardTerms"]["footWeight"]["weight"] == 2.0
+        assert "weight:\\s*2.0" in (REPO / f"slurm_teacher_{arm2}.sh").read_text()
