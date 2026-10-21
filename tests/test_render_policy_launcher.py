@@ -54,3 +54,10 @@ def test_gen4_student_eval_cfgs_name_the_distill_entry_and_g4_task():
         assert e["studentObsHorizons"] == [1, 4, 7, 10, 13, 16] and e["numObs"] == 9594
         assert e["teacherPolicy"] == "checkpoints/teachers/gen4_omomo_groups_msexp"
         assert ("minEpisodeFrames" in e) == arm.endswith("_fullep__f0")
+
+
+def test_body_generic_means_no_body_override():
+    # BODY=generic: the cfg's own robotType drives (the InterMimic baseline arms know only upstream's
+    # smplx/omomo.xml); the launcher passes an EMPTY --subject_bodies, which config.py treats as "leave it"
+    assert '[ "$BODY" = generic ] && SUBJ_ARG=""' in CODE
+    assert '--subject_bodies "$SUBJ_ARG"' in CODE and '--subject_bodies "$BODY"' not in CODE

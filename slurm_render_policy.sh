@@ -58,7 +58,11 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="isaacgym/src:.${PYTHONPATH:+:$PYTHONPATH}"
 
 ARM="${ARM:-}"
-BODY="${BODY:-sub10}"          # body in sim (subjectBodies)
+BODY="${BODY:-sub10}"          # body in sim (subjectBodies); BODY=generic = NO override: the cfg's
+                               # own robotType (upstream's smplx/omomo.xml for the InterMimic
+                               # baseline arms, which know only that body)
+SUBJ_ARG="$BODY"
+[ "$BODY" = generic ] && SUBJ_ARG=""
 SOURCE="${SOURCE:-}"           # reference motion (dataSub); default = the arm's own
 OBJECT="${OBJECT:-}"           # empty = all objects
 FRAMES="${FRAMES:-300}"
@@ -181,7 +185,7 @@ EOPY
 env $SKIP_TEACHERS RECORD_VIDEO="$OUT" MAX_VIDEO_FRAMES="$FRAMES" \
     python -u -m "$EVAL_ENTRY" --task "$EVAL_TASK" \
         --cfg_env "$ENV_YAML" --cfg_train "$TRAIN" \
-        --subject_bodies "$BODY" --data_sub "$SOURCE" $OBJ_ARG $MOT_ARG \
+        --subject_bodies "$SUBJ_ARG" --data_sub "$SOURCE" $OBJ_ARG $MOT_ARG \
         --test --checkpoint "$CHECKPOINT" --headless --num_envs 1
 
 echo
