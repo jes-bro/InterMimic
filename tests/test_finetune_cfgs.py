@@ -141,3 +141,22 @@ def test_generator_is_idempotent():
     assert r.returncode == 0, r.stderr
     for p, txt in before.items():
         assert p.read_text() == txt, p
+
+
+def test_weight_2p5_fine_tunes_exist_and_differ_only_in_the_weight():
+    """--weight 2.5 writes the footw2p5 / flightfootw2p5 / flightfootw2p5swing fine-tunes."""
+    for short in ("chairs", "boxes"):
+        base, epoch = mk.TRAINED[short]
+        for tag in ("footw", "flightfootw", "flightfootwswing"):
+            a5 = mk.arm_name(base, epoch, tag)
+            a2 = a5.replace("footw", "footw2p5")
+            e5 = yaml.safe_load(open(CFG / f"omomo_teacher_{a5}.yaml"))
+            e2 = yaml.safe_load(open(CFG / f"omomo_teacher_{a2}.yaml"))
+            assert _diff(e5, e2) == {"env.rewardTerms.footWeight.weight"}
+            assert e2["env"]["rewardTerms"]["footWeight"]["weight"] == 2.5
+            t2 = yaml.safe_load(open(CFG / "train/rlg" / f"omomo_teacher_{a2}.yaml"))["params"]["config"]
+            assert t2["full_experiment_name"] == f"smplx_teacher_{a2}" and t2["resume_from"] == mk.ckpt_path(base, epoch)
+            sh = (REPO / f"slurm_teacher_{a2}.sh").read_text()
+            assert "weight:\\s*2.5" in sh and f'BASE_CKPT="{mk.ckpt_path(base, epoch)}"' in sh
+            r = subprocess.run([sys.executable, str(REPO / "scripts/check_eval_cfg.py"), "--arm", a2], capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr

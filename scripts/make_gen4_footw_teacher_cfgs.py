@@ -27,8 +27,17 @@ CFG = REPO / "isaacgym/src/intermimic/data/cfg"
 _s = importlib.util.spec_from_file_location("mkf", REPO / "scripts/make_gen4_flight_teacher_cfgs.py")
 mkf = importlib.util.module_from_spec(_s); _s.loader.exec_module(mkf)
 
-FOOT_WEIGHT = 5.0
+FOOT_WEIGHT = 5.0            # default; --weight W writes the _<src>footwW_ arms (the tag carries W unless W == 5)
 SOURCES = {"msexp": ("_msexp_", "_msexpfootw_"), "flight": ("_flight_", "_flightfootw_")}
+
+
+def set_weight(w):
+    """Pick the weight: the tag is footw for 5 (the first set), footw<W> otherwise (footw2, footw3)."""
+    global FOOT_WEIGHT, SOURCES, GUARD
+    FOOT_WEIGHT = float(w)
+    tag = "footw" if FOOT_WEIGHT == 5.0 else "footw" + (str(int(w)) if float(w).is_integer() else str(w).replace(".", "p"))
+    SOURCES = {"msexp": ("_msexp_", f"_msexp{tag}_"), "flight": ("_flight_", f"_flight{tag}_")}
+    GUARD = guard_text()
 
 
 def bases(src):
@@ -45,11 +54,15 @@ def foot_block(ind):
     return f"{ind}footWeight:\n{ind}  enable: true\n{ind}  weight: {FOOT_WEIGHT}\n"
 
 
-GUARD = (f"# Foot-weight guard: this arm trains with the feet weighted x{FOOT_WEIGHT} in the position / rotation terms\n"
-         f"# (utils/foot_terms.py); a cfg that lost the block would train the SRC arm under this arm's name.\n"
-         f"if ! grep -qE '^\\s*footWeight:' \"$CFG_ENV\" || ! grep -qE '^\\s*weight:\\s*{FOOT_WEIGHT}\\s*$' \"$CFG_ENV\"; then\n"
-         f"    echo \"[teacher] ERROR: footWeight arm without rewardTerms.footWeight weight {FOOT_WEIGHT} in $CFG_ENV\" >&2; exit 1\n"
-         f"fi\n")
+def guard_text():
+    return (f"# Foot-weight guard: this arm trains with the feet weighted x{FOOT_WEIGHT} in the position / rotation terms\n"
+            f"# (utils/foot_terms.py); a cfg that lost the block would train the SRC arm under this arm's name.\n"
+            f"if ! grep -qE '^\\s*footWeight:' \"$CFG_ENV\" || ! grep -qE '^\\s*weight:\\s*{FOOT_WEIGHT}\\s*$' \"$CFG_ENV\"; then\n"
+            f"    echo \"[teacher] ERROR: footWeight arm without rewardTerms.footWeight weight {FOOT_WEIGHT} in $CFG_ENV\" >&2; exit 1\n"
+            f"fi\n")
+
+
+GUARD = guard_text()
 
 
 def note(base, src, what):
@@ -104,7 +117,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from", dest="src", choices=sorted(SOURCES), default="msexp")
     ap.add_argument("--diff", action="store_true")
+    ap.add_argument("--weight", type=float, default=5.0, help="footWeight.weight; 5 -> the footw arms, W -> the footw<W> arms")
     a = ap.parse_args()
+    set_weight(a.weight)
     n = 0
     for base in bases(a.src):
         env_src, tr_src, sh_src = CFG / f"omomo_teacher_{base}.yaml", CFG / "train/rlg" / f"omomo_teacher_{base}.yaml", REPO / f"slurm_teacher_{base}.sh"

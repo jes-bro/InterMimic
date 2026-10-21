@@ -59,8 +59,17 @@ VARIANTS = {  # tag -> (flight rule on, footWeight on, footSwing on)
     "flightfootwswing": (True, True, True),
     "footw":            (False, True, False),
 }
-FOOT_WEIGHT = 5.0
+FOOT_WEIGHT = 5.0            # default; --weight W renames the footw variants footw<W> (footw2, flightfootw2, ...)
 SWING_LAMBDA = 50.0
+
+
+def set_weight(w):
+    """Pick the foot weight: variant tags carry it unless it is 5 (the first set)."""
+    global FOOT_WEIGHT, VARIANTS
+    FOOT_WEIGHT = float(w)
+    if FOOT_WEIGHT != 5.0:
+        sfx = str(int(w)) if float(w).is_integer() else str(w).replace(".", "p")
+        VARIANTS = {(k.replace("footw", f"footw{sfx}") if "footw" in k else k): v for k, v in VARIANTS.items() if "footw" in k}
 FULLEP_ROLLOUT, FULLEP_MIN_FRAMES = 1000, 30
 FLAT = 0.0
 
@@ -259,7 +268,11 @@ def main():
     ap.add_argument("--bases", nargs="*", default=sorted(TRAINED), choices=sorted(TRAINED))
     ap.add_argument("--variants", nargs="*", default=list(VARIANTS), choices=list(VARIANTS))
     ap.add_argument("--diff", action="store_true", help="cfg_diff each env cfg vs its base")
+    ap.add_argument("--weight", type=float, default=5.0, help="footWeight.weight for the footw variants; W != 5 writes only the footw<W> variants")
     a = ap.parse_args()
+    set_weight(a.weight)
+    if a.weight != 5.0:
+        a.variants = [v for v in VARIANTS]
     n = 0
     for short in a.bases:
         base, epoch = TRAINED[short]

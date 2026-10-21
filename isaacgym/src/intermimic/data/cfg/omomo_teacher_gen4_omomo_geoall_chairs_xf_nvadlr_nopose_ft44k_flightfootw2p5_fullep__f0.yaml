@@ -1,0 +1,205 @@
+# FINE-TUNE arm (flightfootw2p5): DERIVED from the gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0 env cfg by scripts/make_finetune_cfgs.py.
+# Starts from that teacher's checkpoint at epoch 44000 (checkpoints/smplx_teacher_gen4_omomo_geoall_chairs_xf_nvadlr_nopose_msexp__f0/nn/mimic_00044000.pth) and
+# continues under: full episodes (rolloutLength 1000 + minEpisodeFrames 30); objectFlightReward {rootFlight 0.6, flatFlight 0.0} in place of motionScaleReward; rewardTerms.footWeight {weight 2.5}.
+# Nothing else differs (pinned by tests/test_finetune_cfgs.py). A WARM START from another run's
+# checkpoint, Jess 2026-10-20, for the Nov 10 deadline: reported as 'trained, then fine-tuned'.
+env:
+  asset:
+    assetRoot: intermimic/data/assets
+  ballSize: 1.0
+  bodyNormalizedReward: true
+  contactBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  - L_Index3
+  - L_Middle3
+  - L_Pinky3
+  - L_Ring3
+  - L_Thumb3
+  - R_Index3
+  - R_Middle3
+  - R_Pinky3
+  - R_Ring3
+  - R_Thumb3
+  controlFrequencyInv: 2
+  cpuMotionData: true
+  dataFPS: 30
+  dataFramesScale: 1
+  dataObjects: ['whitechair', 'woodchair']
+  dataSub: ['sub1', 'sub2', 'sub3', 'sub5', 'sub6', 'sub7', 'sub8', 'sub9', 'sub11', 'sub12', 'sub14', 'sub15', 'sub17']
+  enableDebugVis: false
+  enableEarlyTermination: true
+  envSpacing: 2
+  episodeLength: 300
+  humanoidAssetSuffix: _inertial
+  hybridInitProb: 0.1
+  initVel: true
+  isFlagrun: false
+  keyBodies:
+  - L_Hip
+  - L_Knee
+  - L_Ankle
+  - L_Toe
+  - R_Hip
+  - R_Knee
+  - R_Ankle
+  - R_Toe
+  - Torso
+  - Spine
+  - Chest
+  - Neck
+  - Head
+  - L_Thorax
+  - L_Shoulder
+  - L_Elbow
+  - L_Wrist
+  - R_Thorax
+  - R_Shoulder
+  - R_Elbow
+  - R_Wrist
+  localRootObs: false
+  minEpisodeFrames: 30
+  moreRigid: false
+  motion_file: InterAct/OMOMO_new
+  numEnvs: 4096
+  numObs: 9594
+  objectDensity: 200
+  objectFlightReward:
+    enable: true
+    rootFlight: 0.6
+    flatFlight: 0.0
+  obsHorizons:
+  - 1
+  - 4
+  - 7
+  - 10
+  - 13
+  - 16
+  pdControl: true
+  physicalBufferSize: 3
+  plane:
+    dynamicFriction: 0.9
+    restitution: 0.7
+    staticFriction: 0.9
+  playdataset: false
+  powerScale: 1.0
+  projtype: None
+  raggedMotionData: true
+  resetThresholds:
+    contactSteps: 10
+    human: 0.5
+    igRatio: 2.0
+    object: 0.5
+  retargetedMotionDir: InterAct/OMOMO_retarget_contact_srcall13
+  rewardShape: geometric_all
+  rewardTerms:
+    footWeight:
+      enable: true
+      weight: 2.5
+    freeFlightGate:
+      resets: true
+      reward: false
+    pose:
+      enable: false
+      lambda: 0.02
+  rewardWeights:
+    cg_all: 3.0
+    cg_hand: 5.0
+    cg_other: 5.0
+    eg1: 2.0e-05
+    eg2: 2.0e-05
+    eg3: 1.0e-09
+    ig: 5.0
+    op: 5.0
+    opv: 0.1
+    or: 0.1
+    orv: 0.0
+    p: 30.0
+    pv: 0.0
+    r: 2.5
+    rv: 0.0
+  robotType: smplx/omomo.xml
+  rolloutLength: 1000
+  saveImages: false
+  stateInit: Hybrid
+  subjectBodies:
+  - sub1
+  - sub2
+  - sub3
+  - sub5
+  - sub6
+  - sub7
+  - sub8
+  - sub9
+  - sub11
+  - sub12
+  - sub14
+  - sub15
+  - sub17
+  - sub600
+  - sub601
+  - sub602
+  - sub603
+  - sub604
+  - sub605
+  - sub606
+  - sub607
+  - sub608
+  - sub609
+  - sub610
+  - sub611
+  - sub612
+  - sub613
+  - sub614
+  - sub615
+  - sub616
+  - sub617
+  - sub618
+  - sub619
+  - sub620
+  - sub621
+  - sub622
+  - sub623
+  - sub624
+  - sub625
+  - sub626
+  - sub627
+  - sub628
+  - sub629
+  subjectHeightsFile: scripts/synthetic_heights_gen4.json
+  terminationHeight: 0.15
+sim:
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+  physx:
+    bounce_threshold_velocity: 0.2
+    contact_offset: 0.02
+    default_buffer_size_multiplier: 12.0
+    max_depenetration_velocity: 100.0
+    max_gpu_contact_pairs: 34603008
+    num_position_iterations: 4
+    num_threads: 4
+    num_velocity_iterations: 1
+    rest_offset: 0.0
+    solver_type: 1
+  substeps: 2

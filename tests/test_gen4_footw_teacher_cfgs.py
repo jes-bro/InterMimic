@@ -96,3 +96,15 @@ def test_generator_is_idempotent():
         assert r.returncode == 0, r.stderr
     for p, txt in before.items():
         assert p.read_text() == txt, p
+
+
+def test_weight_2p5_set_exists_and_differs_only_in_the_weight():
+    """--weight 2.5 writes the footw2p5 twins ('p' for the decimal point): same derivation, weight 2.5."""
+    for src, base, arm in ARMS[:4] + ARMS[21:25]:
+        arm2 = arm.replace("footw_", "footw2p5_")
+        e5 = yaml.safe_load(open(CFG / f"omomo_teacher_{arm}.yaml"))
+        e2 = yaml.safe_load(open(CFG / f"omomo_teacher_{arm2}.yaml"))
+        assert _diff(e5, e2) == {"env.rewardTerms.footWeight.weight"}
+        assert e2["env"]["rewardTerms"]["footWeight"]["weight"] == 2.5
+        sh = (REPO / f"slurm_teacher_{arm2}.sh").read_text()
+        assert "weight:\\s*2.5" in sh and f"smplx_teacher_{arm2}/nn/" in sh
