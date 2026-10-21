@@ -298,7 +298,16 @@ def test_eval_cfg_can_actually_produce_metrics(path):
     assert env.get("enableEvaluation") is True
     # subjectBodies must be a single placeholder: bodies round-robin across envs,
     # so a full roster would average over every body while the CSV names one.
-    assert len(env.get("subjectBodies") or []) == 1
+    # The one exception is an arm that trains with NO roster at all (the InterMimic
+    # baseline arms on upstream's smplx/omomo.xml, rendered BODY=generic): its eval
+    # cfg must not invent one, so absent-in-both is allowed, absent-in-one is drift.
+    bodies = env.get("subjectBodies")
+    if bodies is None:
+        for arm in cec.load(path).get("evalFor", []):
+            train_env = cec.load(cec.train_cfg_for(arm))["env"]
+            assert "subjectBodies" not in train_env, f"{arm} trains with subjectBodies but its eval cfg has none"
+    else:
+        assert len(bodies) == 1
 
 
 @pytest.mark.parametrize("path", EVAL_CFGS, ids=lambda p: os.path.basename(p))
