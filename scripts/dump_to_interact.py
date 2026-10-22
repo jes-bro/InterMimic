@@ -41,10 +41,13 @@ import numpy as np
 
 sys.path.append(os.getcwd())
 
-# Rollouts are Z-up; InterAct's renderer is Y-up. (x, y, z) -> (x, z, -y).
-GYM_TO_YUP = np.array([[1.0, 0.0, 0.0],
+# Rollouts are in the sim frame (x forward, y left, z up); InterAct's renderer is
+# SMPL's native frame (x left, y up, z forward). That is Q_ZUP^T: sim (x, y, z)
+# -> (y, z, x). Corrected 2026-10-21 together with Q_ZUP; the old (x, z, -y)
+# was the transpose of the old, 90-degree-yawed matrix.
+GYM_TO_YUP = np.array([[0.0, 1.0, 0.0],
                        [0.0, 0.0, 1.0],
-                       [0.0, -1.0, 0.0]])
+                       [1.0, 0.0, 0.0]])
 
 
 class _TolerantUnpickler(pickle.Unpickler):
@@ -316,6 +319,11 @@ def main():
     ap.add_argument('--fit_cache', default=None, help='where to cache the IK fit')
     ap.add_argument('--refit', action='store_true', help='ignore any cached fit')
     ap.add_argument('--no_flip', action='store_true')
+    ap.add_argument('--ik', action='store_true',
+                    help='fit the pose per frame from joint POSITIONS (the old fit_sequence '
+                         'path, with its cache, pins and priors) instead of the exact native '
+                         'pose from the dump\'s body_rot (smplx_pose.native_sequence). '
+                         'Comparison only.')
     args = ap.parse_args()
 
     dump = os.path.abspath(os.path.expanduser(args.dump))
@@ -358,7 +366,18 @@ def main():
              + f'_r{args.reg:g}' + ('_flat' if args.flat_reg else f'_w{args.reg_scale:g}')
              + f'_t{TRUNK_TARGET_WEIGHT:g}_i{args.iters_warm}.npz')
     pose_aa = trans = None
-    if os.path.isfile(cache) and not args.refit:
+    if not args.ik:
+        # Exact: the dump's body rotations ARE SMPL's global joint rotations in
+        # the sim's axes (smplx_pose.Q_ZUP), so the native pose follows without
+        # any fit. No cache (it is instant), no pins or leaf fills (nothing is
+        # unobservable), no priors.
+        if 'body_rot' not in d.files:
+            raise SystemExit(f'{dump} has no body_rot; the exact native pose needs the '
+                             f'sim\'s body rotations. Pass --ik to fit from positions.')
+        poser = load_poser(args.smplh_models or args.models, betas_path, 'smplh')
+        print(f'[dump2interact] native pose from body_rot, {T} frames', flush=True)
+        pose_aa, trans = poser.native_sequence(subject, d['body_rot'][::args.stride], body_pos)
+    elif os.path.isfile(cache) and not args.refit:
         c = np.load(cache)
         if len(c['poses']) == T:
             pose_aa, trans = c['poses'], c['trans']
@@ -405,7 +424,7 @@ def main():
         raise SystemExit(f'expected 156 pose channels for SMPL-H, got {poses.shape[1]}')
     trans = np.asarray(trans, dtype=np.float64)
 
-    if not args.no_leaf_fill:
+    if args.ik and not args.no_leaf_fill:          # the native pose already has exact leaves
         order = mjcf_body_order(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                              '..', args.mjcf))
         br = d['body_rot'][::args.stride]

@@ -111,6 +111,59 @@ def test_generic_skeleton_on_another_body_is_a_few_cm_not_a_quarter_turn(poser, 
     assert err < 0.06, f"{err*100:.1f} cm"
 
 
+SMPLH_MODELS = os.path.expanduser("~/interact/InterAct/models/smplh")
+
+
+def test_dump_to_interact_frame_change_is_q_zup_transposed():
+    """InterAct renders in SMPL's native frame; a sim-frame vector gets there by Q_ZUP^T."""
+    assert np.array_equal(d2i.GYM_TO_YUP, sp.Q_ZUP.T)
+
+
+def test_dump_to_interact_native_export_reproduces_the_sim(sub2_clip, tmp_path):
+    """A DUMP_TRAJ built from a real sub2 clip (MJCF FK -> body_rot/body_pos), exported with
+    the exact native pose, forwarded through SMPL-H in the renderer's frame, lands on the
+    sim's body joints to < 0.5 mm; the object's translation is the same frame change."""
+    import subprocess
+    import sys
+    from scipy.spatial.transform import Rotation
+    assert os.path.isfile(os.path.join(SMPLH_MODELS, "SMPLH_MALE.pkl")), SMPLH_MODELS
+    p2 = sp.SMPLXPoser(models_dir=SMPLH_MODELS, betas_path=os.path.join(REPO, "scripts/omomo_betas.npz"),
+                       model_type="smplh", mjcf=os.path.join(ASSETS, "smplx_omomo_sub2.xml"))
+    frames = sub2_clip[0:60:12]
+    R, P = zip(*(p2.mjcf_fk(x[9:162], x[0:3], x[3:7]) for x in frames))
+    body_rot = np.stack([Rotation.from_matrix(r).as_quat() for r in R])        # (T,52,4) xyzw
+    body_pos = np.stack(P)
+    dump = tmp_path / "sub2_fake_rollout.npz"
+    np.savez(dump, subject="sub2", body_rot=body_rot, body_pos=body_pos,
+             obj_pos=frames[:, 318:321], obj_rot=frames[:, 321:325])
+    r = subprocess.run([sys.executable, os.path.join(REPO, "scripts/dump_to_interact.py"), str(dump),
+                        "--betas", os.path.join(REPO, "scripts/omomo_betas.npz"), "--gender", "male",
+                        "--models", SMPLH_MODELS, "--out_root", str(tmp_path / "ia"), "--clip", "t",
+                        "--object_name", "ball"], capture_output=True, text=True, cwd=REPO)
+    assert r.returncode == 0, r.stdout + r.stderr
+    h = np.load(tmp_path / "ia" / "sequences_canonical" / "t" / "human.npz")
+    o = np.load(tmp_path / "ia" / "sequences_canonical" / "t" / "object.npz")
+    assert h["poses"].shape == (len(frames), 156) and h["trans"].shape == (len(frames), 3)
+    M = p2._model("male")
+    parents = M["parents"]
+    for t in range(len(frames)):
+        pose = h["poses"][t].reshape(52, 3).astype(np.float64)
+        # human.npz is SMPL-native: sim = Q_ZUP @ (v(pose) + trans_yup), so fk in the sim frame
+        # needs trans_sim = Q_ZUP @ trans_yup. The pelvis is exact ...
+        J = p2.fk_joints("sub2", pose, sp.Q_ZUP @ h["trans"][t].astype(np.float64))
+        assert np.linalg.norm(J[0] - body_pos[t][p2.body_order.index("Pelvis")]) < 0.0005
+        # ... and so is every body's GLOBAL rotation (conjugated back into the sim's axes).
+        # Positions of the other joints differ by bone length only: sub2's betas are SMPL-X
+        # coefficients, and SMPL-H's shape basis gives a slightly different skeleton (a few cm).
+        G = [sp.expmap(pose[0])]
+        for j in range(1, 52):
+            G.append(G[parents[j]] @ sp.expmap(pose[j]))
+        for k, jid in enumerate(p2.b2s):
+            assert np.abs(sp.Q_ZUP @ G[jid] @ sp.Q_ZUP.T - R[t][k]).max() < 1e-6, p2.body_order[k]
+        assert np.linalg.norm(J[p2.b2s] - body_pos[t], axis=1).max() < 0.10
+    assert np.allclose(o["trans"], (sp.Q_ZUP.T @ frames[:, 318:321].T).T, atol=1e-5)
+
+
 def test_render_mesh_replay_defaults_to_the_native_path():
     txt = open(os.path.join(REPO, "scripts/render_mesh_replay.py")).read()
     assert 'ap.add_argument("--ik", action="store_true"' in txt
