@@ -2,10 +2,17 @@
 """Render the SMPL-X SURFACE doing what the humanoid did, as an mp4 (offline).
 
 Stage 2 of the mesh-replay pipeline. Drive it from either:
-  --dump traj.npz   a policy rollout dumped by DUMP_TRAJ (pose_from_bodies; most
-                    faithful -- the sim's own per-frame global body state).
-  --clip x.pt       a raw OMOMO clip's ground-truth motion (pose_from_dof); needs
-                    --subject to say which body to shape.
+  --dump traj.npz   a policy rollout dumped by DUMP_TRAJ: the sim's own per-frame
+                    global body rotations + positions -> SMPL's native pose,
+                    exactly (smplx_pose.native_from_bodies).
+  --clip x.pt       a reference clip (what the policy is asked to imitate): MJCF
+                    forward kinematics of its dof_pos -> native pose; needs
+                    --subject (which body to shape) and, for exact joints,
+                    --mjcf (that subject's own humanoid file).
+Both are exact conversions, no fitting: the mesh moves as the sim did, frame by
+frame, with no per-frame jitter. --ik restores the old position-only IK fit
+(scripts/smplx_pose.py fit_sequence), which was a workaround for a wrong axis
+matrix and is kept only for comparison.
 
 Shaded matplotlib render (no pyrender/GPU needed), fixed camera, floor, object
 drawn as a marker. So a viewer can watch the mesh perform the motion and tell
@@ -29,14 +36,14 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import imageio.v2 as imageio
 
 
-def _poser(models, betas, model_type="smplx"):
-    """Build the SMPL poser used to fit and skin the body."""
+def _poser(models, betas, model_type="smplx", mjcf=None):
+    """Build the SMPL poser used to pose and skin the body."""
     spec = importlib.util.spec_from_file_location(
         "smplx_pose", os.path.join(os.path.dirname(__file__), "smplx_pose.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m.SMPLXPoser(models_dir=models, betas_path=betas,
-                        model_type=model_type)
+                        model_type=model_type, mjcf=mjcf)
 
 
 def _ik_frames(P, subject, target_joints, obj_pos, obj_rot, warm):
@@ -81,22 +88,46 @@ def subject_key(raw, available):
         f"scripts/add_subject_betas.py")
 
 
-def frames_from_dump(P, path, warm, stride, subject=None):
+def frames_from_dump(P, path, warm, stride, subject=None, ik=False):
     """Frames from a simulator rollout: the sim's own global body state."""
     d = np.load(path, allow_pickle=True)
     subject = subject_key(subject or str(d["subject"]), set(P.betas.files))
     rot = d["obj_rot"][::stride] if "obj_rot" in d.files else None
-    return _ik_frames(P, subject, d["body_pos"][::stride], d["obj_pos"][::stride],
-                      rot, warm)
+    if ik:
+        return _ik_frames(P, subject, d["body_pos"][::stride], d["obj_pos"][::stride],
+                          rot, warm)
+    if "body_rot" not in d.files:
+        raise SystemExit("FATAL: this dump has no body_rot (the sim's body rotations); "
+                         "the exact native pose needs it. Pass --ik to fit from positions.")
+    print(f"[mesh-replay] native pose from the sim's body rotations, "
+          f"{len(d['body_pos'][::stride])} frames (subject={subject})", flush=True)
+    return _native_frames(P, subject,
+                          [P.native_from_bodies(subject, q, p) for q, p in
+                           zip(d["body_rot"][::stride], d["body_pos"][::stride])],
+                          d["obj_pos"][::stride], rot)
 
 
-def frames_from_clip(P, path, subject, warm, stride):
+def frames_from_clip(P, path, subject, warm, stride, ik=False):
     """Frames from a reference clip, i.e. what the policy is asked to imitate."""
     import torch
     x = torch.load(path, map_location="cpu", weights_only=False).detach().numpy()
-    tgt = x[::stride, 162:318].reshape(-1, 52, 3)
-    return _ik_frames(P, subject, tgt, x[::stride, 318:321],
-                      x[::stride, 321:325], warm)
+    if ik:
+        tgt = x[::stride, 162:318].reshape(-1, 52, 3)
+        return _ik_frames(P, subject, tgt, x[::stride, 318:321],
+                          x[::stride, 321:325], warm)
+    print(f"[mesh-replay] native pose by MJCF forward kinematics of dof_pos "
+          f"({P.mjcf}), {len(x[::stride])} frames (subject={subject})", flush=True)
+    return _native_frames(P, subject,
+                          [P.native_from_dof(subject, r[9:162], r[0:3], r[3:7])
+                           for r in x[::stride]],
+                          x[::stride, 318:321], x[::stride, 321:325])
+
+
+def _native_frames(P, subject, poses, obj_pos, obj_rot):
+    """Forward SMPL's own model through exact (pose_aa, trans) per frame."""
+    for t, (pose_aa, trans) in enumerate(poses):
+        v, f = P.verts_from_pose(subject, pose_aa, trans)
+        yield v, f, obj_pos[t], (None if obj_rot is None else obj_rot[t])
 
 
 def load_object_mesh(path, max_faces):
@@ -217,8 +248,17 @@ def main():
     ap.add_argument("--models", default=None)
     ap.add_argument("--betas", default="scripts/omomo_betas.npz")
     ap.add_argument("--stride", type=int, default=1, help="render every Nth frame")
+    ap.add_argument("--ik", action="store_true",
+                    help="fit the pose per frame from joint POSITIONS (the old "
+                         "fit_sequence path) instead of the exact native pose from "
+                         "the sim's rotations. Comparison only.")
     ap.add_argument("--ik-iters", type=int, default=100,
-                    help="IK warm-start iterations per frame (higher = tighter fit)")
+                    help="with --ik: warm-start iterations per frame (higher = tighter fit)")
+    ap.add_argument("--mjcf", default=None,
+                    help="with --clip: the subject's own humanoid file (e.g. isaacgym/src/"
+                         "intermimic/data/assets/smplx/smplx_omomo_sub2.xml), whose rest "
+                         "offsets the clip's dof_pos were recorded on. Default: the generic "
+                         "omomo.xml, which is sub9's skeleton (a few cm off for other bodies).")
     ap.add_argument("--object", default=None,
                     help="path to the object's .obj, to draw it as real "
                          "geometry instead of a marker. e.g. isaacgym/src/"
@@ -251,11 +291,11 @@ def main():
     if a.clip and not a.subject:
         raise SystemExit("FATAL: --clip needs --subject (which body to shape)")
 
-    P = _poser(a.models, a.betas, a.model_type)
-    gen = (frames_from_dump(P, a.dump, a.ik_iters, a.stride, a.subject) if a.dump
-           else frames_from_clip(P, a.clip, a.subject, a.ik_iters, a.stride))
+    P = _poser(a.models, a.betas, a.model_type, a.mjcf)
+    gen = (frames_from_dump(P, a.dump, a.ik_iters, a.stride, a.subject, a.ik) if a.dump
+           else frames_from_clip(P, a.clip, a.subject, a.ik_iters, a.stride, a.ik))
 
-    # Stride is applied BEFORE the IK fit (in the generators), so don't re-subsample.
+    # Stride is applied BEFORE posing (in the generators), so don't re-subsample.
     frames = list(gen)
     if not frames:
         raise SystemExit("FATAL: no frames produced")

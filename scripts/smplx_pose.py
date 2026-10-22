@@ -2,17 +2,22 @@
 """Pose the SMPL-X SURFACE through a humanoid motion, so the mesh does what the
 capsule humanoid did in sim -- makes subjects easy to tell apart.
 
-Validated pipeline (NOT SMPL-native pose FK, which has a frame mismatch):
-  1. MJCF forward kinematics from dof_pos (axis-angle per joint) gives each body's
-     GLOBAL rotation+position in the sim's Z-up frame.
-  2. Global-transform Linear Blend Skinning: skin the shaped SMPL-X template with
-     those per-joint global transforms.
-Cross-checked against stored body_pos: 5.7 cm rigid-aligned residual, flat across
-frames (residual = generic-MJCF vs subject-SMPL shape; shrinks with the subject's
-own MJCF / the sim's actual body_rot at rollout).
+The sim's humanoid IS the SMPL-X skeleton (the MJCFs are built from it, T-pose,
+identity body frames), in a different axis order (Q_ZUP below). So a body's global
+rotation in the sim is SMPL's global joint rotation, conjugated by Q_ZUP, and the
+exact, jitter-free way to the surface is:
+  1. per-body GLOBAL rotation + position in the sim frame: from a DUMP_TRAJ's
+     body_rot/body_pos directly, or by MJCF forward kinematics from a clip's
+     dof_pos (axis-angle per joint; validated exp-map vs euler: 4.8 cm vs 15 cm).
+  2. native_pose_from_global: those -> SMPL's own (pose_aa, trans), exactly.
+  3. verts_from_pose: SMPL's own forward (shape + pose blendshapes + LBS).
+skin() does global-transform LBS straight from step 1 (same surface minus the
+pose blendshapes); fit_sequence is the old per-frame IK, kept as an opt-in.
 
-dof_pos[3j:3j+3] is the AXIS-ANGLE rotation of MJCF joint j (validated exp-map vs
-euler against body_pos: 4.8 cm vs 15 cm). No smplx package; LBS from the model npz.
+History: Q_ZUP used to be yawed 90 degrees against the MJCF (see its comment), which
+made step-1 skinning twist the arms; the IK fitter was written to work around that
+and brought its own problems (position-only fit: free twist about every bone, a
+straightened back, sideways knees, per-frame jitter). Fixed 2026-10-21.
 
   python3 scripts/smplx_pose.py --selftest
 """
@@ -54,7 +59,6 @@ for _s in ("L", "R"):
             _MJCF_TO_SMPL[f"{_s}_{_f}{_k}"] = \
                 f"{'left' if _s == 'L' else 'right'}_{_f.lower()}{_k}"
 
-# SMPL Y-up -> Isaac Z-up: (x,y,z)->(x,-z,y)
 # SMPL-H is SMPL-X without the jaw and the two eyes, in the same order, so the
 # MJCF-to-joint mapping is shared and only the indices differ. Built from the
 # SMPL-X list rather than retyped, so the two cannot drift apart.
@@ -152,7 +156,19 @@ def _load_model_file(path):
     return out
 
 
-Q_ZUP = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
+# SMPL's template frame is x = the body's LEFT, y = UP, z = FORWARD. The MJCF
+# humanoids (omomo.xml and every subject file) stand with x = FORWARD, y = LEFT,
+# z = UP: Pelvis->L_Hip is +y, Pelvis->Torso is +z, L_Shoulder->L_Elbow is +y.
+# So sim = Q_ZUP @ smpl with Q_ZUP = (z, x, y). Measured 2026-10-21 against
+# omomo.xml's rest skeleton with its own subject's betas (sub9): 0.01 cm RMS over
+# the 22 body joints. The previous matrix, (x, -z, y), kept y-up -> z-up but left
+# the body yawed 90 degrees against the MJCF: 37 cm RMS, and the "arm twist" the
+# IK path was written to work around -- skinning a template whose arms point +x
+# with body rotations of a skeleton whose arms point +y.
+# Both rest poses are the T-pose; there is NO rest-pose mismatch beyond this axis
+# permutation, so the sim's body rotations are SMPL's own global joint rotations
+# after conjugation: R_smpl = Q_ZUP^T @ R_sim @ Q_ZUP (native_pose_from_global).
+Q_ZUP = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
 
 
 def expmap(v):
@@ -189,7 +205,10 @@ def _parse_mjcf_tree(path=MJCF):
 
 class SMPLXPoser:
     def __init__(self, models_dir=None, betas_path="scripts/omomo_betas.npz",
-                 mesh_npz=None, model_type=None):
+                 mesh_npz=None, model_type=None, mjcf=None):
+        """mjcf: the humanoid whose body order / rest offsets index dof_pos and
+        body_pos (default: the generic omomo.xml). Pass the subject's own file for
+        exact forward kinematics of that subject's clips."""
         self.models_dir = os.path.expanduser(
             models_dir or os.environ.get("SMPLX_MODELS", "~/Downloads/models/smplx"))
         self.betas = np.load(betas_path, allow_pickle=True)
@@ -204,7 +223,8 @@ class SMPLXPoser:
                              f"{self.model_type!r}")
         self.joint_names = (SMPLH_JOINTS if self.model_type == "smplh"
                             else SMPLX_JOINTS)
-        self.tree = _parse_mjcf_tree()
+        self.mjcf = mjcf or MJCF
+        self.tree = _parse_mjcf_tree(self.mjcf)
         self.body_order = [n for n, _, _ in self.tree]         # 52 MJCF bodies
         self.b2s = [self.joint_names.index(_MJCF_TO_SMPL[n]) for n in self.body_order]
         self._cache = {}
@@ -330,12 +350,74 @@ class SMPLXPoser:
         return self.skin(subject, R, np.asarray(body_pos)), \
             self._model(self.gender[subject])["faces"]
 
-    # ---- IK RETARGET: fit a NATIVE SMPL-X pose to target joints -----------
-    # The MJCF and SMPL-X rest poses differ ~90deg at the arms (arms-down vs
-    # T-pose), so driving SMPL-X with MJCF-frame rotations twists the surface.
-    # Instead, fit SMPL-X's own pose params to the target joint POSITIONS
-    # (body_pos, available in every clip and every DUMP_TRAJ). The result is a
-    # native SMPL pose -> clean surface AND correct pose. This is the retarget.
+    # ---- NATIVE POSE, exactly, from the sim's global body state ------------
+    # The MJCF skeleton is SMPL's (T-pose, identity body frames) in the Q_ZUP axis
+    # order, so each body's global rotation in the sim is SMPL's global joint
+    # rotation conjugated by Q_ZUP, and the local pose is parent^T @ child. No
+    # fitting, no free twist, no jitter: the surface moves exactly as the sim did.
+
+    def native_pose_from_global(self, subject, R_glob, p_glob):
+        """(R[52,3,3], p[52,3]) global in the sim frame, MJCF body order ->
+        (pose_aa[n_j,3], trans[3]) in SMPL's own pose space, such that
+        verts_from_pose(subject, pose_aa, trans) puts every joint at p_glob."""
+        from scipy.spatial.transform import Rotation
+        M = self._model(self.gender[subject])
+        n_j, parents = len(self.joint_names), M["parents"]
+        G = np.tile(np.eye(3), (n_j, 1, 1))
+        known = set()
+        for k, jid in enumerate(self.b2s):
+            G[jid] = Q_ZUP.T @ np.asarray(R_glob[k]) @ Q_ZUP      # sim -> SMPL axes
+            known.add(jid)
+        for j in range(n_j):                                      # jaw, eyes: ride the head
+            if j not in known:
+                G[j] = G[parents[j]]
+        local = np.empty((n_j, 3, 3))
+        local[0] = G[0]
+        for j in range(1, n_j):
+            local[j] = G[parents[j]].T @ G[j]
+        pose_aa = Rotation.from_matrix(local).as_rotvec()
+        # verts_from_pose places the pelvis at Q_ZUP @ J0_y[0] + trans.
+        beta = self.betas[subject].astype(np.float64)[:M["shapedirs"].shape[2]]
+        j0_y = (M["J_reg"] @ (M["v_template"] + M["shapedirs"] @ beta))[0]
+        pelvis = np.asarray(p_glob)[self.body_order.index("Pelvis")]
+        return pose_aa, pelvis - Q_ZUP @ j0_y
+
+    def fk_joints(self, subject, pose_aa, trans):
+        """SMPL's own forward kinematics of (pose_aa, trans) -> joint positions
+        (n_j, 3) in the SIM frame: what verts_from_pose's skeleton is, before
+        skinning. The exact inverse of native_pose_from_global."""
+        M = self._model(self.gender[subject])
+        n_j, parents = len(self.joint_names), M["parents"]
+        beta = self.betas[subject].astype(np.float64)[:M["shapedirs"].shape[2]]
+        J = M["J_reg"] @ (M["v_template"] + M["shapedirs"] @ beta)
+        R = np.stack([expmap(a) for a in np.asarray(pose_aa)])
+        G_R, G_p = [R[0]], [J[0]]
+        for j in range(1, n_j):
+            pa = parents[j]
+            G_R.append(G_R[pa] @ R[j])
+            G_p.append(G_p[pa] + G_R[pa] @ (J[j] - J[pa]))
+        return (Q_ZUP @ np.stack(G_p).T).T + np.asarray(trans)
+
+    def native_from_bodies(self, subject, body_rot_quat, body_pos):
+        """A DUMP_TRAJ frame (52 quats xyzw + 52 positions, sim frame) -> (pose_aa, trans)."""
+        R = np.array([quat_to_mat(q) for q in np.asarray(body_rot_quat)])
+        return self.native_pose_from_global(subject, R, np.asarray(body_pos))
+
+    def native_from_dof(self, subject, dof_pos, root_pos, root_rot_quat):
+        """A clip frame (dof_pos + root) -> (pose_aa, trans), via MJCF forward kinematics."""
+        R, p = self.mjcf_fk(dof_pos, root_pos, root_rot_quat)
+        return self.native_pose_from_global(subject, R, p)
+
+    def native_sequence(self, subject, body_rot_quat, body_pos):
+        """(T,52,4), (T,52,3) -> (pose_aa[T,n_j,3], trans[T,3]); the drop-in for fit_sequence."""
+        out = [self.native_from_bodies(subject, q, p) for q, p in zip(body_rot_quat, body_pos)]
+        return np.stack([o[0] for o in out]), np.stack([o[1] for o in out])
+
+    # ---- IK RETARGET (opt-in): fit a NATIVE SMPL-X pose to joint POSITIONS ---
+    # Written when Q_ZUP was wrong and step-1 skinning twisted the arms. It fits
+    # pose params to body_pos only, so rotation about any bone is unobservable
+    # (see the notes inside); kept for callers that have positions but no
+    # rotations. Anything with body_rot or dof_pos should use the native path.
 
     def _torch_model(self, gender):
         import torch
@@ -527,6 +609,22 @@ def selftest():
         R = Vt.T @ np.diag([1, 1, d]) @ U.T
         return np.linalg.norm(Ac @ R.T - Bc, axis=1).mean()
 
+    def translated(A, B):
+        """Mean joint error after matching centroids ONLY. A rigid (rotating)
+        alignment would absorb a wrong Q_ZUP -- it did, for months -- so the
+        selftest must not rotate."""
+        return np.linalg.norm((A - A.mean(0)) - (B - B.mean(0)), axis=1).mean()
+
+    # Axis mapping: the generic MJCF (omomo.xml) IS sub9's skeleton, so its rest
+    # joints must coincide with sub9's shaped template under Q_ZUP, to the mm.
+    _, J0, _ = p._shape("sub9")
+    _, p_rest = p.mjcf_fk(np.zeros(153), np.zeros(3), np.array([0, 0, 0, 1.0]))
+    body = [k for k, n in enumerate(p.body_order)
+            if not any(f in n for f in ("Index", "Middle", "Pinky", "Ring", "Thumb"))]
+    ax_err = translated(J0[[p.b2s[k] for k in body]], p_rest[body])
+    print(f"[selftest] Q_ZUP: sub9 template joints vs omomo.xml rest skeleton: {ax_err*100:.2f} cm")
+    assert ax_err < 0.005, "Q_ZUP does not map the SMPL template onto the MJCF skeleton"
+
     clip = sorted(glob.glob("InterAct/OMOMO_new/sub2_*.pt"))[0]
     x = torch.load(clip, map_location="cpu", weights_only=False).detach().numpy()
     M = p._model("male")
@@ -534,11 +632,32 @@ def selftest():
     for t in range(0, min(len(x), 90), 30):
         v, f = p.pose_from_dof("sub2", x[t, 9:162], x[t, 0:3], x[t, 3:7])
         Jz = (M["J_reg"] @ v)[p.b2s]
-        errs.append(rigid(Jz, x[t, 162:318].reshape(52, 3)))
-    print(f"[selftest] posed SMPL-X mesh joints vs stored body_pos (rigid): "
+        errs.append(translated(Jz, x[t, 162:318].reshape(52, 3)))
+    print(f"[selftest] posed SMPL-X mesh joints vs stored body_pos (translation only): "
           f"mean {np.mean(errs)*100:.2f} cm  frames {[round(e*100,1) for e in errs]}")
     print("  < ~6cm => pose transfer correct (residual = generic-MJCF vs subject-SMPL shape)")
     assert np.mean(errs) < 0.08, "pose transfer regressed"
+
+    # With the subject's OWN MJCF the sim's joints and SMPL's are one skeleton, so
+    # the native pose (SMPL's own FK) and global LBS (joints pinned where the sim
+    # put them) must agree, and both must land on the clip's stored body_pos.
+    p2 = SMPLXPoser(mjcf=os.path.join(os.path.dirname(MJCF), "smplx_omomo_sub2.xml"))
+    nat, own = [], []
+    for t in range(0, min(len(x), 90), 30):
+        v, _ = p2.pose_from_dof("sub2", x[t, 9:162], x[t, 0:3], x[t, 3:7])
+        Jz = (M["J_reg"] @ v)[p2.b2s]
+        own.append(np.linalg.norm(Jz - x[t, 162:318].reshape(52, 3), axis=1).mean())
+        _, p_sim = p2.mjcf_fk(x[t, 9:162], x[t, 0:3], x[t, 3:7])
+        pose_aa, trans = p2.native_from_dof("sub2", x[t, 9:162], x[t, 0:3], x[t, 3:7])
+        nat.append(np.linalg.norm(p2.fk_joints("sub2", pose_aa, trans)[p2.b2s] - p_sim, axis=1))
+    nat = np.array(nat)
+    hands = [k for k in range(len(p2.body_order)) if k not in body]
+    print(f"[selftest] sub2's own MJCF: regressed joints vs stored body_pos, no alignment: "
+          f"mean {np.mean(own)*100:.2f} cm; native FK joints vs the sim's: body max "
+          f"{nat[:, body].max()*100:.3f} cm, hands max {nat[:, hands].max()*100:.2f} cm "
+          f"(the MJCF fingertip bodies sit ~3 cm off SMPL's last finger joints; expected)")
+    assert np.mean(own) < 0.03, "pose transfer with the subject's own MJCF is off"
+    assert nat[:, body].max() < 0.002, "native_pose_from_global does not invert the sim's body state"
 
     # Surface integrity: joints can be right while the SKIN is mangled (jaw/eyes
     # tearing off the head). Edge lengths must be preserved (LBS is near-rigid).
@@ -565,8 +684,10 @@ def selftest():
         jfit.append(rigid((M["J_reg"] @ vi)[p.b2s], tgt[i])); emax.append(r.max())
     print(f"[selftest] IK retarget: joint fit mean {np.mean(jfit)*100:.2f} cm, "
           f"surface edge max {max(emax):.1f}")
-    assert np.mean(jfit) < 0.06 and max(emax) < 8, "IK retarget regressed"
-    print("  OK -- correct pose + clean surface (the arm-twist fix)")
+    # Legacy path, opt-in only: 10 frames at 80 warm iterations fit to ~6 cm
+    # (rigid-aligned) and a clean surface. Kept so --ik keeps working.
+    assert np.mean(jfit) < 0.08 and max(emax) < 8, "IK retarget regressed"
+    print("  OK -- the legacy position-only fit still runs (use the native path)")
 
 
 def main():

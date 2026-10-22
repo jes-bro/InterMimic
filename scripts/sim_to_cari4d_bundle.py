@@ -162,7 +162,11 @@ def parse_args():
                              "simulator locates its ORIGIN, so the offset "
                              "between them is needed to convert. Omitting this "
                              "assumes they coincide.")
-    parser.add_argument("--ik-iters", type=int, default=100)
+    parser.add_argument("--ik", action="store_true",
+                        help="fit the pose per frame from joint positions (the old "
+                             "fit_sequence path) instead of the exact native pose from "
+                             "the sim's body rotations. Comparison only.")
+    parser.add_argument("--ik-iters", type=int, default=100, help="with --ik")
     parser.add_argument("--anchor-rollout", action="store_true",
                         help="the rollout is a DIFFERENT motion from --pt (an expert's clip "
                              "performed on the novice's body): --pt/--bundle, the novice's own "
@@ -253,28 +257,42 @@ def main():
     if subject not in P.betas.files:
         raise SystemExit(f"{subject!r} has no betas entry in {args.betas}")
 
-    # Fitted in the SIMULATOR's frame, untransformed. fit_sequence documents its
-    # targets as Z-up, and the camera's frame is Y-down -- handing it camera
-    # coordinates yields a body rotated by exactly that difference, while the
-    # object, which never passes through the fitter, comes out correct. That
-    # asymmetry is what a wrong-looking body beside a right-looking ball means.
-    print(f"fitting {len(body_pos)} frames in the simulator's frame...")
-    poses, trans = P.fit_sequence(subject, body_pos, iters_warm=args.ik_iters,
-                                  verbose=False)
+    # SMPL parameters in the SIMULATOR's frame first: with --ik the old per-frame
+    # position fit; otherwise the exact native pose from the sim's own body
+    # rotations (smplx_pose.native_sequence), which needs body_rot in the dump.
+    if args.ik:
+        print(f"fitting {len(body_pos)} frames in the simulator's frame (--ik)...")
+        poses, trans = P.fit_sequence(subject, body_pos, iters_warm=args.ik_iters,
+                                      verbose=False)
+    else:
+        if "body_rot" not in dump.files:
+            raise SystemExit("the dump has no body_rot; the exact native pose needs the "
+                             "sim's body rotations. Pass --ik to fit from positions.")
+        body_rot_all = dump["body_rot"].astype(np.float64) if not args.anchor_rollout else body_rot
+        print(f"native pose from the sim's body rotations, {len(body_pos)} frames...")
+        poses, trans = P.native_sequence(subject, body_rot_all[:len(body_pos)], body_pos)
     poses = np.asarray(poses, dtype=np.float64)
     trans = np.asarray(trans, dtype=np.float64)
-    print(f"fitted poses {poses.shape}, trans {trans.shape}")
+    print(f"poses {poses.shape}, trans {trans.shape}")
 
-    # Then moved into the camera's frame as SMPL parameters. A body is posed
-    # about its rest-pose root joint and displaced by trans, so a world
-    # transform (R, t) is not simply applied to trans: the root offset has to be
-    # taken out and put back.
+    # Then moved into the camera's frame as SMPL parameters. The parameters are
+    # SMPL-native (Y-up): a sim-frame vertex is s = Q_ZUP @ v(pose) + trans, and
+    # the camera wants c = R_sb @ s + t_sb = (R_sb Q_ZUP) v(pose) + R_sb trans + t_sb.
+    # CARI4D poses the body natively about its rest-pose root j0 (Y-up), so a
+    # frame rotation R' composed onto global_orient moves vertices by
+    # R'(v - j0) + j0; with R' = R_sb Q_ZUP the translation that makes the two
+    # agree is R' j0 + R_sb trans + t_sb - j0. (Before 2026-10-21 this composed
+    # R_sb alone and used the Z-up root offset, which left the body rotated by
+    # Q_ZUP against the object.)
     from scipy.spatial.transform import Rotation as sRot
-    _, J0, _ = P._shape(subject)
-    j0 = np.asarray(J0, dtype=np.float64)[0]
-    poses[:, 0] = (sRot.from_matrix(R_sb) * sRot.from_rotvec(poses[:, 0])).as_rotvec()
-    trans = (trans + j0) @ R_sb.T + t_sb - j0
-    print(f"moved into the camera frame (root offset {np.round(j0, 3)})")
+    Q = poser_mod.Q_ZUP
+    M = P._model(P.gender[subject])
+    beta = P.betas[subject].astype(np.float64)[:M["shapedirs"].shape[2]]
+    j0 = (M["J_reg"] @ (M["v_template"] + M["shapedirs"] @ beta))[0]   # rest pelvis, Y-up
+    Rp = R_sb @ Q
+    poses[:, 0] = (sRot.from_matrix(Rp) * sRot.from_rotvec(poses[:, 0])).as_rotvec()
+    trans = (Rp @ j0) + trans @ R_sb.T + t_sb - j0
+    print(f"moved into the camera frame (rest pelvis {np.round(j0, 3)}, Y-up)")
 
     # Where the pelvis should land, for comparison against the render.
     expect = body_pos[:, 0] @ R_sb.T + t_sb
