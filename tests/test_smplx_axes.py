@@ -144,6 +144,7 @@ def test_dump_to_interact_native_export_reproduces_the_sim(sub2_clip, tmp_path):
     h = np.load(tmp_path / "ia" / "sequences_canonical" / "t" / "human.npz")
     o = np.load(tmp_path / "ia" / "sequences_canonical" / "t" / "object.npz")
     assert h["poses"].shape == (len(frames), 156) and h["trans"].shape == (len(frames), 3)
+    assert h["betas"].shape == (10,)          # InterAct's BEHAVE renderer is a 10-beta SMPL-H
     M = p2._model("male")
     parents = M["parents"]
     for t in range(len(frames)):

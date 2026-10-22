@@ -460,8 +460,12 @@ def main():
     obj_dir = os.path.join(out_root, 'objects', obj)
     os.makedirs(seq_dir, exist_ok=True)
     os.makedirs(obj_dir, exist_ok=True)
+    # InterAct's BEHAVE renderer builds SMPL-H with 10 betas (visualize.py smplh10) and
+    # einsums the stored vector straight into it, so a 16-wide vector (the poser's padded
+    # subject file) breaks it. CARI4D fits 10; anything past them is padding.
+    betas_out = np.asarray(betas, dtype=np.float32)[:10]
     np.savez(os.path.join(seq_dir, 'human.npz'),
-             poses=poses.astype(np.float32), betas=np.asarray(betas, dtype=np.float32),
+             poses=poses.astype(np.float32), betas=betas_out,
              trans=trans.astype(np.float32), gender=args.gender)
     np.savez(os.path.join(seq_dir, 'object.npz'),
              angles=obj_angles, trans=obj_pos.astype(np.float32), name=obj)
